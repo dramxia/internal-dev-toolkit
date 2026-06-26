@@ -1,0 +1,46 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]: 🛠️
+      - generic [ref=e5]:
+        - heading "内部开发工具箱" [level=1] [ref=e6]
+        - paragraph [ref=e7]: Internal Dev Toolkit
+    - img [ref=e8]
+  - generic [ref=e11]: 项目
+  - generic [ref=e12]:
+    - button "🔐 后台账号 & Token" [ref=e13] [cursor=pointer]:
+      - generic [ref=e14]: 🔐
+      - text: 后台账号 & Token
+    - button "⚡ 一键快捷登录" [ref=e15] [cursor=pointer]:
+      - generic [ref=e16]: ⚡
+      - text: 一键快捷登录
+  - generic [ref=e18]:
+    - generic [ref=e19]:
+      - generic [ref=e20] [cursor=pointer]:
+        - generic [ref=e21]:
+          - generic [ref=e22]: 🔑
+          - generic [ref=e23]: 登录凭证
+        - generic [ref=e25]: ▼
+      - generic [ref=e27]:
+        - generic [ref=e28]: 账号
+        - textbox "手机号 / 邮箱" [ref=e30]
+        - generic [ref=e31]: 密码
+        - generic [ref=e33]:
+          - textbox "输入密码" [ref=e34]
+          - generic [ref=e35] [cursor=pointer]: 显示
+        - generic [ref=e36]:
+          - button "保存" [ref=e37] [cursor=pointer]
+          - button "清除" [ref=e38] [cursor=pointer]
+          - button "登录" [ref=e39] [cursor=pointer]
+    - generic [ref=e40]:
+      - generic [ref=e42] [cursor=pointer]:
+        - generic [ref=e43]: 🔏
+        - generic [ref=e44]: Access Token
+      - generic [ref=e45]:
+        - generic [ref=e46]:
+          - generic [ref=e48]: JWT / Token
+          - generic [ref=e50]: 尚未获取 · 请先登录
+        - button "复制 Token" [disabled] [ref=e51]
+        - generic [ref=e52]:
+          - text: 💡 API 登录通过后台服务跨域请求接口，token 将自动注入到目标页面
+          - code [ref=e53]: window.__ADMIN_TOKEN__

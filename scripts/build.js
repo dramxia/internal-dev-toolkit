@@ -31,6 +31,7 @@ const popupFiles = [
   'src/common/token.js',
   'src/common/tenant.js',
   'src/content/messages.js',
+  'src/popup/ui.js',
   'src/popup/project-switcher-ui.js',
   'src/popup/quick-login-ui.js',
   'src/popup/index.js',

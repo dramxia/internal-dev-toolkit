@@ -20,7 +20,6 @@
     userList: 'userList',
     userEmpty: 'userEmpty',
     loadMore: 'loadMoreUsers',
-    status: 'quickLoginStatus',
     recent: 'recentList',
   };
 
@@ -60,9 +59,8 @@
   }
 
   function setStatus(text, kind) {
-    const el = $('status');
-    el.textContent = text || '';
-    el.className = 'status-msg' + (kind ? ` ${kind}` : '');
+    // 统一走顶部悬浮 toast，不再占用面板内容空间
+    ns.ui.toast(text, kind);
   }
 
   async function hasAdminToken() {

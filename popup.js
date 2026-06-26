@@ -497,6 +497,47 @@ if (typeof module !== 'undefined' && module.exports) {
 })();
 
 
+/* ===== src/popup/ui.js ===== */
+/* 内部开发工具箱 — Popup 通用 UI：统一悬浮提示（toast） */
+(() => {
+  'use strict';
+
+  const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
+
+  const TOAST_ID = 'globalToast';
+  let hideTimer = 0;
+  // ok 类提示自动消失；info / err 保持到下一次调用覆盖或清空
+  const OK_AUTO_HIDE_MS = 1800;
+
+  function toast(text, kind) {
+    const el = document.getElementById(TOAST_ID);
+    if (!el) return;
+    clearTimeout(hideTimer);
+
+    const t = text == null ? '' : String(text);
+    if (!t) {
+      el.classList.remove('show', 'ok', 'err');
+      el.textContent = '';
+      return;
+    }
+
+    el.textContent = t;
+    el.classList.remove('ok', 'err');
+    if (kind === 'ok' || kind === 'err') el.classList.add(kind);
+    el.classList.add('show');
+
+    if (kind === 'ok') {
+      hideTimer = setTimeout(() => {
+        el.classList.remove('show', 'ok', 'err');
+        el.textContent = '';
+      }, OK_AUTO_HIDE_MS);
+    }
+  }
+
+  ns.ui = { toast };
+})();
+
+
 /* ===== src/popup/project-switcher-ui.js ===== */
 /* ===== src/popup/project-switcher-ui.js ===== */
 // 项目切换器 UI：顶部 pill 导航
@@ -560,7 +601,6 @@ if (typeof module !== 'undefined' && module.exports) {
     userList: 'userList',
     userEmpty: 'userEmpty',
     loadMore: 'loadMoreUsers',
-    status: 'quickLoginStatus',
     recent: 'recentList',
   };
 
@@ -600,9 +640,8 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   function setStatus(text, kind) {
-    const el = $('status');
-    el.textContent = text || '';
-    el.className = 'status-msg' + (kind ? ` ${kind}` : '');
+    // 统一走顶部悬浮 toast，不再占用面板内容空间
+    ns.ui.toast(text, kind);
   }
 
   async function hasAdminToken() {
@@ -1144,9 +1183,8 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   function setLoginStatus(text, kind) {
-    const el = $('loginStatus');
-    el.textContent = text || '';
-    el.className = 'status-msg' + (kind ? ` ${kind}` : '');
+    // 统一走顶部悬浮 toast，不再占用面板内容空间
+    ns.ui.toast(text, kind);
   }
 
   function escapeHtml(s) {
@@ -1160,7 +1198,6 @@ if (typeof module !== 'undefined' && module.exports) {
     try {
       await navigator.clipboard.writeText(text);
       setLoginStatus('Token 已复制', 'ok');
-      setTimeout(() => setLoginStatus('', ''), 1500);
     } catch (err) {
       setLoginStatus(`复制失败: ${err.message}`, 'err');
     }
@@ -1251,6 +1288,28 @@ if (typeof module !== 'undefined' && module.exports) {
     });
   }
 
+  // Tab 切换：原写在 popup.html 的内联 <script> 里，但 MV3 的 CSP
+  // (script-src 'self') 会拦截内联脚本，导致 tab 按钮绑不上事件、切不过去。
+  // 这里改由外部 popup.js 绑定，CSP 允许 'self'。
+  function bindTabSwitcher() {
+    const tabs = document.querySelectorAll('.tab-btn');
+    const panels = {
+      admin: $('panel-admin'),
+      quick: $('panel-quick'),
+    };
+    tabs.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.tab;
+        if (!key || !panels[key]) return;
+        tabs.forEach((t) => t.classList.remove('active'));
+        btn.classList.add('active');
+        Object.keys(panels).forEach((k) => {
+          panels[k].classList.toggle('active', k === key);
+        });
+      });
+    });
+  }
+
   async function init() {
     // 加载当前项目
     await ns.currentProject.loadCurrentProject();
@@ -1275,6 +1334,7 @@ if (typeof module !== 'undefined' && module.exports) {
     await renderToken();
     bindCredentials();
     bindAdminPanelToggle();
+    bindTabSwitcher();
     if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
       await ns.quickLoginUi.init();
     }

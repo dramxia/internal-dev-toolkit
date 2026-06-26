@@ -238,52 +238,77 @@ function renderEditor() {
   const content = document.getElementById('content');
   const existingRule = findRuleForRequest(selectedRequest);
   const interceptOn = existingRule && existingRule.enabled;
+  const statusText = selectedRequest.status || '—';
+  const modeText = existingRule?.mockMode === 'request' ? 'Mock 入参' : 'Mock 出参';
 
   const html = `
     <div class="editor">
-      <div class="section">
-        <div class="section-title">接口信息</div>
-        <div class="kv">
-          <div class="kv-row"><div class="kv-key">URL</div><div class="kv-val mono">${escapeHtml(selectedRequest.url)}</div></div>
-          <div class="kv-row"><div class="kv-key">Method</div><div class="kv-val">${escapeHtml(selectedRequest.method)}</div></div>
-          <div class="kv-row"><div class="kv-key">Status</div><div class="kv-val">${selectedRequest.status || '—'}</div></div>
+      <div class="editor-hero">
+        <div class="hero-kicker">Selected Endpoint</div>
+        <div class="hero-main">
+          <div class="hero-method">${escapeHtml(selectedRequest.method)}</div>
+          <div class="hero-copy">
+            <h1 class="hero-url">${escapeHtml(selectedRequest.url)}</h1>
+            <div class="hero-subline">
+              <span class="hero-pill">Status ${statusText}</span>
+              <span class="hero-pill">${interceptOn ? '拦截已开启' : '正常透传'}</span>
+              <span class="hero-pill">${escapeHtml(modeText)}</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="section">
-        <div class="section-title">Mock 配置</div>
-        <div class="intercept-row">
-          <label class="switch">
-            <input type="checkbox" id="interceptToggle" ${interceptOn ? 'checked' : ''}>
-            <span class="switch-track"><span class="switch-thumb"></span></span>
-          </label>
-          <span class="intercept-label">拦截该接口${interceptOn ? '（已开启）' : '（已关闭，正常请求）'}</span>
+      <div class="config-stack">
+        <div class="section info-card">
+          <div class="section-title">接口情报</div>
+          <div class="kv">
+            <div class="kv-row"><div class="kv-key">URL</div><div class="kv-val mono">${escapeHtml(selectedRequest.url)}</div></div>
+            <div class="kv-row"><div class="kv-key">Method</div><div class="kv-val">${escapeHtml(selectedRequest.method)}</div></div>
+            <div class="kv-row"><div class="kv-key">Status</div><div class="kv-val">${statusText}</div></div>
+          </div>
         </div>
-        <div class="radio-group">
-          <label class="radio-label">
-            <input type="radio" name="mockMode" value="response" ${(!existingRule || existingRule.mockMode === 'response') ? 'checked' : ''}>
-            <span>Mock 出参（返回假数据）</span>
-          </label>
-          <label class="radio-label">
-            <input type="radio" name="mockMode" value="request" ${existingRule?.mockMode === 'request' ? 'checked' : ''}>
-            <span>Mock 入参（发送假请求）</span>
-          </label>
+
+        <div class="section config-card">
+          <div class="section-title">Mock 控制台</div>
+          <div class="intercept-row">
+            <label class="switch">
+              <input type="checkbox" id="interceptToggle" ${interceptOn ? 'checked' : ''}>
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
+            <span class="intercept-label">拦截该接口${interceptOn ? '（已开启）' : '（已关闭，正常请求）'}</span>
+          </div>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="mockMode" value="response" ${(!existingRule || existingRule.mockMode === 'response') ? 'checked' : ''}>
+              <span>Mock 出参（返回假数据）</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="mockMode" value="request" ${existingRule?.mockMode === 'request' ? 'checked' : ''}>
+              <span>Mock 入参（发送假请求）</span>
+            </label>
+          </div>
         </div>
       </div>
 
-      <div class="section">
-        <div class="section-title">Mock 数据</div>
-        <div class="tabs">
-          <div class="tab active" data-tab="response">响应数据</div>
-          <div class="tab" data-tab="request">请求数据</div>
+      <div class="section data-panel">
+        <div class="section-header-line">
+          <div class="section-title">数据编排</div>
+          <div class="tabs">
+            <div class="tab active" data-tab="response">响应数据</div>
+            <div class="tab" data-tab="request">请求数据</div>
+          </div>
         </div>
-        <div id="tabContent">
+        <div id="tabContent" class="json-frame">
+          <div class="json-frame-bar">
+            <div class="json-window-dots"><span></span><span></span><span></span></div>
+            <div class="json-frame-title">mock.payload.json</div>
+          </div>
           <div id="mockDataEditor" class="json-editor-host"></div>
         </div>
-        <div class="hint">编辑 JSON 数据，或点击下方按钮自动生成假数据</div>
+        <div class="hint">编辑 JSON 数据，或使用下方生成器快速构造假数据。</div>
       </div>
 
-      <div class="section">
+      <div class="action-dock">
         <div class="btn-group">
           <button class="btn btn-secondary" id="generateBtn">一键生成假数据</button>
           <button class="btn btn-primary" id="saveBtn">保存 Mock 规则</button>

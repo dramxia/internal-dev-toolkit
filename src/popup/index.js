@@ -32,9 +32,8 @@
   }
 
   function setLoginStatus(text, kind) {
-    const el = $('loginStatus');
-    el.textContent = text || '';
-    el.className = 'status-msg' + (kind ? ` ${kind}` : '');
+    // 统一走顶部悬浮 toast，不再占用面板内容空间
+    ns.ui.toast(text, kind);
   }
 
   function escapeHtml(s) {
@@ -48,7 +47,6 @@
     try {
       await navigator.clipboard.writeText(text);
       setLoginStatus('Token 已复制', 'ok');
-      setTimeout(() => setLoginStatus('', ''), 1500);
     } catch (err) {
       setLoginStatus(`复制失败: ${err.message}`, 'err');
     }
@@ -139,6 +137,28 @@
     });
   }
 
+  // Tab 切换：原写在 popup.html 的内联 <script> 里，但 MV3 的 CSP
+  // (script-src 'self') 会拦截内联脚本，导致 tab 按钮绑不上事件、切不过去。
+  // 这里改由外部 popup.js 绑定，CSP 允许 'self'。
+  function bindTabSwitcher() {
+    const tabs = document.querySelectorAll('.tab-btn');
+    const panels = {
+      admin: $('panel-admin'),
+      quick: $('panel-quick'),
+    };
+    tabs.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.tab;
+        if (!key || !panels[key]) return;
+        tabs.forEach((t) => t.classList.remove('active'));
+        btn.classList.add('active');
+        Object.keys(panels).forEach((k) => {
+          panels[k].classList.toggle('active', k === key);
+        });
+      });
+    });
+  }
+
   async function init() {
     // 加载当前项目
     await ns.currentProject.loadCurrentProject();
@@ -163,6 +183,7 @@
     await renderToken();
     bindCredentials();
     bindAdminPanelToggle();
+    bindTabSwitcher();
     if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
       await ns.quickLoginUi.init();
     }
