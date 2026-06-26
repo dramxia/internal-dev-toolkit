@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    :root {
+      /* Warm paper palette */
+      --bg-base: #F6F1E8;
+      --bg-surface: #FBF7EF;
+      --bg-white: #FFFFFF;
+      --border-subtle: #E2D9C8;
+      --text-primary: #1F2421;
+      --text-secondary: #8A8A80;
+      --accent: #C8853F;
+      --accent-hover: #A86B2C;
+      --accent-tint: #F0E3D0;
+      --dark-block: #2A2723;
+      
+      /* Semantic colors */
+      --success: #10b981;
+      --success-bg: rgba(16, 185, 129, 0.08);
+      --error: #ef4444;
+      --error-bg: rgba(239, 68, 68, 0.08);
+      --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.08);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 400px;
+      min-height: 500px;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .container {
+      padding: 0;
+    }
+
+    /* Header */
+    .header {
+      background: var(--bg-white);
+      padding: 20px 20px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo {
+      width: 36px;
+      height: 36px;
+      background: var(--accent);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+
+    .header-title {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .header-title h1 {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.4px;
+      margin-bottom: 2px;
+      color: var(--text-primary);
+    }
+
+    .header-title p {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-weight: 400;
+    }
+
+    /* Project Switcher */
+    .project-switcher {
+      background: var(--bg-white);
+      padding: 12px 20px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-secondary);
+      margin-bottom: 10px;
+    }
+
+    .project-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .project-pill {
+      padding: 6px 14px;
+      border-radius: 20px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .project-pill:hover {
+      background: var(--bg-white);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .project-pill.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    /* Card */
+    .card {
+      background: var(--bg-white);
+      margin: 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .card-header {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+    }
+
+    .card-header:hover {
+      background: var(--bg-surface);
+    }
+
+    .card-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+      color: var(--text-primary);
+    }
+
+    .card-icon {
+      font-size: 20px;
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .card-meta {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .card-toggle {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: var(--text-secondary);
+      transition: transform 0.2s ease;
+    }
+
+    .card.expanded .card-toggle {
+      transform: rotate(180deg);
+    }
+
+    .card-body {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .card.expanded .card-body {
+      max-height: 3000px;
+    }
+
+    .card-content {
+      padding: 0 20px 20px;
+    }
+
+    /* Badge */
+    .badge {
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+
+    .badge.success {
+      background: var(--success-bg);
+      color: var(--success);
+    }
+
+    .badge.error {
+      background: var(--error-bg);
+      color: var(--error);
+    }
+
+    .badge.warning {
+      background: var(--warning-bg);
+      color: var(--warning);
+    }
+
+    /* Form */
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font-size: 14px;
+      font-weight: 400;
+      outline: none;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+
+    .form-input::placeholder {
+      color: var(--text-secondary);
+    }
+
+    .form-input:focus {
+      background: var(--bg-white);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-tint);
+    }
+
+    .input-wrapper {
+      position: relative;
+    }
+
+    .input-action {
+      position: absolute;
+      right: 14px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--accent);
+      cursor: pointer;
+      user-select: none;
+      transition: color 0.15s;
+    }
+
+    .input-action:hover {
+      color: var(--accent-hover);
+    }
+
+    select.form-input {
+      cursor: pointer;
+    }
+
+    /* Buttons */
+    .btn-group {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .btn-group.two {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .btn-group.one {
+      grid-template-columns: 1fr;
+    }
+
+    .btn {
+      padding: 11px 18px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-family: inherit;
+      letter-spacing: -0.2px;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(200, 133, 63, 0.3);
+    }
+
+    .btn-secondary {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: var(--bg-white);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .btn-danger {
+      background: var(--error-bg);
+      color: var(--error);
+      border: 1px solid transparent;
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: var(--error);
+      color: white;
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .btn:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    /* Status Message */
+    .status-msg {
+      margin-top: 12px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 1.4;
+      border: 1px solid transparent;
+    }
+
+    .status-msg.ok {
+      background: var(--success-bg);
+      color: var(--success);
+      border-color: var(--success);
+    }
+
+    .status-msg.err {
+      background: var(--error-bg);
+      color: var(--error);
+      border-color: var(--error);
+    }
+
+    .status-msg:empty {
+      display: none;
+    }
+
+    /* Token Box */
+    .token-box {
+      padding: 14px;
+      background: var(--dark-block);
+      border: 1px solid var(--dark-block);
+      border-radius: 8px;
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+      font-size: 12px;
+      color: var(--success);
+      word-break: break-all;
+      line-height: 1.6;
+    }
+
+    .token-box.empty {
+      background: var(--bg-surface);
+      color: var(--text-secondary);
+      border: 1px dashed var(--border-subtle);
+    }
+
+    .token-meta {
+      margin-top: 10px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    /* Hint */
+    .hint {
+      margin-top: 16px;
+      padding: 12px 14px;
+      background: var(--accent-tint);
+      border-left: 3px solid var(--accent);
+      border-radius: 0 6px 6px 0;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text-primary);
+    }
+
+    .hint code {
+      background: rgba(200, 133, 63, 0.15);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+    }
+
+    /* Divider */
+    .divider {
+      height: 1px;
+      background: var(--border-subtle);
+      margin: 20px 0;
+    }
+
+    /* List */
+    .list {
+      max-height: 240px;
+      overflow-y: auto;
+      margin-top: 10px;
+      border-radius: 8px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .list-item {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .list-item:last-child {
+      border-bottom: none;
+    }
+
+    .list-item:hover {
+      background: var(--accent-tint);
+    }
+
+    .list-item.active {
+      background: var(--accent-tint);
+      border-left: 3px solid var(--accent);
+      padding-left: 11px;
+    }
+
+    .list-item-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .list-item-title {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+      margin-bottom: 3px;
+    }
+
+    .list-item-meta {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .list-item-role {
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: var(--accent-tint);
+      color: var(--accent);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      margin-left: 6px;
+    }
+
+    .list-item-btn {
+      padding: 7px 16px;
+      background: var(--accent);
+      border: none;
+      border-radius: 6px;
+      color: white;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+
+    .list-item-btn:hover:not(:disabled) {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+    }
+
+    .list-item-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .list-item-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .action-btn {
+      padding: 7px 10px;
+      background: var(--bg-white);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      height: 34px;
+    }
+
+    .action-btn:hover:not(:disabled) {
+      background: var(--accent-tint);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .action-btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+
+    .action-btn.primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+
+    .action-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .list-empty {
+      padding: 32px 20px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .list-empty.hidden,
+    .list.hidden {
+      display: none;
+    }
+
+    .load-more {
+      width: 100%;
+      margin-top: 10px;
+      padding: 10px;
+      background: transparent;
+      border: 1px dashed var(--border-subtle);
+      border-radius: 6px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+
+    .load-more:hover {
+      background: var(--accent-tint);
+      border-color: var(--accent);
+    }
+
+    .load-more.hidden {
+      display: none;
+    }
+
+    /* Recent List */
+    .recent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .recent-item {
+      padding: 10px 12px;
+      background: var(--bg-surface);
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      transition: all 0.15s;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .recent-item:hover {
+      background: var(--accent-tint);
+      border-color: var(--accent);
+    }
+
+    .recent-item-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .recent-item-text {
+      font-size: 12px;
+      color: var(--text-primary);
+      font-weight: 500;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .recent-env-badge {
+      padding: 3px 7px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      flex-shrink: 0;
+    }
+
+    .recent-env-badge.local {
+      background: var(--success-bg);
+      color: var(--success);
+    }
+
+    .recent-env-badge.online {
+      background: var(--accent-tint);
+      color: var(--accent);
+    }
+
+    .recent-item-time {
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+
+    .recent-item-actions {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .recent-action-btn {
+      padding: 6px 8px;
+      background: var(--bg-white);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: inherit;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 30px;
+      height: 30px;
+    }
+
+    .recent-action-btn:hover:not(:disabled) {
+      background: var(--accent-tint);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .recent-action-btn.danger {
+      color: var(--error);
+    }
+
+    .recent-action-btn.danger:hover:not(:disabled) {
+      background: var(--error-bg);
+      border-color: var(--error);
+    }
+
+    .recent-action-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .recent-empty {
+      padding: 24px;
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    /* Scrollbar styling */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border-subtle) transparent;
+    }
+
+    *::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    *::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    *::-webkit-scrollbar-thumb {
+      background: var(--border-subtle);
+      border-radius: 3px;
+    }
+
+    *::-webkit-scrollbar-thumb:hover {
+      background: var(--accent);
+    }
+
+    /* Smooth transitions */
+    .fade-in {
+      animation: fadeIn 0.2s ease-in;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">🛠️</div>
+      <div class="header-title">
+        <h1>内部开发工具箱</h1>
+        <p>Internal Dev Toolkit</p>
+      </div>
+    </div>
+
+    <!-- Project Switcher -->
+    <div class="project-switcher">
+      <div class="section-title">项目</div>
+      <div class="project-pills" id="projectPills">
+        <!-- Dynamically rendered -->
+      </div>
+    </div>
+
+    <!-- Admin Panel -->
+    <div class="card" id="adminPanelSection">
+      <div class="card-header" id="adminPanelHeader">
+        <div class="card-title">
+          <div class="card-icon">🔐</div>
+          <span>后台账号 &amp; Token</span>
+        </div>
+        <div class="card-meta">
+          <div class="card-toggle">▼</div>
+        </div>
+      </div>
+      <div class="card-body" id="adminPanelBody">
+        <div class="card-content">
+          <div class="form-group">
+            <label class="form-label">账号</label>
+            <input class="form-input" id="account" type="text" autocomplete="off" placeholder="输入后台账号（手机号）">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">密码</label>
+            <div class="input-wrapper">
+              <input class="form-input" id="password" type="password" autocomplete="off" placeholder="输入密码">
+              <span class="input-action" id="pwdToggle">显示</span>
+            </div>
+          </div>
+
+          <div class="btn-group">
+            <button class="btn btn-secondary" id="saveBtn">保存</button>
+            <button class="btn btn-danger" id="clearBtn">清除</button>
+            <button class="btn btn-primary" id="apiLoginBtn">登录</button>
+          </div>
+
+          <div class="status-msg" id="loginStatus"></div>
+
+          <div class="divider"></div>
+
+          <div class="section-title">Access Token</div>
+          <div class="token-box empty" id="tokenWrap">
+            <div id="tokenValue">尚未获取</div>
+            <div class="token-meta" id="tokenUpdated"></div>
+          </div>
+
+          <div class="btn-group one">
+            <button class="btn btn-secondary" id="copyTokenBtn" disabled>复制 Token</button>
+          </div>
+
+          <div class="hint">
+            💡 API 登录通过后台服务跨域请求接口，token 将自动注入到目标页面 <code>window.__ADMIN_TOKEN__</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Login -->
+    <div class="card" id="quickLoginSection">
+      <div class="card-header" id="quickLoginHeader">
+        <div class="card-title">
+          <div class="card-icon">⚡</div>
+          <span>一键快捷登录</span>
+        </div>
+        <div class="card-meta">
+          <span class="badge" id="envBadge">DEV</span>
+          <div class="card-toggle">▼</div>
+        </div>
+      </div>
+      <div class="card-body" id="quickLoginBody">
+        <div class="card-content">
+          <div class="form-group">
+            <label class="form-label">本地端口（可选）</label>
+            <input class="form-input" id="localPort" type="text" autocomplete="off" placeholder="留空使用线上环境，填写则跳转 http://localhost:端口号">
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="form-group">
+            <label class="form-label">选择租户</label>
+            <input class="form-input" id="tenantSearch" type="text" autocomplete="off" placeholder="搜索租户名称 / 域名 / 联系人">
+            <div class="list hidden" id="tenantList"></div>
+            <div class="list-empty hidden" id="tenantEmpty">未找到租户</div>
+          </div>
+
+          <div class="form-group" style="display:none;">
+            <label class="form-label">部门筛选</label>
+            <select class="form-input" id="deptSelect">
+              <option value="">全部部门</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">搜索用户</label>
+            <input class="form-input" id="userSearch" type="text" autocomplete="off" placeholder="姓名 / 手机号">
+          </div>
+
+          <div class="list hidden" id="userList"></div>
+          <div class="list-empty hidden" id="userEmpty">未找到用户</div>
+          <button class="load-more hidden" id="loadMoreUsers">加载更多</button>
+
+          <div class="status-msg" id="quickLoginStatus"></div>
+
+          <div class="section-title">最近登录</div>
+          <div class="recent-list" id="recentList">
+            <div class="recent-empty">暂无最近登录</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

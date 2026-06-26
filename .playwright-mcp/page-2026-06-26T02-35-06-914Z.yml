@@ -1,0 +1,18 @@
+- generic [ref=e2]:
+  - generic [ref=e9]:
+    - generic [ref=e11]: 后台管理系统
+    - generic [ref=e12]:
+      - group [ref=e13]:
+        - textbox "账号" [active] [invalid] [ref=e14]: testprobe
+        - generic [ref=e18]: 请输入有效的手机号
+      - group [ref=e15]:
+        - textbox "密码" [ref=e16]: wrongpass123
+      - button "登录" [ref=e17] [cursor=pointer]
+  - alert [ref=e1]: 后台管理系统
+  - generic:
+    - region "Notifications-top"
+    - region "Notifications-top-left"
+    - region "Notifications-top-right"
+    - region "Notifications-bottom-left"
+    - region "Notifications-bottom"
+    - region "Notifications-bottom-right"

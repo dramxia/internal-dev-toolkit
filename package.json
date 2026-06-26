@@ -1,0 +1,19 @@
+{
+  "name": "internal-dev-toolkit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "公司内部开发用浏览器插件脚手架",
+  "scripts": {
+    "icons": "node scripts/gen-icons.js",
+    "build": "node scripts/build.js",
+    "check": "npm run build && node --check content.js && node --check popup.js && node --check background.js && node -e \"JSON.parse(require('fs').readFileSync('manifest.json','utf8'))\"",
+    "test-server": "node test-server.js"
+  },
+  "keywords": [
+    "chrome-extension",
+    "mv3",
+    "internal",
+    "scaffold"
+  ],
+  "license": "UNLICENSED"
+}
