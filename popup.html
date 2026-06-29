@@ -54,6 +54,11 @@
     /* ─── Reset ─── */
     *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
 
+    /* 隐藏弹窗外层滚动条（内部 .list 的细滚动条不受影响） */
+    html, body { scrollbar-width: none; -ms-overflow-style: none; }
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
     body {
       width: 420px;
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
