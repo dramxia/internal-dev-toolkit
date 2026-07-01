@@ -544,6 +544,22 @@ if (typeof module !== 'undefined' && module.exports) {
     });
   }
 
+  // 清空当前项目的全部 Mock 规则（“已编”手动清空）
+  async function clearMockRules() {
+    if (!hasChromeStorage()) return;
+    const key = await getStorageKey();
+
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: [] }, () => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve({ ok: true });
+      });
+    });
+  }
+
   // 获取指定规则
   async function getMockRule(ruleId) {
     const rules = await getMockRules();
@@ -555,6 +571,7 @@ if (typeof module !== 'undefined' && module.exports) {
     saveMockRule,
     deleteMockRule,
     toggleMockRule,
+    clearMockRules,
     getMockRule,
   };
 })();
@@ -1543,6 +1560,30 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
+  // 处理：清空当前项目全部 Mock 规则（“已编”手动清空）
+  async function handleClearMockRules(msg) {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+
+      const { tabId } = msg;
+      await ns.mockStorage.clearMockRules();
+
+      // 通知 content script：规则已清空，停止拦截
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MOCK_RULES',
+          rules: [],
+        }).catch(() => {});
+      }
+
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   // 处理：获取当前项目
   async function handleGetCurrentProject() {
     try {
@@ -1593,6 +1634,7 @@ if (typeof module !== 'undefined' && module.exports) {
     handleAddMockRule,
     handleDeleteMockRule,
     handleToggleMockRule,
+    handleClearMockRules,
     handleGetCurrentProject,
     handleGetRequestLog,
   };
@@ -1719,6 +1761,14 @@ if (typeof module !== 'undefined' && module.exports) {
     if (msg.type === 'TOGGLE_MOCK_RULE' && commonNs.mockHandler) {
       commonNs.mockHandler
         .handleToggleMockRule(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'CLEAR_MOCK_RULES' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleClearMockRules(msg)
         .then((result) => sendResponse(result))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;

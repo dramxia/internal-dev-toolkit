@@ -96,6 +96,30 @@
     }
   }
 
+  // 处理：清空当前项目全部 Mock 规则（“已编”手动清空）
+  async function handleClearMockRules(msg) {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+
+      const { tabId } = msg;
+      await ns.mockStorage.clearMockRules();
+
+      // 通知 content script：规则已清空，停止拦截
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MOCK_RULES',
+          rules: [],
+        }).catch(() => {});
+      }
+
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   // 处理：获取当前项目
   async function handleGetCurrentProject() {
     try {
@@ -146,6 +170,7 @@
     handleAddMockRule,
     handleDeleteMockRule,
     handleToggleMockRule,
+    handleClearMockRules,
     handleGetCurrentProject,
     handleGetRequestLog,
   };

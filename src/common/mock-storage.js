@@ -101,6 +101,22 @@
     });
   }
 
+  // 清空当前项目的全部 Mock 规则（“已编”手动清空）
+  async function clearMockRules() {
+    if (!hasChromeStorage()) return;
+    const key = await getStorageKey();
+
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: [] }, () => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve({ ok: true });
+      });
+    });
+  }
+
   // 获取指定规则
   async function getMockRule(ruleId) {
     const rules = await getMockRules();
@@ -112,6 +128,7 @@
     saveMockRule,
     deleteMockRule,
     toggleMockRule,
+    clearMockRules,
     getMockRule,
   };
 })();

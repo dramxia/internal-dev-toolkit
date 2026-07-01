@@ -122,6 +122,14 @@
       return true;
     }
 
+    if (msg.type === 'CLEAR_MOCK_RULES' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleClearMockRules(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'GET_CURRENT_PROJECT' && commonNs.mockHandler) {
       commonNs.mockHandler
         .handleGetCurrentProject(msg)
