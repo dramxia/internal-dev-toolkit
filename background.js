@@ -23,8 +23,8 @@ const PROJECTS = [
   },
   {
     id: 'local-test',
-    name: '本地测试',
-    baseUrl: 'http://localhost:3000',
+    name: '生产',
+    baseUrl: 'https://ai-admin.huayuntiantu.com',
     authPath: '/api/auth',
     tenantApiPaths: {
       tenantPage: '/api/tenant/page',
@@ -34,7 +34,7 @@ const PROJECTS = [
     },
     cookieKeys: [],
     enabledFeatures: ['adminPanel', 'quickLogin'],
-    hosts: ['localhost', '127.0.0.1'],
+    hosts: ['ai-admin.huayuntiantu.com', '*.huayuntiantu.com'],
   },
 ];
 

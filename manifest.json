@@ -18,10 +18,8 @@
   "host_permissions": [
     "https://gpt-admin-pre.hwzxs.com/*",
     "https://*.hwzxs.com/*",
-    "http://localhost/*",
-    "https://localhost/*",
-    "http://127.0.0.1/*",
-    "https://127.0.0.1/*"
+    "https://ai-admin.huayuntiantu.com/*",
+    "https://*.huayuntiantu.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -42,10 +40,8 @@
       "matches": [
         "https://gpt-admin-pre.hwzxs.com/*",
         "https://*.hwzxs.com/*",
-        "http://localhost/*",
-        "https://localhost/*",
-        "http://127.0.0.1/*",
-        "https://127.0.0.1/*"
+        "https://ai-admin.huayuntiantu.com/*",
+        "https://*.huayuntiantu.com/*"
       ]
     }
   ],
@@ -54,10 +50,8 @@
       "matches": [
         "https://gpt-admin-pre.hwzxs.com/*",
         "https://*.hwzxs.com/*",
-        "http://localhost/*",
-        "https://localhost/*",
-        "http://127.0.0.1/*",
-        "https://127.0.0.1/*"
+        "https://ai-admin.huayuntiantu.com/*",
+        "https://*.huayuntiantu.com/*"
       ],
       "js": [
         "content.js"
@@ -71,10 +65,8 @@
       "matches": [
         "https://gpt-admin-pre.hwzxs.com/*",
         "https://*.hwzxs.com/*",
-        "http://localhost/*",
-        "https://localhost/*",
-        "http://127.0.0.1/*",
-        "https://127.0.0.1/*"
+        "https://ai-admin.huayuntiantu.com/*",
+        "https://*.huayuntiantu.com/*"
       ],
       "js": [
         "mock-hook.js"
