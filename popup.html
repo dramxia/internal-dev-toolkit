@@ -49,6 +49,9 @@
       --shadow-lg:  0 8px 32px rgba(36,80,36,.16);
 
       --tab-h: 44px;
+
+      --icon-action: 14px;
+      --icon-stroke: 1.75;
     }
 
     /* ─── Reset ─── */
@@ -68,6 +71,18 @@
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
       overflow-x: hidden;
+    }
+
+    .icon-svg {
+      display: block;
+      width: var(--icon-action);
+      height: var(--icon-action);
+      flex-shrink: 0;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: var(--icon-stroke);
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     /* ────────────────────────────────────────
@@ -720,11 +735,13 @@
 
     .action-btn {
       width: 32px; height: 32px;
+      padding: 0;
       background: var(--sage-50);
       border: 1.5px solid var(--border);
       border-radius: var(--radius-sm);
       color: var(--text-2);
       font-size: 13px;
+      line-height: 1;
       cursor: pointer;
       transition: all .15s;
       font-family: inherit;
@@ -830,11 +847,13 @@
 
     .recent-action-btn {
       width: 28px; height: 28px;
+      padding: 0;
       background: var(--panel);
       border: 1.5px solid var(--border);
       border-radius: var(--radius-sm);
       color: var(--text-2);
       font-size: 12px;
+      line-height: 1;
       cursor: pointer;
       transition: all .15s;
       font-family: inherit;

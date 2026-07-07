@@ -809,16 +809,11 @@ function renderEmptyState() {
   const isEdited = listMode === 'edited';
   content.innerHTML = `
     <div class="empty-state">
-      <div class="es-particles">
-        <span class="es-p"></span><span class="es-p"></span><span class="es-p"></span><span class="es-p"></span>
-        <span class="es-p"></span><span class="es-p"></span><span class="es-p"></span><span class="es-p"></span>
-      </div>
       <div class="empty-state-icon">
-        <svg width="30" height="30" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 18c2.7-2.7 6.3-4 10-4s7.3 1.3 10 4"/>
-          <path d="M8.5 22c1.5-1.5 3.5-2.2 5.5-2.2s4 .7 5.5 2.2"/>
-          <circle cx="14" cy="25" r="1.2" fill="currentColor" stroke="none"/>
-          <path d="M1 14C5 10 9.3 8 14 8s9 2 13 6" opacity="0.4"/>
+        <svg class="icon icon-lg" viewBox="0 0 24 24">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          <line x1="10" y1="10" x2="18" y2="10"></line>
+          <line x1="10" y1="14" x2="14" y2="14"></line>
         </svg>
       </div>
       <div class="empty-title">${isEdited ? '已编 Mock' : '暂无选中'}</div>
