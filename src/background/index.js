@@ -33,6 +33,16 @@
       return true;
     }
 
+    // popup 保存自定义域名后通知 background 刷新内存缓存
+    // （getBaseUrl 同步读取该缓存，所有后台请求会立即使用新域名）
+    if (msg.type === 'REFRESH_BASE_URL') {
+      commonNs.currentProject
+        .refreshBaseUrlCache()
+        .then(() => sendResponse({ ok: true }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'FETCH_TENANTS' && ns.tenantApi) {
       ns.tenantApi
         .fetchTenantPage(msg.payload)

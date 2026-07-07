@@ -21,6 +21,10 @@
   async function loadCurrentProject() {
     cachedProjectId = await getCurrentProjectId();
     cachedProject = ns.projects.getById(cachedProjectId);
+    // 同步加载自定义域名覆盖到内存缓存，供 getBaseUrl() 同步读取
+    if (ns.customDomain) {
+      await ns.customDomain.loadCachedOverride();
+    }
     return cachedProject;
   }
 
@@ -32,8 +36,21 @@
     return cachedProject || ns.projects.getById(ns.projects.DEFAULT_PROJECT_ID);
   }
 
+  // 优先返回自定义域名覆盖，否则回落到项目配置的 baseUrl
   function getBaseUrl() {
+    if (ns.customDomain) {
+      const override = ns.customDomain.getCachedOverride();
+      if (override) return override;
+    }
     return getProject().baseUrl;
+  }
+
+  // 跨上下文刷新内存缓存（popup 保存后通知 background 调用）
+  async function refreshBaseUrlCache() {
+    if (ns.customDomain) {
+      return ns.customDomain.loadCachedOverride();
+    }
+    return '';
   }
 
   function getAuthPath() {
@@ -106,5 +123,6 @@
     getName,
     getHosts,
     migrateOldStorageKeys,
+    refreshBaseUrlCache,
   };
 })();

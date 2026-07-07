@@ -84,6 +84,10 @@ if (typeof module !== 'undefined' && module.exports) {
   async function loadCurrentProject() {
     cachedProjectId = await getCurrentProjectId();
     cachedProject = ns.projects.getById(cachedProjectId);
+    // 同步加载自定义域名覆盖到内存缓存，供 getBaseUrl() 同步读取
+    if (ns.customDomain) {
+      await ns.customDomain.loadCachedOverride();
+    }
     return cachedProject;
   }
 
@@ -95,8 +99,21 @@ if (typeof module !== 'undefined' && module.exports) {
     return cachedProject || ns.projects.getById(ns.projects.DEFAULT_PROJECT_ID);
   }
 
+  // 优先返回自定义域名覆盖，否则回落到项目配置的 baseUrl
   function getBaseUrl() {
+    if (ns.customDomain) {
+      const override = ns.customDomain.getCachedOverride();
+      if (override) return override;
+    }
     return getProject().baseUrl;
+  }
+
+  // 跨上下文刷新内存缓存（popup 保存后通知 background 调用）
+  async function refreshBaseUrlCache() {
+    if (ns.customDomain) {
+      return ns.customDomain.loadCachedOverride();
+    }
+    return '';
   }
 
   function getAuthPath() {
@@ -169,6 +186,7 @@ if (typeof module !== 'undefined' && module.exports) {
     getName,
     getHosts,
     migrateOldStorageKeys,
+    refreshBaseUrlCache,
   };
 })();
 
@@ -313,6 +331,111 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   namespace.token = { EMPTY, getToken, hasToken, saveToken, clearToken };
+})();
+
+
+/* ===== src/common/custom-domain.js ===== */
+/* 内部开发工具箱 — 自定义域名（baseUrl）覆盖存储 */
+/* 允许在 popup 手动修改当前项目的后端域名，覆盖 PROJECTS 中的默认 baseUrl。
+   命名空间键 customBaseUrl:${projectId}，结构与 token 模块一致。 */
+(() => {
+  'use strict';
+
+  const namespace = (globalThis.InternalDevToolkit = globalThis.InternalDevToolkit || {});
+
+  const KEY_PREFIX = 'customBaseUrl'; // { baseUrl: string, updatedAt: number }
+
+  const EMPTY = Object.freeze({ baseUrl: '', updatedAt: 0 });
+
+  // 内存缓存：避免每次 getBaseUrl() 都异步读 storage（getBaseUrl 是同步 API）
+  let cachedOverride = '';
+
+  function hasChromeStorage() {
+    return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
+  }
+
+  function normalize(value = {}) {
+    return {
+      baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : '',
+      updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
+    };
+  }
+
+  async function getStorageKey() {
+    const projectId = await namespace.currentProject.getCurrentProjectId();
+    return `${KEY_PREFIX}:${projectId}`;
+  }
+
+  async function getDomain() {
+    if (!hasChromeStorage()) return normalize();
+    const key = await getStorageKey();
+    return new Promise((resolve) => {
+      chrome.storage.local.get(key, (items) => {
+        if (chrome.runtime?.lastError) {
+          resolve(normalize());
+          return;
+        }
+        resolve(normalize(items[key]));
+      });
+    });
+  }
+
+  async function hasDomain() {
+    return getDomain().then((d) => Boolean(d.baseUrl));
+  }
+
+  async function saveDomain(baseUrl) {
+    const next = { baseUrl: String(baseUrl || '').trim(), updatedAt: Date.now() };
+    cachedOverride = next.baseUrl;
+    if (!hasChromeStorage()) return next;
+    const key = await getStorageKey();
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: next }, () => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(next);
+      });
+    });
+  }
+
+  async function clearDomain() {
+    cachedOverride = '';
+    if (!hasChromeStorage()) return;
+    const key = await getStorageKey();
+    return new Promise((resolve) => {
+      chrome.storage.local.remove(key, () => resolve());
+    });
+  }
+
+  // 从 storage 载入到内存缓存（loadCurrentProject 时调用）
+  async function loadCachedOverride() {
+    const state = await getDomain();
+    cachedOverride = state.baseUrl || '';
+    return cachedOverride;
+  }
+
+  // 同步读取缓存的覆盖值（供 getBaseUrl 同步路径使用）
+  function getCachedOverride() {
+    return cachedOverride;
+  }
+
+  // 直接设置内存缓存（跨上下文刷新时使用，无需落盘）
+  function setCachedOverride(baseUrl) {
+    cachedOverride = typeof baseUrl === 'string' ? baseUrl : '';
+  }
+
+  namespace.customDomain = {
+    EMPTY,
+    getDomain,
+    hasDomain,
+    saveDomain,
+    clearDomain,
+    loadCachedOverride,
+    getCachedOverride,
+    setCachedOverride,
+  };
 })();
 
 
@@ -1162,23 +1285,143 @@ if (typeof module !== 'undefined' && module.exports) {
     $('password').value = creds.password || '';
   }
 
+  // 记录最近一次从存储读到的 token，用于 blur 时判断用户是否改动了内容
+  let lastSavedToken = '';
+  // 记录最近一次从存储读到的自定义域名覆盖；空串表示未覆盖（使用项目默认）
+  let lastSavedDomain = '';
+
+  function getEditableText(el) {
+    return (el.textContent || '').replace(/ /g, ' ');
+  }
+
+  function setEditableText(el, text) {
+    el.textContent = text || '';
+  }
+
+  function syncEditableState(el, wrap, text) {
+    const isEmpty = !text;
+    el.classList.toggle('empty', isEmpty);
+    wrap.classList.toggle('empty', isEmpty);
+  }
+
   async function renderToken() {
     const tokenState = await ns.token.getToken();
     const tokenEl = $('tokenValue');
     const tokenWrap = $('tokenWrap');
-    if (tokenState.token) {
-      tokenEl.textContent = tokenState.token;
-      tokenEl.title = tokenState.token;
-      tokenWrap.classList.remove('empty');
+    lastSavedToken = tokenState.token || '';
+
+    // 仅在编辑区未聚焦时刷新内容，避免覆盖用户正在编辑的输入
+    if (document.activeElement !== tokenEl) {
+      setEditableText(tokenEl, lastSavedToken);
+    }
+    syncEditableState(tokenEl, tokenWrap, lastSavedToken);
+    if (lastSavedToken) {
       const updatedAt = tokenState.updatedAt ? new Date(tokenState.updatedAt).toLocaleString() : '未知';
       $('tokenUpdated').textContent = `获取时间: ${updatedAt}`;
       $('copyTokenBtn').disabled = false;
     } else {
-      tokenEl.textContent = '尚未获取';
-      tokenEl.title = '';
-      tokenWrap.classList.add('empty');
       $('tokenUpdated').textContent = '';
       $('copyTokenBtn').disabled = true;
+    }
+  }
+
+  // 点击即编辑、失焦自动保存并注入：
+  // 可编辑内容区会随内容自然增高，无需 textarea 与显式「编辑/保存」按钮。
+  async function onTokenBlur() {
+    const tokenEl = $('tokenValue');
+    const next = getEditableText(tokenEl).trim();
+    // 内容未变化，仅刷新显示态
+    if (next === lastSavedToken) {
+      await renderToken();
+      return;
+    }
+    if (!next) {
+      // 清空了 token
+      try {
+        await ns.token.clearToken();
+        await renderToken();
+        setLoginStatus('Token 已清除', 'ok');
+        ns.messages.sendToActiveTab({ type: 'CLEAR_TOKEN' }).catch(() => {});
+      } catch (err) {
+        setLoginStatus(`清除失败: ${err.message}`, 'err');
+      }
+      return;
+    }
+    try {
+      await ns.token.saveToken(next);
+      await renderToken();
+      setLoginStatus('Token 已保存并注入页面', 'ok');
+      // 立即向当前标签页注入新 token（与 API 登录成功后行为一致）
+      ns.messages.sendToActiveTab({ type: 'INJECT_TOKEN' }).catch(() => {});
+    } catch (err) {
+      setLoginStatus(`保存失败: ${err.message}`, 'err');
+    }
+  }
+
+  // 项目默认 baseUrl，用于「无覆盖」时回填输入框与判断是否回到默认
+  function getDefaultBaseUrl() {
+    return ns.currentProject.getProject().baseUrl || '';
+  }
+
+  async function renderDomain() {
+    const domainState = await ns.customDomain.getDomain();
+    const domainEl = $('domainValue');
+    const domainWrap = $('domainWrap');
+    const defaultUrl = getDefaultBaseUrl();
+    lastSavedDomain = domainState.baseUrl || '';
+
+    // 显示当前生效地址：有覆盖用覆盖，否则回填默认值便于在其基础上修改
+    const effective = lastSavedDomain || defaultUrl;
+    if (document.activeElement !== domainEl) {
+      setEditableText(domainEl, effective);
+    }
+    syncEditableState(domainEl, domainWrap, effective);
+    if (effective) {
+      if (lastSavedDomain) {
+        const updatedAt = domainState.updatedAt ? new Date(domainState.updatedAt).toLocaleString() : '未知';
+        $('domainUpdated').textContent = `自定义 · 更新于 ${updatedAt}`;
+      } else {
+        $('domainUpdated').textContent = defaultUrl ? `项目默认 · ${defaultUrl}` : '';
+      }
+      $('copyDomainBtn').disabled = false;
+    } else {
+      $('domainUpdated').textContent = '';
+      $('copyDomainBtn').disabled = true;
+    }
+    // 提示当前默认域名（便于用户参考）
+    const hint = $('domainDefaultHint');
+    if (hint) hint.textContent = defaultUrl;
+  }
+
+  // 点击即编辑、失焦自动保存：与 token 交互一致。
+  // 清空或填回默认值 → 清除覆盖（恢复默认）；填入新值 → 保存覆盖并通知 background 刷新缓存。
+  async function onDomainBlur() {
+    const domainEl = $('domainValue');
+    const next = getEditableText(domainEl).trim();
+    const defaultUrl = getDefaultBaseUrl();
+
+    // 视为「未覆盖」的两种情况：空串 / 等于默认值
+    const isDefault = !next || next === defaultUrl;
+    const normalizedNext = isDefault ? '' : next;
+
+    if (normalizedNext === lastSavedDomain) {
+      // 内容未实质变化，仅刷新显示态
+      await renderDomain();
+      return;
+    }
+    try {
+      if (normalizedNext) {
+        await ns.customDomain.saveDomain(normalizedNext);
+        setLoginStatus('域名已保存，后台请求将使用新地址', 'ok');
+      } else {
+        await ns.customDomain.clearDomain();
+        setLoginStatus('已恢复项目默认域名', 'ok');
+      }
+      await renderDomain();
+      // 通知 background 刷新内存缓存（getBaseUrl 同步读取该缓存）
+      ns.messages.sendToBackground({ type: 'REFRESH_BASE_URL' }).catch(() => {});
+    } catch (err) {
+      setLoginStatus(`保存失败: ${err.message}`, 'err');
     }
   }
 
@@ -1193,11 +1436,21 @@ if (typeof module !== 'undefined' && module.exports) {
     }[c]));
   }
 
-  async function copyToClipboard(text) {
+  function bindEditableField(id, onBlur) {
+    const el = $(id);
+    const wrap = el?.closest('.token-shell');
+    if (!el || !wrap) return;
+    el.addEventListener('input', () => {
+      syncEditableState(el, wrap, getEditableText(el).trim());
+    });
+    el.addEventListener('blur', onBlur);
+  }
+
+  async function copyToClipboard(text, successText = '内容已复制') {
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      setLoginStatus('Token 已复制', 'ok');
+      setLoginStatus(successText, 'ok');
     } catch (err) {
       setLoginStatus(`复制失败: ${err.message}`, 'err');
     }
@@ -1274,7 +1527,19 @@ if (typeof module !== 'undefined' && module.exports) {
 
     $('copyTokenBtn').addEventListener('click', async () => {
       const tokenState = await ns.token.getToken();
-      await copyToClipboard(tokenState.token);
+      await copyToClipboard(tokenState.token, 'Token 已复制');
+    });
+
+    // 点击即编辑、失焦自动保存并注入（无需编辑/保存按钮）
+    bindEditableField('tokenValue', onTokenBlur);
+
+    // 域名地址：点击即编辑、失焦自动保存（与 token 交互一致）
+    bindEditableField('domainValue', onDomainBlur);
+    $('copyDomainBtn').addEventListener('click', async () => {
+      // 复制当前生效地址（覆盖值或默认值）
+      const state = await ns.customDomain.getDomain();
+      const url = state.baseUrl || getDefaultBaseUrl();
+      await copyToClipboard(url, '域名已复制');
     });
   }
 
@@ -1332,6 +1597,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
     await renderCredentials();
     await renderToken();
+    await renderDomain();
     bindCredentials();
     bindAdminPanelToggle();
     bindTabSwitcher();

@@ -136,17 +136,12 @@
     return response.msg || response.message || response.error || response.errorMessage || '';
   }
 
+  // 通过公共 token 模块写入命名空间键 adminToken:${projectId}，
+  // 与 popup/content/tenant-api 的读写键保持一致。
+  // 注意：旧实现直接写非命名空间键 adminToken，会导致非默认项目的 token 丢失、
+  // 且 popup 在 SW 重启迁移前看不到新 token。
   async function saveToken(token) {
-    return new Promise((resolve, reject) => {
-      const item = { token: String(token), updatedAt: Date.now() };
-      chrome.storage.local.set({ adminToken: item }, () => {
-        if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(item);
-        }
-      });
-    });
+    return commonNs.token.saveToken(token);
   }
 
   async function doLogin({ account, password }) {

@@ -84,6 +84,10 @@ if (typeof module !== 'undefined' && module.exports) {
   async function loadCurrentProject() {
     cachedProjectId = await getCurrentProjectId();
     cachedProject = ns.projects.getById(cachedProjectId);
+    // 同步加载自定义域名覆盖到内存缓存，供 getBaseUrl() 同步读取
+    if (ns.customDomain) {
+      await ns.customDomain.loadCachedOverride();
+    }
     return cachedProject;
   }
 
@@ -95,8 +99,21 @@ if (typeof module !== 'undefined' && module.exports) {
     return cachedProject || ns.projects.getById(ns.projects.DEFAULT_PROJECT_ID);
   }
 
+  // 优先返回自定义域名覆盖，否则回落到项目配置的 baseUrl
   function getBaseUrl() {
+    if (ns.customDomain) {
+      const override = ns.customDomain.getCachedOverride();
+      if (override) return override;
+    }
     return getProject().baseUrl;
+  }
+
+  // 跨上下文刷新内存缓存（popup 保存后通知 background 调用）
+  async function refreshBaseUrlCache() {
+    if (ns.customDomain) {
+      return ns.customDomain.loadCachedOverride();
+    }
+    return '';
   }
 
   function getAuthPath() {
@@ -169,6 +186,7 @@ if (typeof module !== 'undefined' && module.exports) {
     getName,
     getHosts,
     migrateOldStorageKeys,
+    refreshBaseUrlCache,
   };
 })();
 
@@ -313,6 +331,111 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   namespace.token = { EMPTY, getToken, hasToken, saveToken, clearToken };
+})();
+
+
+/* ===== src/common/custom-domain.js ===== */
+/* 内部开发工具箱 — 自定义域名（baseUrl）覆盖存储 */
+/* 允许在 popup 手动修改当前项目的后端域名，覆盖 PROJECTS 中的默认 baseUrl。
+   命名空间键 customBaseUrl:${projectId}，结构与 token 模块一致。 */
+(() => {
+  'use strict';
+
+  const namespace = (globalThis.InternalDevToolkit = globalThis.InternalDevToolkit || {});
+
+  const KEY_PREFIX = 'customBaseUrl'; // { baseUrl: string, updatedAt: number }
+
+  const EMPTY = Object.freeze({ baseUrl: '', updatedAt: 0 });
+
+  // 内存缓存：避免每次 getBaseUrl() 都异步读 storage（getBaseUrl 是同步 API）
+  let cachedOverride = '';
+
+  function hasChromeStorage() {
+    return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
+  }
+
+  function normalize(value = {}) {
+    return {
+      baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : '',
+      updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
+    };
+  }
+
+  async function getStorageKey() {
+    const projectId = await namespace.currentProject.getCurrentProjectId();
+    return `${KEY_PREFIX}:${projectId}`;
+  }
+
+  async function getDomain() {
+    if (!hasChromeStorage()) return normalize();
+    const key = await getStorageKey();
+    return new Promise((resolve) => {
+      chrome.storage.local.get(key, (items) => {
+        if (chrome.runtime?.lastError) {
+          resolve(normalize());
+          return;
+        }
+        resolve(normalize(items[key]));
+      });
+    });
+  }
+
+  async function hasDomain() {
+    return getDomain().then((d) => Boolean(d.baseUrl));
+  }
+
+  async function saveDomain(baseUrl) {
+    const next = { baseUrl: String(baseUrl || '').trim(), updatedAt: Date.now() };
+    cachedOverride = next.baseUrl;
+    if (!hasChromeStorage()) return next;
+    const key = await getStorageKey();
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: next }, () => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(next);
+      });
+    });
+  }
+
+  async function clearDomain() {
+    cachedOverride = '';
+    if (!hasChromeStorage()) return;
+    const key = await getStorageKey();
+    return new Promise((resolve) => {
+      chrome.storage.local.remove(key, () => resolve());
+    });
+  }
+
+  // 从 storage 载入到内存缓存（loadCurrentProject 时调用）
+  async function loadCachedOverride() {
+    const state = await getDomain();
+    cachedOverride = state.baseUrl || '';
+    return cachedOverride;
+  }
+
+  // 同步读取缓存的覆盖值（供 getBaseUrl 同步路径使用）
+  function getCachedOverride() {
+    return cachedOverride;
+  }
+
+  // 直接设置内存缓存（跨上下文刷新时使用，无需落盘）
+  function setCachedOverride(baseUrl) {
+    cachedOverride = typeof baseUrl === 'string' ? baseUrl : '';
+  }
+
+  namespace.customDomain = {
+    EMPTY,
+    getDomain,
+    hasDomain,
+    saveDomain,
+    clearDomain,
+    loadCachedOverride,
+    getCachedOverride,
+    setCachedOverride,
+  };
 })();
 
 
@@ -1212,17 +1335,12 @@ if (typeof module !== 'undefined' && module.exports) {
     return response.msg || response.message || response.error || response.errorMessage || '';
   }
 
+  // 通过公共 token 模块写入命名空间键 adminToken:${projectId}，
+  // 与 popup/content/tenant-api 的读写键保持一致。
+  // 注意：旧实现直接写非命名空间键 adminToken，会导致非默认项目的 token 丢失、
+  // 且 popup 在 SW 重启迁移前看不到新 token。
   async function saveToken(token) {
-    return new Promise((resolve, reject) => {
-      const item = { token: String(token), updatedAt: Date.now() };
-      chrome.storage.local.set({ adminToken: item }, () => {
-        if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(item);
-        }
-      });
-    });
+    return commonNs.token.saveToken(token);
   }
 
   async function doLogin({ account, password }) {
@@ -1673,6 +1791,16 @@ if (typeof module !== 'undefined' && module.exports) {
       ns.api
         .doLogin(msg.payload)
         .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    // popup 保存自定义域名后通知 background 刷新内存缓存
+    // （getBaseUrl 同步读取该缓存，所有后台请求会立即使用新域名）
+    if (msg.type === 'REFRESH_BASE_URL') {
+      commonNs.currentProject
+        .refreshBaseUrlCache()
+        .then(() => sendResponse({ ok: true }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }
