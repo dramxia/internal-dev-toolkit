@@ -729,6 +729,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   // SVG icons
   const icons = {
+    open: '<svg class="icon-svg" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
     copy: '<svg class="icon-svg" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
     student: '<svg class="icon-svg" viewBox="0 0 24 24"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
     teacher: '<svg class="icon-svg" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
@@ -956,6 +957,7 @@ if (typeof module !== 'undefined' && module.exports) {
         `<div class="list-item-meta">${escapeHtml(u.account || u.phone || u.deptName || u.userId)}</div>` +
         `</div>` +
         `<div class="list-item-actions">` +
+        `<button class="action-btn" data-action="open" ${dataAttrs} title="直接跳转接口链接">${icons.open}</button>` +
         `<button class="action-btn" data-action="copy" ${dataAttrs} title="复制 token query">${icons.copy}</button>` +
         `<button class="action-btn" data-action="student" ${dataAttrs} title="跳转学生评价">${icons.student}</button>` +
         `<button class="action-btn primary" data-action="teacher" ${dataAttrs} title="跳转教师评价">${icons.teacher}</button>` +
@@ -983,6 +985,22 @@ if (typeof module !== 'undefined' && module.exports) {
       const base = queryIdx >= 0 ? url.slice(0, queryIdx) : url;
       const origin = base.replace(/\/+$/, '');
       return `${origin}${path}${query}`;
+    }
+  }
+
+  // 直接跳转接口返回的 URL；若填写本地端口，仅替换域名，保留 path + query
+  function buildDirectUrl(url, localPort = '') {
+    if (!localPort) return url;
+    try {
+      const parsed = new URL(url);
+      parsed.protocol = 'http:';
+      parsed.host = `localhost:${localPort}`;
+      parsed.hostname = 'localhost';
+      parsed.port = String(localPort);
+      return parsed.toString();
+    } catch (_) {
+      // 解析失败则退化为简单字符串替换
+      return url.replace(/^https?:\/\/[^\/]+/, `http://localhost:${localPort}`);
     }
   }
 
@@ -1038,6 +1056,10 @@ if (typeof module !== 'undefined' && module.exports) {
         if (!query) throw new Error('URL 中未找到 token query');
         const ok = await copyToClipboard(query);
         setStatus(ok ? `已复制: ${query.slice(0, 50)}...` : '复制失败', ok ? 'ok' : 'err');
+      } else if (action === 'open') {
+        const target = buildDirectUrl(url, localPort);
+        await messages.sendToBackground({ type: 'OPEN_LOGIN_URL', payload: { url: target } });
+        setStatus('已打开链接', 'ok');
       } else if (action === 'student') {
         const target = buildEvaluateUrl(url, '/student-evaluate', localPort);
         await messages.sendToBackground({ type: 'OPEN_LOGIN_URL', payload: { url: target } });
@@ -1098,6 +1120,7 @@ if (typeof module !== 'undefined' && module.exports) {
         `<div class="recent-item-time">${escapeHtml(time)}</div>` +
         `</div>` +
         `<div class="recent-item-actions">` +
+        `<button class="recent-action-btn" data-action="open" ${dataAttrs} title="直接跳转接口链接">${icons.open}</button>` +
         `<button class="recent-action-btn" data-action="copy" ${dataAttrs} title="复制 token">${icons.copy}</button>` +
         `<button class="recent-action-btn" data-action="student" ${dataAttrs} title="学生评价">${icons.student}</button>` +
         `<button class="recent-action-btn" data-action="teacher" ${dataAttrs} title="教师评价">${icons.teacher}</button>` +
@@ -1173,6 +1196,10 @@ if (typeof module !== 'undefined' && module.exports) {
         if (!query) throw new Error('URL 中未找到 token query');
         const ok = await copyToClipboard(query);
         setStatus(ok ? `已复制: ${query.slice(0, 50)}...` : '复制失败', ok ? 'ok' : 'err');
+      } else if (action === 'open') {
+        const target = buildDirectUrl(url, recordLocalPort);
+        await messages.sendToBackground({ type: 'OPEN_LOGIN_URL', payload: { url: target } });
+        setStatus('已打开链接', 'ok');
       } else if (action === 'student') {
         const target = buildEvaluateUrl(url, '/student-evaluate', recordLocalPort);
         await messages.sendToBackground({ type: 'OPEN_LOGIN_URL', payload: { url: target } });
