@@ -256,13 +256,33 @@
       return true;
     }
 
-    // 在指定标签页的主上下文注入 mock-hook.js（绕过页面 CSP）
-    // 注：hook 主要由 manifest 中 world:MAIN 的 content script 在 document_start 注入；
-    // 此消息作为补充入口（如规则变更后重装、或 MAIN-world content script 未命中时）。
-    if (msg.type === 'INJECT_MOCK_HOOK') {
-      const tabId = _sender.tab && _sender.tab.id;
+    // DevTools 面板开关：激活/关闭指定标签页 hook 的请求记录。
+    // hook 始终在 document_start 静态安装（见 manifest content_scripts），
+    // 仅由本消息经 content script → postMessage(IDT_SET_ACTIVE) 控制是否记录上报。
+    // 面板打开时激活，面板关闭/导航后由面板按需重新激活或保持激活。
+    if (msg.type === 'SET_HOOK_ACTIVE') {
+      const { tabId, active } = msg;
       if (!tabId) {
-        sendResponse({ ok: false, error: 'no sender tab' });
+        sendResponse({ ok: false, error: 'tabId required' });
+        return true;
+      }
+      chrome.tabs.sendMessage(tabId, { type: 'SET_HOOK_ACTIVE', active }, () => {
+        if (chrome.runtime?.lastError) {
+          sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        sendResponse({ ok: true });
+      });
+      return true;
+    }
+
+    // 在指定标签页的主上下文注入 mock-hook.js（绕过页面 CSP）
+    // 兜底入口：正常情况下 hook 由 manifest content_scripts 在 document_start 静态注入，
+    // 本消息仅在静态注入未命中（如扩展重载后页面未刷新）时作手动补注入用。
+    if (msg.type === 'INJECT_MOCK_HOOK') {
+      const tabId = msg.tabId || (_sender.tab && _sender.tab.id);
+      if (!tabId) {
+        sendResponse({ ok: false, error: 'no target tab' });
         return true;
       }
       chrome.scripting
@@ -271,7 +291,16 @@
           world: 'MAIN',
           files: ['mock-hook.js'],
         })
-        .then(() => sendResponse({ ok: true }))
+        .then(async () => {
+          // hook 装好后，把当前项目的规则同步给 content script → 页面主上下文
+          try {
+            const rules = commonNs.mockStorage ? await commonNs.mockStorage.getMockRules() : [];
+            chrome.tabs.sendMessage(tabId, { type: 'APPLY_MOCK_RULES', rules }, () => {
+              void chrome.runtime?.lastError;
+            });
+          } catch (_) {}
+          sendResponse({ ok: true });
+        })
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }

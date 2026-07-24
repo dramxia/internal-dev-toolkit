@@ -16,10 +16,7 @@
     "cookies"
   ],
   "host_permissions": [
-    "https://gpt-admin-pre.hwzxs.com/*",
-    "https://*.hwzxs.com/*",
-    "https://ai-admin.huayuntiantu.com/*",
-    "https://*.huayuntiantu.com/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"
@@ -38,20 +35,14 @@
         "mock-hook.js"
       ],
       "matches": [
-        "https://gpt-admin-pre.hwzxs.com/*",
-        "https://*.hwzxs.com/*",
-        "https://ai-admin.huayuntiantu.com/*",
-        "https://*.huayuntiantu.com/*"
+        "<all_urls>"
       ]
     }
   ],
   "content_scripts": [
     {
       "matches": [
-        "https://gpt-admin-pre.hwzxs.com/*",
-        "https://*.hwzxs.com/*",
-        "https://ai-admin.huayuntiantu.com/*",
-        "https://*.huayuntiantu.com/*"
+        "<all_urls>"
       ],
       "js": [
         "content.js"
@@ -63,10 +54,7 @@
     },
     {
       "matches": [
-        "https://gpt-admin-pre.hwzxs.com/*",
-        "https://*.hwzxs.com/*",
-        "https://ai-admin.huayuntiantu.com/*",
-        "https://*.huayuntiantu.com/*"
+        "<all_urls>"
       ],
       "js": [
         "mock-hook.js"

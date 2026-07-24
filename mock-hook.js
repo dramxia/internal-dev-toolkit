@@ -1,9 +1,12 @@
 /* 内部开发工具箱 — Mock 拦截器（页面主上下文 / MAIN world） */
-/* 由 background 通过 chrome.scripting.executeScript({world:'MAIN', files:['mock-hook.js']}) 注入。
+/* 由 manifest content_scripts 在 document_start 静态注入（world:MAIN），
    运行在页面真实 window 上，可拦截页面代码发起的 fetch/XHR。
    与 content script 之间通过 window.postMessage 通信：
-     - 入：IDT_UPDATE_MOCK_RULES（规则更新）
-     - 出：IDT_REQUEST_LOGGED（请求记录上报） */
+     - 入：IDT_UPDATE_MOCK_RULES（规则更新）、IDT_SET_ACTIVE（激活开关）
+     - 出：IDT_REQUEST_LOGGED（请求记录上报）
+   hook 始终安装（抢在页面脚本缓存原生引用之前），但默认不记录上报；
+   仅当 DevTools 面板打开时经 IDT_SET_ACTIVE 激活后才记录，
+   实现“仅在控制台打开时捕获”。Mock 规则改写不受激活开关影响，始终生效。 */
 (() => {
   // 防止重复注入（页面内多次注入时只装一次 hook）
   if (window.__IDT_MOCK_HOOK_INSTALLED__) {
@@ -14,13 +17,18 @@
 
   console.log('[Mock Interceptor - Page Context] Script started');
   let mockRules = [];
+  let activated = false; // 是否记录并上报请求（由 DevTools 面板打开时激活）
 
-  // 监听来自 content script 的规则更新
+  // 监听来自 content script 的规则更新 / 激活开关
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
-    if (event.data && event.data.type === 'IDT_UPDATE_MOCK_RULES') {
+    if (!event.data) return;
+    if (event.data.type === 'IDT_UPDATE_MOCK_RULES') {
       mockRules = event.data.rules || [];
       console.log('[Mock Interceptor - Page Context] Rules updated:', mockRules.length);
+    } else if (event.data.type === 'IDT_SET_ACTIVE') {
+      activated = !!event.data.active;
+      console.log('[Mock Interceptor - Page Context] Active set to', activated);
     }
   });
 
@@ -74,8 +82,10 @@
 
   // 记录请求并上报给 content script
   // 同一 method+url 只保留最新一条，避免重复请求刷屏
+  // 仅在激活（DevTools 面板已打开）时记录；未激活时 hook 仍透传请求，但不记录上报。
   const seenKeys = new Set();
   function recordRequest(url, method, requestPayload, responsePayload, status) {
+    if (!activated) return; // 未激活：不记录、不上报，保持零开销透传
     const key = method + ' ' + url;
     seenKeys.add(key);
     console.log('[Mock Interceptor - Page Context] Recording request:', method, url, status);
@@ -128,13 +138,16 @@
 
     try {
       const response = await originalFetch.call(this, input, init);
-      const clonedResponse = response.clone();
 
-      clonedResponse.text().then(text => {
-        recordRequest(url, method, init?.body, text, response.status);
-      }).catch(() => {
-        recordRequest(url, method, init?.body, null, response.status);
-      });
+      // 仅激活时才 clone + 读响应体并记录；未激活时直接透传，零额外开销
+      if (activated) {
+        const clonedResponse = response.clone();
+        clonedResponse.text().then(text => {
+          recordRequest(url, method, init?.body, text, response.status);
+        }).catch(() => {
+          recordRequest(url, method, init?.body, null, response.status);
+        });
+      }
 
       return response;
     } catch (err) {
@@ -196,9 +209,12 @@
 
       // 用 loadend 记录所有终态（load/error/abort/timeout），且不覆盖页面自身的 onload。
       // 仅靠 onload 会漏掉失败/中止的请求，也无法兼容用 onloadend/onreadystatechange 的库（如 axios）。
-      xhr.addEventListener('loadend', function() {
-        recordRequest(url, method, requestBody, xhr.responseText, xhr.status);
-      });
+      // 仅激活时注册监听并记录；未激活时直接透传，零额外开销。
+      if (activated) {
+        xhr.addEventListener('loadend', function() {
+          recordRequest(url, method, requestBody, xhr.responseText, xhr.status);
+        });
+      }
 
       return originalSend.call(this, requestBody);
     };

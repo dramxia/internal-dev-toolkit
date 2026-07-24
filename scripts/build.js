@@ -81,16 +81,8 @@ function writeGenerated(file, content) {
 function generateManifest() {
   const { PROJECTS } = require(path.join(root, 'src/common/projects.js'));
 
-  const allHosts = [...new Set(PROJECTS.flatMap(p => p.hosts))];
-
-  // 支持 http 和 https，本地开发用 http
-  const hostPermissions = allHosts.flatMap(h => {
-    if (h === 'localhost' || h === '127.0.0.1') {
-      return [`http://${h}/*`, `https://${h}/*`];
-    }
-    return [`https://${h}/*`];
-  });
-
+  // 放开为 <all_urls>：任意页面（含 localhost 开发环境）均允许注入。
+  const hostPermissions = ['<all_urls>'];
   const matches = hostPermissions;
 
   const manifest = {
@@ -132,6 +124,9 @@ function generateManifest() {
       {
         // 在页面主上下文安装 fetch/XHR hook，抢在页面脚本（SkyWalking、axios 等）
         // 求值之前同步注入，避免它们缓存原生引用导致拦截失效。不受页面 CSP 限制。
+        // hook 默认不记录上报（activated=false），仅当 DevTools 面板打开时
+        // 经 background → content → postMessage(IDT_SET_ACTIVE) 激活后才记录，
+        // 实现“仅在控制台打开时捕获”。
         matches: matches,
         js: ['mock-hook.js'],
         run_at: 'document_start',
@@ -143,7 +138,7 @@ function generateManifest() {
   const content = JSON.stringify(manifest, null, 2);
   fs.writeFileSync(path.join(root, 'manifest.json'), content);
   fs.writeFileSync(path.join(dist, 'manifest.json'), content);
-  console.log(`✓ Generated manifest.json with ${hostPermissions.length} host(s)`);
+  console.log(`✓ Generated manifest.json with host_permissions: ${hostPermissions.join(', ')}`);
 }
 
 ensureDir(dist);

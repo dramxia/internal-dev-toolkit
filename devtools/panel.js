@@ -18,6 +18,21 @@ function sendMessage(msg) {
   });
 }
 
+// 请求 background 激活/关闭当前 inspected tab 的 hook 记录开关。
+// hook 始终由 manifest 在 document_start 静态安装（保证拦得到所有请求），
+// 面板打开时激活记录、面板关闭后不再记录，实现“仅在控制台打开时捕获”。
+// 页面导航（刷新/跳转）会重置 MAIN world，hook 重装为默认未激活，
+// 故 onNavigated 后需重新激活。
+function setHookActive(active) {
+  sendMessage({ type: 'SET_HOOK_ACTIVE', tabId, active }).then((res) => {
+    if (res && res.ok) {
+      console.log('[Mock Panel] hook active=' + active + ' for tab', tabId);
+    } else {
+      console.warn('[Mock Panel] set hook active failed:', res && res.error);
+    }
+  });
+}
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -493,6 +508,17 @@ async function handleImportConfirm() {
 
 async function init() {
   console.log('[Mock Panel] Initializing for tab', tabId);
+
+  // hook 由 manifest 在 document_start 静态安装（保证拦得到所有请求，含早期请求与
+  // 缓存原生引用的库）。面板打开时激活记录，实现“仅在控制台打开时捕获”。
+  setHookActive(true);
+
+  // 页面导航（刷新 / 跳转）会重置 MAIN world，hook 重装为默认未激活。
+  // 监听导航事件，导航后重新激活，使“打开面板 → 刷新页面 → 操作”能正常捕获。
+  chrome.devtools.network.onNavigated.addListener(() => {
+    console.log('[Mock Panel] Navigation detected, re-activating hook for tab', tabId);
+    setHookActive(true);
+  });
 
   // 获取当前项目
   const projectRes = await sendMessage({ type: 'GET_CURRENT_PROJECT' });
@@ -1441,3 +1467,14 @@ init().catch(err => {
   console.error('[Mock Panel] Init failed:', err);
 });
 initLayout();
+
+// 面板关闭（DevTools 关闭或切换到其它面板）时关闭 hook 记录，
+// 保持“仅在控制台打开时捕获”的语义：面板不在则不记录。
+// 注意：panel iframe 卸载时 unload 触发，此时 background 仍可接收消息。
+window.addEventListener('unload', () => {
+  try {
+    chrome.runtime.sendMessage({ type: 'SET_HOOK_ACTIVE', tabId, active: false }, () => {
+      void chrome.runtime?.lastError;
+    });
+  } catch (_) {}
+});
