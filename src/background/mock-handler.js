@@ -164,6 +164,59 @@
     }
   }
 
+  // 处理：获取禁监接口池（按项目持久化）
+  async function handleGetMonitorDisabled() {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const disabled = await ns.mockStorage.getMonitorDisabled();
+      return { ok: true, disabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // 处理：加入禁监接口池（entry 可为 key 字符串或 {key} 对象），并同步 content script
+  async function handleAddMonitorDisabled(msg) {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const { entry, tabId } = msg;
+      const disabled = await ns.mockStorage.addMonitorDisabled(entry);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MONITOR_DISABLED',
+          disabled,
+        }).catch(() => {});
+      }
+      return { ok: true, disabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // 处理：从禁监接口池移除（放开监听），并同步 content script
+  async function handleRemoveMonitorDisabled(msg) {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const { key, tabId } = msg;
+      const disabled = await ns.mockStorage.removeMonitorDisabled(key);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MONITOR_DISABLED',
+          disabled,
+        }).catch(() => {});
+      }
+      return { ok: true, disabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   // 导出处理器
   ns.mockHandler = {
     handleGetMockRules,
@@ -173,5 +226,8 @@
     handleClearMockRules,
     handleGetCurrentProject,
     handleGetRequestLog,
+    handleGetMonitorDisabled,
+    handleAddMonitorDisabled,
+    handleRemoveMonitorDisabled,
   };
 })();

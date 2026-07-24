@@ -335,6 +335,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
   const KEY_PREFIX = 'mockRules';
+  const DISABLED_PREFIX = 'monitorDisabled';
 
   function hasChromeStorage() {
     return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
@@ -349,6 +350,37 @@ if (typeof module !== 'undefined' && module.exports) {
     return `${KEY_PREFIX}:gpt-admin-pre`;
   }
 
+  // 规则结构迁移：单份 mockData + mockMode 升级为双份独立 responseMock / requestMock。
+  // 出参、入参各自持有 enabled + mockData（出参额外含 status），可同时独立开启拦截，
+  // 且 mockData 与开关解耦——关闭拦截不丢数据，仅清空时丢弃。
+  // 旧规则（仅有 mockMode/mockData/enabled/status）按原 mockMode 归入对应一份，
+  // 另一份默认 enabled:false、mockData 为 null（未编辑过则留空，避免数据串台）。
+  function migrateRule(rule) {
+    if (!rule || typeof rule !== 'object') return rule;
+    if (rule.responseMock && rule.requestMock) return rule;
+
+    const oldEnabled = rule.enabled !== false;
+    const oldMode = rule.mockMode || 'response';
+    const oldData = rule.mockData;
+    const oldStatus = rule.status != null ? Number(rule.status) : 200;
+
+    // 旧结构仅有单一 mockMode + mockData：归属到对应方向，另一方向留空（null）。
+    // 切勿把 oldData 复制到另一方向——否则开启拦截后该方向会错误展示为
+    // 另一方向的编辑数据（如入参显示为出参内容）。另一方向在用户尚未编辑时
+    // 应为空，开启拦截时编辑器再用真实数据兜底，避免数据串台。
+    const responseMock = rule.responseMock || {
+      enabled: oldEnabled && oldMode === 'response',
+      mockData: oldMode === 'response' ? oldData : null,
+      status: oldStatus,
+    };
+    const requestMock = rule.requestMock || {
+      enabled: oldEnabled && oldMode === 'request',
+      mockData: oldMode === 'request' ? oldData : null,
+    };
+
+    return { ...rule, responseMock, requestMock };
+  }
+
   // 获取当前项目的所有 Mock 规则
   async function getMockRules() {
     if (!hasChromeStorage()) return [];
@@ -359,7 +391,9 @@ if (typeof module !== 'undefined' && module.exports) {
           resolve([]);
           return;
         }
-        resolve(Array.isArray(items[key]) ? items[key] : []);
+        const raw = Array.isArray(items[key]) ? items[key] : [];
+        // 读取时统一迁移，保证消费端（panel / mock-hook）始终拿到新结构
+        resolve(raw.map(migrateRule));
       });
     });
   }
@@ -453,6 +487,65 @@ if (typeof module !== 'undefined' && module.exports) {
     return rules.find(r => r.id === ruleId);
   }
 
+  // ===== 禁监接口池 =====
+  // 按项目隔离存储被禁止监听的接口 key（method + ' ' + url）数组。
+  // 开启禁监后，hook 不再记录该接口，也不上报，避免轮询接口刷屏且无法选中。
+  async function getDisabledStorageKey() {
+    if (ns.currentProject && ns.currentProject.getCurrentProjectId) {
+      const projectId = await ns.currentProject.getCurrentProjectId();
+      return `${DISABLED_PREFIX}:${projectId}`;
+    }
+    return `${DISABLED_PREFIX}:gpt-admin-pre`;
+  }
+
+  async function getMonitorDisabled() {
+    if (!hasChromeStorage()) return [];
+    const key = await getDisabledStorageKey();
+    return new Promise((resolve) => {
+      chrome.storage.local.get(key, (items) => {
+        if (chrome.runtime?.lastError) {
+          resolve([]);
+          return;
+        }
+        resolve(Array.isArray(items[key]) ? items[key] : []);
+      });
+    });
+  }
+
+  async function addMonitorDisabled(entry) {
+    if (!hasChromeStorage()) return;
+    const key = await getDisabledStorageKey();
+    const list = await getMonitorDisabled();
+    const keyStr = typeof entry === 'string' ? entry : (entry && entry.key);
+    if (!keyStr || list.includes(keyStr)) return list;
+    list.push(keyStr);
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: list }, () => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(list);
+      });
+    });
+  }
+
+  async function removeMonitorDisabled(keyStr) {
+    if (!hasChromeStorage()) return [];
+    const key = await getDisabledStorageKey();
+    const list = await getMonitorDisabled();
+    const filtered = list.filter(k => k !== keyStr);
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: filtered }, () => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(filtered);
+      });
+    });
+  }
+
   ns.mockStorage = {
     getMockRules,
     saveMockRule,
@@ -460,6 +553,9 @@ if (typeof module !== 'undefined' && module.exports) {
     toggleMockRule,
     clearMockRules,
     getMockRule,
+    getMonitorDisabled,
+    addMonitorDisabled,
+    removeMonitorDisabled,
   };
 })();
 
@@ -1027,6 +1123,7 @@ if (typeof module !== 'undefined' && module.exports) {
   // 存储 mock 规则和接口记录
   let mockRules = [];
   let requestLog = [];
+  let disabledKeys = new Set(); // 被禁监的接口 key（method + ' ' + url）
   const MAX_LOG_SIZE = 100; // 最多保留 100 条记录
 
   // 初始化
@@ -1042,8 +1139,11 @@ if (typeof module !== 'undefined' && module.exports) {
         const record = event.data.record;
         console.log('[Mock Interceptor] Received request from page context:', record.method, record.url);
 
-        // 同一 method+url 只保留最新一条：替换已有记录，避免重复刷屏
         const key = record.key || (record.method + ' ' + record.url);
+        // 命中禁监池：不接收、不上报面板（与 hook 双保险）
+        if (disabledKeys.size > 0 && disabledKeys.has(key)) return;
+
+        // 同一 method+url 只保留最新一条：替换已有记录，避免重复刷屏
         const existingIdx = requestLog.findIndex(r => (r.key || (r.method + ' ' + r.url)) === key);
         if (existingIdx >= 0) {
           requestLog[existingIdx] = record;
@@ -1082,13 +1182,27 @@ if (typeof module !== 'undefined' && module.exports) {
 
       if (msg.type === 'GET_REQUEST_LOG') {
         console.log('[Mock Interceptor] GET_REQUEST_LOG requested, returning', requestLog.length, 'records');
-        sendResponse({ ok: true, requests: requestLog });
+        // 过滤掉已禁监的接口，使其不出现在捕获列表
+        const visible = disabledKeys.size > 0
+          ? requestLog.filter(r => !disabledKeys.has(r.key || (r.method + ' ' + r.url)))
+          : requestLog;
+        sendResponse({ ok: true, requests: visible });
         return true;
       }
 
       if (msg.type === 'CLEAR_REQUEST_LOG') {
         requestLog = [];
         console.log('[Mock Interceptor] Request log cleared');
+        sendResponse({ ok: true });
+        return true;
+      }
+
+      // 更新禁监接口池：同步内存并桥接到页面主上下文（hook 据此跳过记录）
+      if (msg.type === 'APPLY_MONITOR_DISABLED') {
+        const arr = Array.isArray(msg.disabled) ? msg.disabled : [];
+        disabledKeys = new Set(arr);
+        console.log('[Mock Interceptor] Monitor disabled updated:', disabledKeys.size);
+        window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: arr }, '*');
         sendResponse({ ok: true });
         return true;
       }

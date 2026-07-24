@@ -571,6 +571,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
   const KEY_PREFIX = 'mockRules';
+  const DISABLED_PREFIX = 'monitorDisabled';
 
   function hasChromeStorage() {
     return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
@@ -585,6 +586,37 @@ if (typeof module !== 'undefined' && module.exports) {
     return `${KEY_PREFIX}:gpt-admin-pre`;
   }
 
+  // 规则结构迁移：单份 mockData + mockMode 升级为双份独立 responseMock / requestMock。
+  // 出参、入参各自持有 enabled + mockData（出参额外含 status），可同时独立开启拦截，
+  // 且 mockData 与开关解耦——关闭拦截不丢数据，仅清空时丢弃。
+  // 旧规则（仅有 mockMode/mockData/enabled/status）按原 mockMode 归入对应一份，
+  // 另一份默认 enabled:false、mockData 为 null（未编辑过则留空，避免数据串台）。
+  function migrateRule(rule) {
+    if (!rule || typeof rule !== 'object') return rule;
+    if (rule.responseMock && rule.requestMock) return rule;
+
+    const oldEnabled = rule.enabled !== false;
+    const oldMode = rule.mockMode || 'response';
+    const oldData = rule.mockData;
+    const oldStatus = rule.status != null ? Number(rule.status) : 200;
+
+    // 旧结构仅有单一 mockMode + mockData：归属到对应方向，另一方向留空（null）。
+    // 切勿把 oldData 复制到另一方向——否则开启拦截后该方向会错误展示为
+    // 另一方向的编辑数据（如入参显示为出参内容）。另一方向在用户尚未编辑时
+    // 应为空，开启拦截时编辑器再用真实数据兜底，避免数据串台。
+    const responseMock = rule.responseMock || {
+      enabled: oldEnabled && oldMode === 'response',
+      mockData: oldMode === 'response' ? oldData : null,
+      status: oldStatus,
+    };
+    const requestMock = rule.requestMock || {
+      enabled: oldEnabled && oldMode === 'request',
+      mockData: oldMode === 'request' ? oldData : null,
+    };
+
+    return { ...rule, responseMock, requestMock };
+  }
+
   // 获取当前项目的所有 Mock 规则
   async function getMockRules() {
     if (!hasChromeStorage()) return [];
@@ -595,7 +627,9 @@ if (typeof module !== 'undefined' && module.exports) {
           resolve([]);
           return;
         }
-        resolve(Array.isArray(items[key]) ? items[key] : []);
+        const raw = Array.isArray(items[key]) ? items[key] : [];
+        // 读取时统一迁移，保证消费端（panel / mock-hook）始终拿到新结构
+        resolve(raw.map(migrateRule));
       });
     });
   }
@@ -689,6 +723,65 @@ if (typeof module !== 'undefined' && module.exports) {
     return rules.find(r => r.id === ruleId);
   }
 
+  // ===== 禁监接口池 =====
+  // 按项目隔离存储被禁止监听的接口 key（method + ' ' + url）数组。
+  // 开启禁监后，hook 不再记录该接口，也不上报，避免轮询接口刷屏且无法选中。
+  async function getDisabledStorageKey() {
+    if (ns.currentProject && ns.currentProject.getCurrentProjectId) {
+      const projectId = await ns.currentProject.getCurrentProjectId();
+      return `${DISABLED_PREFIX}:${projectId}`;
+    }
+    return `${DISABLED_PREFIX}:gpt-admin-pre`;
+  }
+
+  async function getMonitorDisabled() {
+    if (!hasChromeStorage()) return [];
+    const key = await getDisabledStorageKey();
+    return new Promise((resolve) => {
+      chrome.storage.local.get(key, (items) => {
+        if (chrome.runtime?.lastError) {
+          resolve([]);
+          return;
+        }
+        resolve(Array.isArray(items[key]) ? items[key] : []);
+      });
+    });
+  }
+
+  async function addMonitorDisabled(entry) {
+    if (!hasChromeStorage()) return;
+    const key = await getDisabledStorageKey();
+    const list = await getMonitorDisabled();
+    const keyStr = typeof entry === 'string' ? entry : (entry && entry.key);
+    if (!keyStr || list.includes(keyStr)) return list;
+    list.push(keyStr);
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: list }, () => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(list);
+      });
+    });
+  }
+
+  async function removeMonitorDisabled(keyStr) {
+    if (!hasChromeStorage()) return [];
+    const key = await getDisabledStorageKey();
+    const list = await getMonitorDisabled();
+    const filtered = list.filter(k => k !== keyStr);
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [key]: filtered }, () => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(filtered);
+      });
+    });
+  }
+
   ns.mockStorage = {
     getMockRules,
     saveMockRule,
@@ -696,6 +789,9 @@ if (typeof module !== 'undefined' && module.exports) {
     toggleMockRule,
     clearMockRules,
     getMockRule,
+    getMonitorDisabled,
+    addMonitorDisabled,
+    removeMonitorDisabled,
   };
 })();
 
@@ -2558,6 +2654,59 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
+  // 处理：获取禁监接口池（按项目持久化）
+  async function handleGetMonitorDisabled() {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const disabled = await ns.mockStorage.getMonitorDisabled();
+      return { ok: true, disabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // 处理：加入禁监接口池（entry 可为 key 字符串或 {key} 对象），并同步 content script
+  async function handleAddMonitorDisabled(msg) {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const { entry, tabId } = msg;
+      const disabled = await ns.mockStorage.addMonitorDisabled(entry);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MONITOR_DISABLED',
+          disabled,
+        }).catch(() => {});
+      }
+      return { ok: true, disabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // 处理：从禁监接口池移除（放开监听），并同步 content script
+  async function handleRemoveMonitorDisabled(msg) {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const { key, tabId } = msg;
+      const disabled = await ns.mockStorage.removeMonitorDisabled(key);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MONITOR_DISABLED',
+          disabled,
+        }).catch(() => {});
+      }
+      return { ok: true, disabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   // 导出处理器
   ns.mockHandler = {
     handleGetMockRules,
@@ -2567,6 +2716,9 @@ if (typeof module !== 'undefined' && module.exports) {
     handleClearMockRules,
     handleGetCurrentProject,
     handleGetRequestLog,
+    handleGetMonitorDisabled,
+    handleAddMonitorDisabled,
+    handleRemoveMonitorDisabled,
   };
 })();
 
@@ -2813,6 +2965,29 @@ if (typeof module !== 'undefined' && module.exports) {
       return true;
     }
 
+    // 禁监接口池：获取 / 加入 / 移除（按项目持久化，并同步 content script → hook）
+    if (msg.type === 'GET_MONITOR_DISABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleGetMonitorDisabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+    if (msg.type === 'ADD_MONITOR_DISABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleAddMonitorDisabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+    if (msg.type === 'REMOVE_MONITOR_DISABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleRemoveMonitorDisabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     // 清空指定标签页 content script 中的请求记录
     if (msg.type === 'CLEAR_REQUEST_LOG') {
       const { tabId } = msg;
@@ -2844,6 +3019,15 @@ if (typeof module !== 'undefined' && module.exports) {
         if (chrome.runtime?.lastError) {
           sendResponse({ ok: false, error: chrome.runtime.lastError.message });
           return;
+        }
+        // 激活时一并下发持久化的禁监接口池，使 hook 立即按最新列表跳过记录。
+        // 面板关闭（active=false）时无需下发。
+        if (active && commonNs.mockStorage) {
+          commonNs.mockStorage.getMonitorDisabled().then((disabled) => {
+            chrome.tabs.sendMessage(tabId, { type: 'APPLY_MONITOR_DISABLED', disabled }, () => {
+              void chrome.runtime?.lastError;
+            });
+          }).catch(() => {});
         }
         sendResponse({ ok: true });
       });

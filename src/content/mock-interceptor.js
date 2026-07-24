@@ -12,6 +12,7 @@
   // 存储 mock 规则和接口记录
   let mockRules = [];
   let requestLog = [];
+  let disabledKeys = new Set(); // 被禁监的接口 key（method + ' ' + url）
   const MAX_LOG_SIZE = 100; // 最多保留 100 条记录
 
   // 初始化
@@ -27,8 +28,11 @@
         const record = event.data.record;
         console.log('[Mock Interceptor] Received request from page context:', record.method, record.url);
 
-        // 同一 method+url 只保留最新一条：替换已有记录，避免重复刷屏
         const key = record.key || (record.method + ' ' + record.url);
+        // 命中禁监池：不接收、不上报面板（与 hook 双保险）
+        if (disabledKeys.size > 0 && disabledKeys.has(key)) return;
+
+        // 同一 method+url 只保留最新一条：替换已有记录，避免重复刷屏
         const existingIdx = requestLog.findIndex(r => (r.key || (r.method + ' ' + r.url)) === key);
         if (existingIdx >= 0) {
           requestLog[existingIdx] = record;
@@ -67,13 +71,27 @@
 
       if (msg.type === 'GET_REQUEST_LOG') {
         console.log('[Mock Interceptor] GET_REQUEST_LOG requested, returning', requestLog.length, 'records');
-        sendResponse({ ok: true, requests: requestLog });
+        // 过滤掉已禁监的接口，使其不出现在捕获列表
+        const visible = disabledKeys.size > 0
+          ? requestLog.filter(r => !disabledKeys.has(r.key || (r.method + ' ' + r.url)))
+          : requestLog;
+        sendResponse({ ok: true, requests: visible });
         return true;
       }
 
       if (msg.type === 'CLEAR_REQUEST_LOG') {
         requestLog = [];
         console.log('[Mock Interceptor] Request log cleared');
+        sendResponse({ ok: true });
+        return true;
+      }
+
+      // 更新禁监接口池：同步内存并桥接到页面主上下文（hook 据此跳过记录）
+      if (msg.type === 'APPLY_MONITOR_DISABLED') {
+        const arr = Array.isArray(msg.disabled) ? msg.disabled : [];
+        disabledKeys = new Set(arr);
+        console.log('[Mock Interceptor] Monitor disabled updated:', disabledKeys.size);
+        window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: arr }, '*');
         sendResponse({ ok: true });
         return true;
       }

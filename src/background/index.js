@@ -239,6 +239,29 @@
       return true;
     }
 
+    // 禁监接口池：获取 / 加入 / 移除（按项目持久化，并同步 content script → hook）
+    if (msg.type === 'GET_MONITOR_DISABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleGetMonitorDisabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+    if (msg.type === 'ADD_MONITOR_DISABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleAddMonitorDisabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+    if (msg.type === 'REMOVE_MONITOR_DISABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleRemoveMonitorDisabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     // 清空指定标签页 content script 中的请求记录
     if (msg.type === 'CLEAR_REQUEST_LOG') {
       const { tabId } = msg;
@@ -270,6 +293,15 @@
         if (chrome.runtime?.lastError) {
           sendResponse({ ok: false, error: chrome.runtime.lastError.message });
           return;
+        }
+        // 激活时一并下发持久化的禁监接口池，使 hook 立即按最新列表跳过记录。
+        // 面板关闭（active=false）时无需下发。
+        if (active && commonNs.mockStorage) {
+          commonNs.mockStorage.getMonitorDisabled().then((disabled) => {
+            chrome.tabs.sendMessage(tabId, { type: 'APPLY_MONITOR_DISABLED', disabled }, () => {
+              void chrome.runtime?.lastError;
+            });
+          }).catch(() => {});
         }
         sendResponse({ ok: true });
       });
