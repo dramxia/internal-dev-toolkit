@@ -218,7 +218,7 @@
     ──────────────────────────────────────── */
     .tab-rail {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: 1fr 1fr 1fr;
       gap: 0;
       margin: 16px 16px 0;
       background: var(--sage-100);
@@ -937,11 +937,15 @@
   <div class="tab-rail">
     <button class="tab-btn active" data-tab="admin">
       <span class="tab-icon">🔐</span>
-      后台账号 &amp; Token
+      后台账号
     </button>
     <button class="tab-btn" data-tab="quick">
       <span class="tab-icon">⚡</span>
-      一键快捷登录
+      一键登录
+    </button>
+    <button class="tab-btn" data-tab="other">
+      <span class="tab-icon">🌐</span>
+      其它
     </button>
   </div>
 
@@ -1116,6 +1120,101 @@
       </div>
 
     </div><!-- /panel-quick -->
+
+    <!-- ── PANEL C : Other (知雀) ── -->
+    <div class="panel" id="panel-other">
+
+      <div class="section-block expanded" id="otherLoginSection">
+        <div class="section-header" id="otherLoginHeader">
+          <div class="section-header-left">
+            <div class="section-icon green">🌐</div>
+            <span class="section-header-title">高校登录</span>
+          </div>
+          <div class="section-header-right">
+            <span class="badge success">high-school</span>
+          </div>
+        </div>
+        <div class="collapsible-body" id="otherLoginBody">
+          <div class="section-content">
+
+            <label class="field-label">网站地址</label>
+            <div class="field">
+              <input class="field-input" id="otherSiteUrl" type="text" autocomplete="off"
+                placeholder="https://high-school.huayuntiantu.com">
+            </div>
+
+            <label class="field-label">账号</label>
+            <div class="field">
+              <input class="field-input" id="otherAccount" type="text" autocomplete="off" placeholder="手机号">
+            </div>
+
+            <label class="field-label">密码</label>
+            <div class="field">
+              <div class="pw-wrap">
+                <input class="field-input" id="otherPassword" type="password" autocomplete="off" placeholder="输入密码">
+                <span class="pw-toggle" id="otherPwdToggle">显示</span>
+              </div>
+            </div>
+
+            <div class="btn-row">
+              <button class="btn btn-ghost"   id="otherLoginBtn">登录</button>
+              <button class="btn btn-primary" id="otherEnterBtn">一键登入</button>
+              <button class="btn btn-primary" id="otherZhiqueBtn">知雀</button>
+            </div>
+
+            <div class="callout">
+              💡 「登录」仅获取 token；「一键登入」进入高职校系统；
+              「知雀」对齐教师端 AI 数字课，SSO 进入 a.zhique.cn。
+            </div>
+
+            <div class="divider"></div>
+
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);margin-bottom:6px;">历史记录</div>
+            <div class="recent-list" id="otherHistoryList">
+              <div class="recent-empty">暂无历史记录</div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+              <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);">教师列表</div>
+              <button class="btn btn-ghost" id="otherTeacherRefreshBtn" style="padding:4px 8px;font-size:11px;min-height:auto;">刷新</button>
+            </div>
+            <div class="list hidden" id="otherTeacherList"></div>
+            <div class="list-empty" id="otherTeacherEmpty">登录后可加载教师列表</div>
+            <button class="load-more hidden" id="otherTeacherLoadMore">加载更多</button>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="section-block expanded">
+        <div class="section-header">
+          <div class="section-header-left">
+            <div class="section-icon mint">🔏</div>
+            <span class="section-header-title">Access Token</span>
+          </div>
+        </div>
+        <div class="section-content" style="border-top:1px solid var(--border)">
+
+          <div class="token-shell" id="otherTokenWrap">
+            <div class="token-shell-bar">
+              <span class="token-shell-bar-label">JWT / Token</span>
+              <span class="token-shell-bar-dot"></span>
+            </div>
+            <div class="token-box empty" id="otherTokenValue" contenteditable="true" role="textbox" aria-multiline="true"
+              data-placeholder="尚未获取 · 请先登录，或点击此处粘贴 Token"></div>
+            <div class="token-meta" id="otherTokenUpdated"></div>
+          </div>
+
+          <div class="list-item-meta hidden" id="otherUserMeta" style="margin:8px 0 4px;"></div>
+
+          <button class="btn btn-ghost btn-full" id="otherCopyTokenBtn" disabled>复制 Token</button>
+
+        </div>
+      </div>
+
+    </div><!-- /panel-other -->
 
   </div><!-- /panels -->
 

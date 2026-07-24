@@ -287,6 +287,7 @@
     const panels = {
       admin: $('panel-admin'),
       quick: $('panel-quick'),
+      other: $('panel-other'),
     };
     tabs.forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -295,7 +296,7 @@
         tabs.forEach((t) => t.classList.remove('active'));
         btn.classList.add('active');
         Object.keys(panels).forEach((k) => {
-          panels[k].classList.toggle('active', k === key);
+          panels[k]?.classList.toggle('active', k === key);
         });
       });
     });
@@ -329,6 +330,9 @@
     bindTabSwitcher();
     if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
       await ns.quickLoginUi.init();
+    }
+    if (ns.otherLoginUi) {
+      await ns.otherLoginUi.init();
     }
   }
 

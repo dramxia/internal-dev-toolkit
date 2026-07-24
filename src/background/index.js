@@ -99,6 +99,89 @@
       return true;
     }
 
+    // ── 「其它」站点登录（知雀 / 高职校） ──
+    if (msg.type === 'OTHER_LOGIN' && ns.otherLogin) {
+      ns.otherLogin
+        .doLogin(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    // 一键登入：拿 token 后带 accessToken 打开站点完成自动登录
+    if (msg.type === 'OTHER_ENTER' && ns.otherLogin) {
+      ns.otherLogin
+        .doEnter(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    // 知雀：登录后走 /client/tenant/zhique/redirectUrl OAuth SSO 进入 a.zhique.cn
+    if (msg.type === 'OTHER_ZHIQUE_ENTER' && ns.otherLogin) {
+      ns.otherLogin
+        .doZhiqueEnter(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'OTHER_GET_CREDENTIALS' && ns.otherLogin) {
+      ns.otherLogin
+        .getCredentials()
+        .then((creds) => sendResponse({ ok: true, ...creds }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'OTHER_GET_TOKEN' && ns.otherLogin) {
+      ns.otherLogin
+        .getToken()
+        .then((state) => sendResponse({ ok: true, ...state }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'OTHER_SAVE_TOKEN' && ns.otherLogin) {
+      ns.otherLogin
+        .saveToken(msg.payload?.token || '', msg.payload?.user || null)
+        .then((state) => sendResponse({ ok: true, ...state }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'OTHER_CLEAR_TOKEN' && ns.otherLogin) {
+      ns.otherLogin
+        .clearToken()
+        .then(() => sendResponse({ ok: true }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'OTHER_GET_HISTORY' && ns.otherLogin) {
+      ns.otherLogin
+        .getHistory()
+        .then((records) => sendResponse({ ok: true, records }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'OTHER_DELETE_HISTORY' && ns.otherLogin) {
+      ns.otherLogin
+        .deleteHistory(msg.payload)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'OTHER_LIST_TEACHERS' && ns.otherLogin) {
+      ns.otherLogin
+        .listTeachers(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     // Mock 相关消息处理
     if (msg.type === 'GET_MOCK_RULES' && commonNs.mockHandler) {
       commonNs.mockHandler
