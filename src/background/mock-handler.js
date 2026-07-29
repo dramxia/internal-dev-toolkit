@@ -46,6 +46,28 @@
     }
   }
 
+  // 处理导入冲突弹窗的最终选择，并一次性同步最新规则到页面。
+  async function handleResolveImportConflict(msg) {
+    try {
+      if (!ns.mockStorage?.resolveImportConflict) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+
+      const { selectedRule, selectedRules, removeRuleIds, tabId } = msg;
+      const rulesToSave = Array.isArray(selectedRules) ? selectedRules : (selectedRule || null);
+      const result = await ns.mockStorage.resolveImportConflict(rulesToSave, removeRuleIds);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MOCK_RULES',
+          rules: result.rules,
+        }).catch(() => {});
+      }
+      return { ok: true, rules: result.rules };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   // 处理：删除 Mock 规则
   async function handleDeleteMockRule(msg) {
     try {
@@ -66,6 +88,66 @@
       }
 
       return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  function sendTabMessage(tabId, message) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response || response.ok === false) {
+          reject(new Error(response?.error || 'content script did not confirm cache deletion'));
+          return;
+        }
+        resolve(response);
+      });
+    });
+  }
+
+  // 删除一个接口的持久化规则（如有），并彻底清理当前标签页中的日志/规则缓存。
+  async function handleDeleteMockEndpoint(msg) {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+
+      const { ruleId, tabId, method, url } = msg;
+      if (!tabId) return { ok: false, error: 'tabId required' };
+      if (!method || !url) return { ok: false, error: 'method and url required' };
+
+      if (ruleId) await ns.mockStorage.deleteMockRule(ruleId);
+      const rules = await ns.mockStorage.getMockRules();
+      const cacheResult = await sendTabMessage(tabId, {
+        type: 'DELETE_MOCK_ENDPOINT_CACHE',
+        method,
+        url,
+        rules,
+      });
+
+      return { ok: true, deletedRequests: cacheResult.deletedRequests || 0 };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // 仅删除当前标签页中的捕获记录，不读取、删除或重新下发持久化 Mock 规则。
+  async function handleDeleteCapturedRequest(msg) {
+    try {
+      const { tabId, method, url } = msg;
+      if (!tabId) return { ok: false, error: 'tabId required' };
+      if (!method || !url) return { ok: false, error: 'method and url required' };
+
+      const result = await sendTabMessage(tabId, {
+        type: 'DELETE_CAPTURED_REQUEST',
+        method,
+        url,
+      });
+      return { ok: true, deletedRequests: result.deletedRequests || 0 };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -96,21 +178,22 @@
     }
   }
 
-  // 处理：清空当前项目全部 Mock 规则（“已编”手动清空）
+  // 处理：按面板来源清空当前项目的 Mock 规则（Emo / 已编）
   async function handleClearMockRules(msg) {
     try {
       if (!ns.mockStorage) {
         return { ok: false, error: 'mockStorage not available' };
       }
 
-      const { tabId } = msg;
-      await ns.mockStorage.clearMockRules();
+      const { tabId, scope } = msg;
+      await ns.mockStorage.clearMockRules(scope);
+      const remainingRules = await ns.mockStorage.getMockRules();
 
-      // 通知 content script：规则已清空，停止拦截
+      // 通知 content script：仅停止已清空来源的拦截，其他来源继续生效。
       if (tabId) {
         chrome.tabs.sendMessage(tabId, {
           type: 'APPLY_MOCK_RULES',
-          rules: [],
+          rules: remainingRules,
         }).catch(() => {});
       }
 
@@ -143,7 +226,7 @@
       }
 
       // 向 content script 请求日志
-      return new Promise((resolve) => {
+      const logResult = await new Promise((resolve) => {
         chrome.tabs.sendMessage(tabId, { type: 'GET_REQUEST_LOG' }, (response) => {
           if (chrome.runtime?.lastError) {
             // Tab 未加载 content script（页面在扩展安装/重载前就已打开，或 URL 不匹配）
@@ -159,6 +242,8 @@
           resolve({ ok: true, requests: response.requests || [], csReady: true });
         });
       });
+
+      return logResult;
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -221,7 +306,10 @@
   ns.mockHandler = {
     handleGetMockRules,
     handleAddMockRule,
+    handleResolveImportConflict,
     handleDeleteMockRule,
+    handleDeleteMockEndpoint,
+    handleDeleteCapturedRequest,
     handleToggleMockRule,
     handleClearMockRules,
     handleGetCurrentProject,

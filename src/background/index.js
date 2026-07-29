@@ -199,9 +199,33 @@
       return true;
     }
 
+    if (msg.type === 'RESOLVE_IMPORT_CONFLICT' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleResolveImportConflict(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'DELETE_MOCK_RULE' && commonNs.mockHandler) {
       commonNs.mockHandler
         .handleDeleteMockRule(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'DELETE_MOCK_ENDPOINT' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleDeleteMockEndpoint(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'DELETE_CAPTURED_REQUEST' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleDeleteCapturedRequest(msg)
         .then((result) => sendResponse(result))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;

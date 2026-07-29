@@ -12,8 +12,51 @@
   // 存储 mock 规则和接口记录
   let mockRules = [];
   let requestLog = [];
-  let disabledKeys = new Set(); // 被禁监的接口 key（method + ' ' + url）
+  let disabledKeys = new Set(); // 被禁监的接口 key（method + ' ' + 无 query/hash 的 url）
   const MAX_LOG_SIZE = 100; // 最多保留 100 条记录
+
+  function syncMockRulesToPage() {
+    window.postMessage({
+      type: 'IDT_UPDATE_MOCK_RULES',
+      rules: mockRules,
+    }, '*');
+  }
+
+  function endpointUrl(url) {
+    return String(url || '').split('#', 1)[0].split('?', 1)[0];
+  }
+
+  function requestKey(method, url) {
+    return String(method || '').toUpperCase() + ' ' + endpointUrl(url);
+  }
+
+  function normalizeRequestKey(key) {
+    const raw = String(key || '');
+    const separator = raw.indexOf(' ');
+    return separator > 0
+      ? requestKey(raw.slice(0, separator), raw.slice(separator + 1))
+      : raw;
+  }
+
+  function toOriginalSnapshot(record) {
+    return {
+      url: record.url,
+      method: record.method,
+      status: record.status,
+      requestPayload: record.requestPayload,
+      responsePayload: record.responsePayload,
+      timestamp: record.timestamp,
+    };
+  }
+
+  // hook 上报 Mock 结果时仍要保留该接口最近一次真实记录，供面板关闭开关后回显。
+  function attachOriginalSnapshot(record, previous) {
+    // 连续真实请求应始终展示最新值；只有 Mock 记录覆盖真实记录时才冻结 original。
+    if (!record.mocked) return record;
+    let original = record.original || previous?.original || null;
+    if (!original && previous && !previous.mocked) original = toOriginalSnapshot(previous);
+    return original ? { ...record, original } : record;
+  }
 
   // 初始化
   async function init() {
@@ -25,18 +68,21 @@
       if (event.source !== window) return;
 
       if (event.data.type === 'IDT_REQUEST_LOGGED') {
-        const record = event.data.record;
+        let record = event.data.record;
         console.log('[Mock Interceptor] Received request from page context:', record.method, record.url);
 
-        const key = record.key || (record.method + ' ' + record.url);
+        const key = requestKey(record.method, record.url);
+        record = { ...record, key };
         // 命中禁监池：不接收、不上报面板（与 hook 双保险）
         if (disabledKeys.size > 0 && disabledKeys.has(key)) return;
 
-        // 同一 method+url 只保留最新一条：替换已有记录，避免重复刷屏
-        const existingIdx = requestLog.findIndex(r => (r.key || (r.method + ' ' + r.url)) === key);
+        // 同一 method+接口路径只保留最新一条，query/hash 或请求体变化直接覆盖。
+        const existingIdx = requestLog.findIndex(r => requestKey(r.method, r.url) === key);
         if (existingIdx >= 0) {
+          record = attachOriginalSnapshot(record, requestLog[existingIdx]);
           requestLog[existingIdx] = record;
         } else {
+          record = attachOriginalSnapshot(record, null);
           requestLog.unshift(record);
         }
 
@@ -61,10 +107,7 @@
         mockRules = msg.rules || [];
         console.log('[Mock Interceptor] Updated rules via message:', mockRules.length);
         // 同步到页面上下文（hook 已注入则生效，未注入则被丢弃）
-        window.postMessage({
-          type: 'IDT_UPDATE_MOCK_RULES',
-          rules: mockRules,
-        }, '*');
+        syncMockRulesToPage();
         sendResponse({ ok: true });
         return true;
       }
@@ -73,7 +116,7 @@
         console.log('[Mock Interceptor] GET_REQUEST_LOG requested, returning', requestLog.length, 'records');
         // 过滤掉已禁监的接口，使其不出现在捕获列表
         const visible = disabledKeys.size > 0
-          ? requestLog.filter(r => !disabledKeys.has(r.key || (r.method + ' ' + r.url)))
+          ? requestLog.filter(r => !disabledKeys.has(requestKey(r.method, r.url)))
           : requestLog;
         sendResponse({ ok: true, requests: visible });
         return true;
@@ -86,10 +129,32 @@
         return true;
       }
 
+      // 捕获列表删除只操作请求日志，Emo / 已编规则及页面 hook 缓存保持不变。
+      if (msg.type === 'DELETE_CAPTURED_REQUEST') {
+        const key = requestKey(msg.method, msg.url);
+        const before = requestLog.length;
+        requestLog = requestLog.filter(r => requestKey(r.method, r.url) !== key);
+        console.log('[Mock Interceptor] Captured request deleted:', key);
+        sendResponse({ ok: true, deletedRequests: before - requestLog.length });
+        return true;
+      }
+
+      // 单接口删除：同时清理请求日志、content 规则缓存与页面 hook 缓存。
+      if (msg.type === 'DELETE_MOCK_ENDPOINT_CACHE') {
+        const key = requestKey(msg.method, msg.url);
+        const before = requestLog.length;
+        requestLog = requestLog.filter(r => requestKey(r.method, r.url) !== key);
+        mockRules = Array.isArray(msg.rules) ? msg.rules : [];
+        syncMockRulesToPage();
+        console.log('[Mock Interceptor] Endpoint cache deleted:', key);
+        sendResponse({ ok: true, deletedRequests: before - requestLog.length });
+        return true;
+      }
+
       // 更新禁监接口池：同步内存并桥接到页面主上下文（hook 据此跳过记录）
       if (msg.type === 'APPLY_MONITOR_DISABLED') {
         const arr = Array.isArray(msg.disabled) ? msg.disabled : [];
-        disabledKeys = new Set(arr);
+        disabledKeys = new Set(arr.map(normalizeRequestKey));
         console.log('[Mock Interceptor] Monitor disabled updated:', disabledKeys.size);
         window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: arr }, '*');
         sendResponse({ ok: true });
@@ -102,20 +167,21 @@
       if (msg.type === 'SET_HOOK_ACTIVE') {
         const active = !!msg.active;
         console.log('[Mock Interceptor] Set hook active:', active);
+        // 页面刷新会重建 MAIN world，激活时必须把当前规则重新下发给新 hook。
+        if (active) syncMockRulesToPage();
         window.postMessage({ type: 'IDT_SET_ACTIVE', active }, '*');
         sendResponse({ ok: true });
         return true;
       }
     });
 
-    // 3) 异步加载 mock 规则（仅缓存到内存，供后续 APPLY_MOCK_RULES / hook 同步使用）
+    // 3) 页面刷新会重建 MAIN world 中的 hook；从持久化存储加载完成后立即重放规则，
+    // 保证已开启的 Mock 不依赖再次编辑或重新切换开关才能生效。
     if (ns.mockStorage) {
       mockRules = await ns.mockStorage.getMockRules();
       console.log('[Mock Interceptor] Loaded', mockRules.length, 'rules from storage');
+      syncMockRulesToPage();
     }
-    // 注意：不再在此主动注入 hook，也不主动 postMessage 规则给页面。
-    // hook 由 DevTools Panel 打开时触发（background INJECT_MOCK_HOOK），
-    // 注入成功后 background 会下发 APPLY_MOCK_RULES，由本脚本桥接到页面主上下文。
   }
 
   ns.mockInterceptor = {

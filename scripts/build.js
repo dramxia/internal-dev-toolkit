@@ -11,6 +11,7 @@ const dist = path.join(root, 'dist');
 // projects.js 和 current-project.js 必须在所有依赖它们的模块之前
 const contentFiles = [
   'src/common/projects.js',
+  'src/common/current-project.js',
   'src/common/token.js',
   'src/common/credentials.js',
   'src/common/tenant.js',

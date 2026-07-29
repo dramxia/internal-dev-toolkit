@@ -17,8 +17,24 @@
 
   console.log('[Mock Interceptor - Page Context] Script started');
   let mockRules = [];
-  let disabledKeys = new Set(); // 被禁监的接口 key（method + ' ' + url），命中则不记录上报
+  let disabledKeys = new Set(); // 被禁监的接口 key（method + ' ' + 无 query/hash 的 url）
   let activated = false; // 是否记录并上报请求（由 DevTools 面板打开时激活）
+
+  function endpointUrl(url) {
+    return String(url || '').split('#', 1)[0].split('?', 1)[0];
+  }
+
+  function requestKey(method, url) {
+    return String(method || '').toUpperCase() + ' ' + endpointUrl(url);
+  }
+
+  function normalizeRequestKey(key) {
+    const raw = String(key || '');
+    const separator = raw.indexOf(' ');
+    return separator > 0
+      ? requestKey(raw.slice(0, separator), raw.slice(separator + 1))
+      : raw;
+  }
 
   // 监听来自 content script 的规则更新 / 激活开关
   window.addEventListener('message', (event) => {
@@ -29,7 +45,7 @@
       console.log('[Mock Interceptor - Page Context] Rules updated:', mockRules.length);
     } else if (event.data.type === 'IDT_UPDATE_MONITOR_DISABLED') {
       const arr = Array.isArray(event.data.disabled) ? event.data.disabled : [];
-      disabledKeys = new Set(arr);
+      disabledKeys = new Set(arr.map(normalizeRequestKey));
       console.log('[Mock Interceptor - Page Context] Monitor disabled updated:', disabledKeys.size);
     } else if (event.data.type === 'IDT_SET_ACTIVE') {
       activated = !!event.data.active;
@@ -44,18 +60,18 @@
   function findMatchingRule(url, method) {
     // 预解析请求 URL 的 origin / pathname（用于导入接口的“仅路径 + 当前页面域名”匹配）
     let reqPath = null, reqOrigin = null;
-    try { const u = new URL(url); reqPath = u.pathname; reqOrigin = u.origin; } catch (_) {}
+    try { const u = new URL(url, location.href); reqPath = u.pathname; reqOrigin = u.origin; } catch (_) {}
 
     return mockRules.find(rule => {
       const hasNew = rule.responseMock || rule.requestMock;
       if (!hasNew && !rule.enabled) return false;
       if (rule.method !== method) return false;
       const ruleUrl = rule.url || '';
-      // 完全匹配
-      if (ruleUrl === url) return true;
+      // 同一个接口不区分 query/hash；请求参数变化仍命中同一条规则。
+      if (endpointUrl(ruleUrl) === endpointUrl(url)) return true;
       // 导入接口：仅存路径（无域名），域名用当前页面 → 同源且路径相同即命中
       if (ruleUrl.startsWith('/') && !/:\/\//.test(ruleUrl)
-          && reqPath && reqOrigin === location.origin && reqPath === ruleUrl) {
+          && reqPath && reqOrigin === location.origin && reqPath === endpointUrl(ruleUrl)) {
         return true;
       }
       // 通配符匹配
@@ -80,24 +96,28 @@
     return map[s] || (s >= 200 && s < 300 ? 'OK' : (s >= 400 ? 'Error' : 'OK'));
   }
 
-  // 解析规则的出参/入参拦截意图，返回 { response, request }。
-  // 值非 null 表示该方向需要 mock（response=出参假数据，request=入参假数据），可同时为非 null。
+  // 解析规则的出参/入参拦截意图。enabled 与 payload 分开返回，允许合法 Mock JSON null。
   // 新结构读 responseMock/requestMock；旧结构（仅 mockMode/mockData/enabled）按 mockMode 归属兼容。
   function resolveMockIntent(rule) {
-    if (!rule) return { response: null, request: null };
+    const empty = { responseEnabled: false, response: null, requestEnabled: false, request: null };
+    if (!rule) return empty;
     const rm = rule.responseMock;
     const qm = rule.requestMock;
     if (rm || qm) {
+      const responseHasData = !!(rm && (rm.hasMockData !== undefined ? rm.hasMockData : rm.mockData != null));
+      const requestHasData = !!(qm && (qm.hasMockData !== undefined ? qm.hasMockData : qm.mockData != null));
       return {
-        response: (rm && rm.enabled) ? rm.mockData : null,
-        request: (qm && qm.enabled) ? qm.mockData : null,
+        responseEnabled: !!(rm && rm.enabled && responseHasData),
+        response: rm ? rm.mockData : null,
+        requestEnabled: !!(qm && qm.enabled && requestHasData),
+        request: qm ? qm.mockData : null,
       };
     }
-    if (!rule.enabled) return { response: null, request: null };
+    if (!rule.enabled || rule.mockData == null) return empty;
     const data = rule.mockData;
     return rule.mockMode === 'request'
-      ? { response: null, request: data }
-      : { response: data, request: null };
+      ? { responseEnabled: false, response: null, requestEnabled: true, request: data }
+      : { responseEnabled: true, response: data, requestEnabled: false, request: null };
   }
 
   function safeParseJSON(str) {
@@ -111,12 +131,12 @@
   }
 
   // 记录请求并上报给 content script
-  // 同一 method+url 只保留最新一条，避免重复请求刷屏
+  // 同一 method+接口路径只保留最新一条；query/hash 和请求体变化只更新记录。
   // 仅在激活（DevTools 面板已打开）时记录；未激活时 hook 仍透传请求，但不记录上报。
   const seenKeys = new Set();
-  function recordRequest(url, method, requestPayload, responsePayload, status) {
+  function recordRequest(url, method, requestPayload, responsePayload, status, mocked = false) {
     if (!activated) return; // 未激活：不记录、不上报，保持零开销透传
-    const key = method + ' ' + url;
+    const key = requestKey(method, url);
     // 命中禁监池：不记录、不上报（避免轮询接口刷屏且无法选中）
     if (disabledKeys.size > 0 && disabledKeys.has(key)) return;
     seenKeys.add(key);
@@ -126,6 +146,8 @@
       key,
       url,
       method,
+      pageOrigin: location.origin,
+      mocked: !!mocked,
       requestPayload: safeParseJSON(requestPayload),
       responsePayload: safeParseJSON(responsePayload),
       status,
@@ -150,7 +172,7 @@
     const intent = resolveMockIntent(rule);
 
     // 入参改写：先于出参处理，使“改入参 + 假出参”可叠加
-    if (intent.request != null) {
+    if (intent.requestEnabled) {
       init = {
         ...init,
         body: JSON.stringify(intent.request),
@@ -159,7 +181,7 @@
     }
 
     // 出参拦截：直接构造假响应，不发真实网络
-    if (intent.response != null) {
+    if (intent.responseEnabled) {
       console.log('[Mock Interceptor - Page Context] Mock response for', method, url);
       const mStatus = mockStatus(rule);
       const mockResponse = new Response(JSON.stringify(intent.response), {
@@ -167,7 +189,7 @@
         statusText: mockStatusText(mStatus),
         headers: { 'Content-Type': 'application/json' },
       });
-      recordRequest(url, method, init?.body, intent.response, mStatus);
+      recordRequest(url, method, init?.body, intent.response, mStatus, true);
       return mockResponse;
     }
 
@@ -178,15 +200,15 @@
       if (activated) {
         const clonedResponse = response.clone();
         clonedResponse.text().then(text => {
-          recordRequest(url, method, init?.body, text, response.status);
+          recordRequest(url, method, init?.body, text, response.status, intent.requestEnabled);
         }).catch(() => {
-          recordRequest(url, method, init?.body, null, response.status);
+          recordRequest(url, method, init?.body, null, response.status, intent.requestEnabled);
         });
       }
 
       return response;
     } catch (err) {
-      recordRequest(url, method, init?.body, null, 0);
+      recordRequest(url, method, init?.body, null, 0, intent.requestEnabled);
       throw err;
     }
   };
@@ -214,13 +236,13 @@
       const intent = resolveMockIntent(rule);
 
       // 入参改写：先于出参处理，使“改入参 + 假出参”可叠加
-      if (intent.request != null) {
+      if (intent.requestEnabled) {
         requestBody = JSON.stringify(intent.request);
       }
 
       // 出参拦截：用真实原生 XHR 完成一次请求生命周期，让 axios 等库的监听器正常触发。
       // 不发真实网络，仅本地构造响应。
-      if (intent.response != null) {
+      if (intent.responseEnabled) {
         console.log('[Mock Interceptor - Page Context] Mock response for XHR', method, url);
 
         const mStatus = mockStatus(rule);
@@ -233,7 +255,7 @@
           Object.defineProperty(xhr, 'response', { writable: true, value: mockBody });
           Object.defineProperty(xhr, 'responseURL', { writable: true, value: url });
 
-          recordRequest(url, method, requestBody, intent.response, mStatus);
+          recordRequest(url, method, requestBody, intent.response, mStatus, true);
 
           // 触发标准事件，兼容 onreadystatechange / onload / onloadend / addEventListener
           xhr.dispatchEvent(new Event('readystatechange'));
@@ -249,7 +271,7 @@
       // 仅激活时注册监听并记录；未激活时直接透传，零额外开销。
       if (activated) {
         xhr.addEventListener('loadend', function() {
-          recordRequest(url, method, requestBody, xhr.responseText, xhr.status);
+          recordRequest(url, method, requestBody, xhr.responseText, xhr.status, intent.requestEnabled);
         });
       }
 

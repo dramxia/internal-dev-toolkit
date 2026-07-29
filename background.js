@@ -572,6 +572,77 @@ if (typeof module !== 'undefined' && module.exports) {
   const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
   const KEY_PREFIX = 'mockRules';
   const DISABLED_PREFIX = 'monitorDisabled';
+  let ruleMutationQueue = Promise.resolve();
+
+  function normalizeRequestKey(key) {
+    const raw = String(key || '');
+    const separator = raw.indexOf(' ');
+    if (separator <= 0) return raw;
+    const method = raw.slice(0, separator).toUpperCase();
+    const url = raw.slice(separator + 1).split('#', 1)[0].split('?', 1)[0];
+    return `${method} ${url}`;
+  }
+
+  function endpointUrl(url) {
+    return String(url || '').split('#', 1)[0].split('?', 1)[0];
+  }
+
+  function endpointPageOrigin(endpoint, fallbackEndpoint) {
+    return endpoint?.pageOrigin || endpoint?.captured?.pageOrigin ||
+      fallbackEndpoint?.pageOrigin || fallbackEndpoint?.captured?.pageOrigin;
+  }
+
+  function normalizedInterfaceUrl(endpoint, fallbackEndpoint) {
+    const normalized = endpointUrl(endpoint?.url);
+    if (!normalized) return '';
+    try {
+      return new URL(normalized).href;
+    } catch (_) {
+      const pageOrigin = endpointPageOrigin(endpoint, fallbackEndpoint);
+      if (!pageOrigin) return `relative:${normalized}`;
+      try {
+        return new URL(normalized, pageOrigin).href;
+      } catch (_) {
+        return `relative:${normalized}`;
+      }
+    }
+  }
+
+  // 规则同步只认相同请求方式与去掉 Query Parameters 后的相同 URL。
+  // 绝对 URL 保留 origin/端口；相对导入路径仅在有 pageOrigin 时还原比较。
+  function rulesShareEndpoint(left, right) {
+    if (!left || !right) return false;
+    if (String(left.method || '').toUpperCase() !== String(right.method || '').toUpperCase()) return false;
+    return normalizedInterfaceUrl(left, right) === normalizedInterfaceUrl(right, left);
+  }
+
+  function syncMockState(target, source, updatedAt) {
+    const synchronized = { ...target, updatedAt };
+    const fields = [
+      'responseMock', 'requestMock', 'mockMethod', 'mockUrl',
+      'enabled', 'mockMode', 'mockData', 'hasMockData', 'status',
+    ];
+    fields.forEach((field) => {
+      if (!Object.prototype.hasOwnProperty.call(source, field)) return;
+      const value = source[field];
+      synchronized[field] = Array.isArray(value)
+        ? [...value]
+        : value && typeof value === 'object'
+          ? { ...value }
+          : value;
+    });
+    return synchronized;
+  }
+
+  function isEmoRule(rule) {
+    return rule?.listSource === 'emo' || rule?.captured?.source === 'capture';
+  }
+
+  function enqueueRuleMutation(mutation) {
+    const task = ruleMutationQueue.then(mutation, mutation);
+    ruleMutationQueue = task.catch(() => {});
+    return task;
+  }
 
   function hasChromeStorage() {
     return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
@@ -598,6 +669,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const oldEnabled = rule.enabled !== false;
     const oldMode = rule.mockMode || 'response';
     const oldData = rule.mockData;
+    const oldHasMockData = rule.hasMockData !== undefined ? !!rule.hasMockData : oldData != null;
     const oldStatus = rule.status != null ? Number(rule.status) : 200;
 
     // 旧结构仅有单一 mockMode + mockData：归属到对应方向，另一方向留空（null）。
@@ -606,11 +678,13 @@ if (typeof module !== 'undefined' && module.exports) {
     // 应为空，开启拦截时编辑器再用真实数据兜底，避免数据串台。
     const responseMock = rule.responseMock || {
       enabled: oldEnabled && oldMode === 'response',
+      hasMockData: oldMode === 'response' && oldHasMockData,
       mockData: oldMode === 'response' ? oldData : null,
       status: oldStatus,
     };
     const requestMock = rule.requestMock || {
       enabled: oldEnabled && oldMode === 'request',
+      hasMockData: oldMode === 'request' && oldHasMockData,
       mockData: oldMode === 'request' ? oldData : null,
     };
 
@@ -637,23 +711,35 @@ if (typeof module !== 'undefined' && module.exports) {
   // 保存单条规则（如果已存在则更新）
   async function saveMockRule(rule) {
     if (!hasChromeStorage()) return;
-    const key = await getStorageKey();
-    const rules = await getMockRules();
+    return enqueueRuleMutation(async () => {
+      const key = await getStorageKey();
+      const rules = await getMockRules();
 
-    const existingIndex = rules.findIndex(r => r.id === rule.id);
-    if (existingIndex >= 0) {
-      rules[existingIndex] = { ...rule, updatedAt: Date.now() };
-    } else {
-      rules.push({ ...rule, createdAt: Date.now(), updatedAt: Date.now() });
-    }
+      const now = Date.now();
+      const existingIndex = rules.findIndex(r => r.id === rule.id);
+      if (existingIndex >= 0) {
+        rules[existingIndex] = { ...rule, updatedAt: now };
+      } else {
+        rules.push({ ...rule, createdAt: now, updatedAt: now });
+      }
 
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ [key]: rules }, () => {
-        if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve(rule);
+      // 同一个接口可能同时拥有捕获来源和已编来源的规则。保存任意一条时同步其
+      // Mock 配置，但保留其他规则各自的 id、真实 URL、来源与 captured 快照。
+      const savedIndex = existingIndex >= 0 ? existingIndex : rules.length - 1;
+      const savedRule = rules[savedIndex];
+      rules.forEach((candidate, index) => {
+        if (index === savedIndex || !rulesShareEndpoint(candidate, savedRule)) return;
+        rules[index] = syncMockState(candidate, savedRule, now);
+      });
+
+      return new Promise((resolve, reject) => {
+        chrome.storage.local.set({ [key]: rules }, () => {
+          if (chrome.runtime?.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve(rule);
+        });
       });
     });
   }
@@ -661,17 +747,19 @@ if (typeof module !== 'undefined' && module.exports) {
   // 删除规则
   async function deleteMockRule(ruleId) {
     if (!hasChromeStorage()) return;
-    const key = await getStorageKey();
-    const rules = await getMockRules();
-    const filtered = rules.filter(r => r.id !== ruleId);
+    return enqueueRuleMutation(async () => {
+      const key = await getStorageKey();
+      const rules = await getMockRules();
+      const filtered = rules.filter(r => r.id !== ruleId);
 
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ [key]: filtered }, () => {
-        if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve({ ok: true });
+      return new Promise((resolve, reject) => {
+        chrome.storage.local.set({ [key]: filtered }, () => {
+          if (chrome.runtime?.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve({ ok: true });
+        });
       });
     });
   }
@@ -679,40 +767,91 @@ if (typeof module !== 'undefined' && module.exports) {
   // 启用/禁用规则
   async function toggleMockRule(ruleId, enabled) {
     if (!hasChromeStorage()) return;
-    const key = await getStorageKey();
-    const rules = await getMockRules();
+    return enqueueRuleMutation(async () => {
+      const key = await getStorageKey();
+      const rules = await getMockRules();
 
-    const rule = rules.find(r => r.id === ruleId);
-    if (!rule) {
-      throw new Error('Rule not found');
-    }
+      const rule = rules.find(r => r.id === ruleId);
+      if (!rule) throw new Error('Rule not found');
 
-    rule.enabled = enabled;
-    rule.updatedAt = Date.now();
+      if (rule.responseMock || rule.requestMock) {
+        if (rule.responseMock) rule.responseMock.enabled = !!enabled;
+        if (rule.requestMock) rule.requestMock.enabled = !!enabled;
+      } else {
+        rule.enabled = enabled;
+      }
+      rule.updatedAt = Date.now();
 
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ [key]: rules }, () => {
-        if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve(rule);
+      return new Promise((resolve, reject) => {
+        chrome.storage.local.set({ [key]: rules }, () => {
+          if (chrome.runtime?.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve(rule);
+        });
       });
     });
   }
 
-  // 清空当前项目的全部 Mock 规则（“已编”手动清空）
-  async function clearMockRules() {
-    if (!hasChromeStorage()) return;
-    const key = await getStorageKey();
+  // 原子应用导入冲突的最终选择：可写入“已编”候选，同时移除未被选择的
+  // Emo 规则。捕获记录存放在 content script，不在这里改动。
+  async function resolveImportConflict(selectedRuleOrRules, removeRuleIds = []) {
+    if (!hasChromeStorage()) return { rules: [] };
+    return enqueueRuleMutation(async () => {
+      const key = await getStorageKey();
+      const rules = await getMockRules();
+      const removedIds = new Set((Array.isArray(removeRuleIds) ? removeRuleIds : []).map(String));
+      const nextRules = rules.filter(rule => !removedIds.has(String(rule.id)));
 
-    return new Promise((resolve, reject) => {
-      chrome.storage.local.set({ [key]: [] }, () => {
-        if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve({ ok: true });
+      const selectedRules = Array.isArray(selectedRuleOrRules)
+        ? selectedRuleOrRules
+        : (selectedRuleOrRules ? [selectedRuleOrRules] : []);
+      selectedRules.forEach((selectedRule) => {
+        const now = Date.now();
+        const savedRule = {
+          ...selectedRule,
+          listSource: selectedRule.listSource || 'edited',
+          createdAt: selectedRule.createdAt || now,
+          updatedAt: now,
+        };
+        const existingIndex = nextRules.findIndex(rule => rule.id === savedRule.id);
+        if (existingIndex >= 0) nextRules[existingIndex] = savedRule;
+        else nextRules.push(savedRule);
+      });
+
+      return new Promise((resolve, reject) => {
+        chrome.storage.local.set({ [key]: nextRules }, () => {
+          if (chrome.runtime?.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve({ rules: nextRules });
+        });
+      });
+    });
+  }
+
+  // 按来源清空当前项目的 Mock 规则。Emo 对应捕获后保存的规则，已编对应导入/手工规则。
+  async function clearMockRules(scope = 'all') {
+    if (!hasChromeStorage()) return;
+    return enqueueRuleMutation(async () => {
+      const key = await getStorageKey();
+      const rules = await getMockRules();
+      const remaining = scope === 'emo'
+        ? rules.filter(rule => !isEmoRule(rule))
+        : scope === 'edited'
+          ? rules.filter(isEmoRule)
+          : [];
+
+      return new Promise((resolve, reject) => {
+        chrome.storage.local.set({ [key]: remaining }, () => {
+          if (chrome.runtime?.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          resolve({ ok: true, rules: remaining });
+        });
       });
     });
   }
@@ -724,7 +863,7 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   // ===== 禁监接口池 =====
-  // 按项目隔离存储被禁止监听的接口 key（method + ' ' + url）数组。
+  // 按项目隔离存储被禁止监听的接口 key（method + ' ' + 无 query/hash 的 url）数组。
   // 开启禁监后，hook 不再记录该接口，也不上报，避免轮询接口刷屏且无法选中。
   async function getDisabledStorageKey() {
     if (ns.currentProject && ns.currentProject.getCurrentProjectId) {
@@ -743,7 +882,8 @@ if (typeof module !== 'undefined' && module.exports) {
           resolve([]);
           return;
         }
-        resolve(Array.isArray(items[key]) ? items[key] : []);
+        const raw = Array.isArray(items[key]) ? items[key] : [];
+        resolve([...new Set(raw.map(normalizeRequestKey))]);
       });
     });
   }
@@ -752,7 +892,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!hasChromeStorage()) return;
     const key = await getDisabledStorageKey();
     const list = await getMonitorDisabled();
-    const keyStr = typeof entry === 'string' ? entry : (entry && entry.key);
+    const keyStr = normalizeRequestKey(typeof entry === 'string' ? entry : (entry && entry.key));
     if (!keyStr || list.includes(keyStr)) return list;
     list.push(keyStr);
     return new Promise((resolve, reject) => {
@@ -770,7 +910,8 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!hasChromeStorage()) return [];
     const key = await getDisabledStorageKey();
     const list = await getMonitorDisabled();
-    const filtered = list.filter(k => k !== keyStr);
+    const normalizedKey = normalizeRequestKey(keyStr);
+    const filtered = list.filter(k => normalizeRequestKey(k) !== normalizedKey);
     return new Promise((resolve, reject) => {
       chrome.storage.local.set({ [key]: filtered }, () => {
         if (chrome.runtime?.lastError) {
@@ -787,6 +928,7 @@ if (typeof module !== 'undefined' && module.exports) {
     saveMockRule,
     deleteMockRule,
     toggleMockRule,
+    resolveImportConflict,
     clearMockRules,
     getMockRule,
     getMonitorDisabled,
@@ -2536,6 +2678,28 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
+  // 处理导入冲突弹窗的最终选择，并一次性同步最新规则到页面。
+  async function handleResolveImportConflict(msg) {
+    try {
+      if (!ns.mockStorage?.resolveImportConflict) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+
+      const { selectedRule, selectedRules, removeRuleIds, tabId } = msg;
+      const rulesToSave = Array.isArray(selectedRules) ? selectedRules : (selectedRule || null);
+      const result = await ns.mockStorage.resolveImportConflict(rulesToSave, removeRuleIds);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MOCK_RULES',
+          rules: result.rules,
+        }).catch(() => {});
+      }
+      return { ok: true, rules: result.rules };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   // 处理：删除 Mock 规则
   async function handleDeleteMockRule(msg) {
     try {
@@ -2556,6 +2720,66 @@ if (typeof module !== 'undefined' && module.exports) {
       }
 
       return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  function sendTabMessage(tabId, message) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response || response.ok === false) {
+          reject(new Error(response?.error || 'content script did not confirm cache deletion'));
+          return;
+        }
+        resolve(response);
+      });
+    });
+  }
+
+  // 删除一个接口的持久化规则（如有），并彻底清理当前标签页中的日志/规则缓存。
+  async function handleDeleteMockEndpoint(msg) {
+    try {
+      if (!ns.mockStorage) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+
+      const { ruleId, tabId, method, url } = msg;
+      if (!tabId) return { ok: false, error: 'tabId required' };
+      if (!method || !url) return { ok: false, error: 'method and url required' };
+
+      if (ruleId) await ns.mockStorage.deleteMockRule(ruleId);
+      const rules = await ns.mockStorage.getMockRules();
+      const cacheResult = await sendTabMessage(tabId, {
+        type: 'DELETE_MOCK_ENDPOINT_CACHE',
+        method,
+        url,
+        rules,
+      });
+
+      return { ok: true, deletedRequests: cacheResult.deletedRequests || 0 };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // 仅删除当前标签页中的捕获记录，不读取、删除或重新下发持久化 Mock 规则。
+  async function handleDeleteCapturedRequest(msg) {
+    try {
+      const { tabId, method, url } = msg;
+      if (!tabId) return { ok: false, error: 'tabId required' };
+      if (!method || !url) return { ok: false, error: 'method and url required' };
+
+      const result = await sendTabMessage(tabId, {
+        type: 'DELETE_CAPTURED_REQUEST',
+        method,
+        url,
+      });
+      return { ok: true, deletedRequests: result.deletedRequests || 0 };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -2586,21 +2810,22 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
-  // 处理：清空当前项目全部 Mock 规则（“已编”手动清空）
+  // 处理：按面板来源清空当前项目的 Mock 规则（Emo / 已编）
   async function handleClearMockRules(msg) {
     try {
       if (!ns.mockStorage) {
         return { ok: false, error: 'mockStorage not available' };
       }
 
-      const { tabId } = msg;
-      await ns.mockStorage.clearMockRules();
+      const { tabId, scope } = msg;
+      await ns.mockStorage.clearMockRules(scope);
+      const remainingRules = await ns.mockStorage.getMockRules();
 
-      // 通知 content script：规则已清空，停止拦截
+      // 通知 content script：仅停止已清空来源的拦截，其他来源继续生效。
       if (tabId) {
         chrome.tabs.sendMessage(tabId, {
           type: 'APPLY_MOCK_RULES',
-          rules: [],
+          rules: remainingRules,
         }).catch(() => {});
       }
 
@@ -2633,7 +2858,7 @@ if (typeof module !== 'undefined' && module.exports) {
       }
 
       // 向 content script 请求日志
-      return new Promise((resolve) => {
+      const logResult = await new Promise((resolve) => {
         chrome.tabs.sendMessage(tabId, { type: 'GET_REQUEST_LOG' }, (response) => {
           if (chrome.runtime?.lastError) {
             // Tab 未加载 content script（页面在扩展安装/重载前就已打开，或 URL 不匹配）
@@ -2649,6 +2874,8 @@ if (typeof module !== 'undefined' && module.exports) {
           resolve({ ok: true, requests: response.requests || [], csReady: true });
         });
       });
+
+      return logResult;
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -2711,7 +2938,10 @@ if (typeof module !== 'undefined' && module.exports) {
   ns.mockHandler = {
     handleGetMockRules,
     handleAddMockRule,
+    handleResolveImportConflict,
     handleDeleteMockRule,
+    handleDeleteMockEndpoint,
+    handleDeleteCapturedRequest,
     handleToggleMockRule,
     handleClearMockRules,
     handleGetCurrentProject,
@@ -2925,9 +3155,33 @@ if (typeof module !== 'undefined' && module.exports) {
       return true;
     }
 
+    if (msg.type === 'RESOLVE_IMPORT_CONFLICT' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleResolveImportConflict(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'DELETE_MOCK_RULE' && commonNs.mockHandler) {
       commonNs.mockHandler
         .handleDeleteMockRule(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'DELETE_MOCK_ENDPOINT' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleDeleteMockEndpoint(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'DELETE_CAPTURED_REQUEST' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleDeleteCapturedRequest(msg)
         .then((result) => sendResponse(result))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;

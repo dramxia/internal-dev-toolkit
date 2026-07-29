@@ -365,6 +365,22 @@
       flex-shrink: 0;
     }
 
+    .selected-conflict-version-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      border: 1px solid var(--success);
+      border-radius: 50%;
+      background: var(--success-bg);
+      color: var(--success);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
     .request-item-delete {
       display: inline-flex;
       align-items: center;
@@ -1221,6 +1237,103 @@
 
     /* ── 禁监接口弹窗与工具栏角标 ── */
     .modal-sm { width: min(560px, 92vw); }
+    .modal-lg { width: min(1040px, 96vw); }
+    .conflict-endpoint {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-primary);
+      word-break: break-all;
+    }
+    .conflict-table-wrap {
+      overflow: auto;
+      max-height: 56vh;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg);
+    }
+    .conflict-table {
+      width: 100%;
+      min-width: 760px;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 12px;
+    }
+    .conflict-table th,
+    .conflict-table td {
+      padding: 10px 12px;
+      border-right: 1px solid var(--border-subtle);
+      border-bottom: 1px solid var(--border-subtle);
+      text-align: left;
+      vertical-align: top;
+    }
+    .conflict-table th:last-child,
+    .conflict-table td:last-child { border-right: 0; }
+    .conflict-table [data-conflict-index] { cursor: pointer; }
+    .conflict-table [data-conflict-index].is-selected { background: var(--accent-bg); }
+    .conflict-table tbody tr:last-child td { border-bottom: 0; }
+    .conflict-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--bg-sidebar);
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+    .conflict-table .conflict-field {
+      width: 112px;
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+    .conflict-version-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .conflict-version-option input { margin-top: 2px; }
+    .conflict-version-copy {
+      display: block;
+      min-width: 0;
+      flex: 1;
+    }
+    .conflict-version-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .conflict-version-selection-icon { visibility: hidden; }
+    .conflict-table th.is-selected .conflict-version-selection-icon { visibility: visible; }
+    .conflict-version-meta {
+      display: block;
+      margin-top: 3px;
+      color: var(--text-tertiary);
+      font-size: 11px;
+      font-weight: 400;
+      word-break: break-all;
+    }
+    .conflict-value {
+      margin: 0;
+      max-height: 150px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-code);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .conflict-no-diff {
+      padding: 18px;
+      color: var(--text-secondary);
+      text-align: center;
+    }
+    #importConflictModal .modal-footer { flex-wrap: wrap; }
+    .conflict-apply-remaining {
+      margin-right: auto;
+      white-space: nowrap;
+    }
+    .conflict-apply-remaining[hidden] { display: none; }
     .modal-list {
       display: flex;
       flex-direction: column;
@@ -1307,6 +1420,9 @@
         <button class="sidebar-tab active" data-mode="capture" id="tabCapture">
           捕获<span class="sidebar-tab-count" id="countCapture">0</span>
         </button>
+        <button class="sidebar-tab" data-mode="emo" id="tabEmo">
+          Emo<span class="sidebar-tab-count" id="countEmo">0</span>
+        </button>
         <button class="sidebar-tab" data-mode="edited" id="tabEdited">
           已编<span class="sidebar-tab-count" id="countEdited">0</span>
         </button>
@@ -1346,13 +1462,33 @@
         <button class="modal-close" id="importModalClose" title="关闭">×</button>
       </div>
       <div class="modal-body">
-        <div class="modal-hint">将 Apifox 中复制的 OpenAPI / Swagger（YAML 或 JSON）粘贴到下方，系统将自动解析接口，并严格按照其数据结构生成 Mock，加入“已编”。</div>
+        <div class="modal-hint">将 OpenAPI / Swagger（YAML 或 JSON）粘贴到下方，系统将解析其中全部接口，并严格按照各自的数据结构生成 Mock，合并加入“已编”。单接口文档同样支持。</div>
         <textarea class="modal-textarea" id="importTextarea" placeholder="在此粘贴 OpenAPI / Swagger 内容..." spellcheck="false"></textarea>
         <div class="modal-status" id="importStatus"></div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" id="importCancelBtn">取消</button>
         <button class="btn btn-primary" id="importConfirmBtn">解析并导入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导入接口与现有版本冲突时的差异选择弹窗 -->
+  <div class="modal-overlay" id="importConflictModal" hidden>
+    <div class="modal modal-lg">
+      <div class="modal-header">
+        <span class="modal-title">发现相同接口</span>
+        <button class="modal-close" id="importConflictModalClose" title="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-hint">“捕获”或“Emo”中已存在相同接口。下方仅展示版本之间的差异，请选择最终保留的版本。</div>
+        <div class="conflict-endpoint" id="importConflictEndpoint"></div>
+        <div class="conflict-table-wrap" id="importConflictContent"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary conflict-apply-remaining" id="importConflictApplyRemainingBtn" hidden>为后续接口都应用此项</button>
+        <button type="button" class="btn btn-secondary" id="importConflictCancelBtn">取消</button>
+        <button type="button" class="btn btn-primary" id="importConflictConfirmBtn">使用所选版本</button>
       </div>
     </div>
   </div>
@@ -1365,7 +1501,7 @@
         <button class="modal-close" id="disableMonitorModalClose" title="关闭">×</button>
       </div>
       <div class="modal-body">
-        <div class="modal-hint">以下接口已被禁止监听，不再捕获、也不在“捕获 / 已编”列表中显示。点击右侧 × 可放开监听。</div>
+        <div class="modal-hint">以下接口已被禁止监听，不再捕获、也不在“捕获 / Emo / 已编”列表中显示。点击右侧 × 可放开监听。</div>
         <div class="modal-list" id="disableMonitorList">
           <!-- dynamic -->
         </div>

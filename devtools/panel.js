@@ -5,11 +5,21 @@ let currentProjectId = null;
 let mockRules = [];
 let requestLog = [];
 let selectedRequest = null; // 捕获列表中选中的请求记录
-let selectedRequestKey = null; // 选中请求的稳定 key（method + ' ' + url），用于轮询场景下保持高亮
-let selectedRuleId = null;  // 已编列表中选中的规则 id
-let listMode = 'capture';   // 'capture' | 'edited'，默认捕获
+let selectedRequestKey = null; // 选中请求的稳定 key（method + ' ' + 无 query/hash 的 url）
+let selectedRuleId = null;  // Emo / 已编列表中选中的规则 id
+let listMode = 'capture';   // 'capture' | 'emo' | 'edited'，默认捕获
+let selectedDataTab = 'response'; // 编辑器当前出参/入参 Tab，重渲染后保持
 let csReady = true; // content script 是否在当前标签页就绪
-let monitorDisabled = []; // 被禁监的接口 key（method + ' ' + url）数组，按项目持久化
+let monitorDisabled = []; // 被禁监的接口 key（method + ' ' + 无 query/hash 的 url）数组
+let dataLoadRevision = 0; // 丢弃晚到的旧 loadData 结果，避免覆盖刚保存的规则
+let editorSessionRevision = 0; // 使旧编辑器的 debounce 回调在重渲染后失效
+let mockRuleSaveQueue = Promise.resolve(); // 串行保存整条规则，防止异步写入互相覆盖
+let editorDraftState = null; // 未保存的 Mock 草稿，用于 Tab/开关重渲染时保留编辑内容
+let importConflictResolver = null; // 导入冲突弹窗当前等待中的选择
+let capturedImportConflictInProgress = false; // 防止轮询捕获并发弹出多个版本选择弹窗
+let capturedConflictChoiceTemplate = null; // “应用到后续”在连续捕获冲突中的版本选择模板
+const selectedConflictRequestKeys = new Set(); // 选择捕获版本后，用稳定接口 key 保留当前面板标识
+const SELECTED_CONFLICT_VERSION_TITLE = '已选择差异版本';
 
 // 扩展上下文失效提示：扩展重载后，已打开的 DevTools 面板仍持有旧的 chrome.runtime，
 // 任何消息都会失败（同步抛 "Extension context invalidated"）。
@@ -39,6 +49,26 @@ function showContextInvalidated(detail) {
   banner.title = '点击关闭';
   banner.addEventListener('click', () => banner.remove());
   document.body.appendChild(banner);
+}
+
+function showPanelNotice(message) {
+  const existing = document.getElementById('panelNotice');
+  if (existing) existing.remove();
+  const notice = document.createElement('div');
+  notice.id = 'panelNotice';
+  notice.textContent = message;
+  Object.assign(notice.style, {
+    position: 'fixed', top: '16px', right: '16px', zIndex: '9998',
+    maxWidth: '440px', padding: '10px 14px',
+    border: '1px solid #86efac', borderRadius: '6px',
+    background: '#f0fdf4', color: '#166534',
+    fontSize: '12px', fontWeight: '600', lineHeight: '1.5',
+    boxShadow: '0 4px 14px rgba(0,0,0,0.14)', cursor: 'pointer',
+  });
+  notice.title = '点击关闭';
+  notice.addEventListener('click', () => notice.remove());
+  document.body.appendChild(notice);
+  setTimeout(() => notice.remove(), 6000);
 }
 
 // 工具函数
@@ -222,6 +252,45 @@ function extractCodeBlock(text) {
   return fence ? fence[1].trim() : text.trim();
 }
 
+// OpenAPI 文档中常见 `description: 请求头 Authorization: Bearer ...` 这类文本。
+// 反引号对 YAML 没有引号语义，第二个 `: ` 会让标准解析器报 mapping indentation。
+// 仅在解析器明确指向该行、且值确实是未加引号的纯文本时自动补引号。
+function quoteInvalidYamlPlainMappingLine(source, lineIndex) {
+  if (!Number.isInteger(lineIndex) || lineIndex < 0) return null;
+  const lines = source.split(/\r?\n/);
+  const line = lines[lineIndex];
+  if (line == null) return null;
+
+  const match = line.match(/^(\s*(?:-\s+)?(?:[A-Za-z_][\w.-]*|'[^']+'|"[^"]+"):\s+)(.*)$/);
+  if (!match) return null;
+  const value = match[2].trim();
+  if (!value || !/:\s/.test(value) || /^["'[{|>!&*]/.test(value)) return null;
+
+  lines[lineIndex] = match[1] + JSON.stringify(value);
+  return lines.join('\n');
+}
+
+function loadOpenApiYaml(text) {
+  let candidate = text;
+  let lastError = null;
+  const repairedLines = new Set();
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      return jsyaml.load(candidate);
+    } catch (err) {
+      lastError = err;
+      const lineIndex = err?.mark?.line;
+      if (!Number.isInteger(lineIndex) || repairedLines.has(lineIndex)) throw err;
+      const repaired = quoteInvalidYamlPlainMappingLine(candidate, lineIndex);
+      if (!repaired || repaired === candidate) throw err;
+      repairedLines.add(lineIndex);
+      candidate = repaired;
+    }
+  }
+  throw lastError;
+}
+
 // 解析 OpenAPI / Swagger 文本（自动识别 JSON 与 YAML，兼容 markdown 包裹）
 function parseOpenApiSpec(text) {
   const trimmed = extractCodeBlock(text || '');
@@ -235,7 +304,7 @@ function parseOpenApiSpec(text) {
   if (typeof jsyaml === 'undefined' || !jsyaml.load) {
     throw new Error('YAML 解析器未加载，无法解析该内容');
   }
-  return jsyaml.load(trimmed);
+  return loadOpenApiYaml(trimmed);
 }
 
 // 解析 $ref（仅支持文档内引用 #/...）
@@ -243,10 +312,15 @@ function resolveRef(spec, ref) {
   if (!ref || typeof ref !== 'string' || ref[0] !== '#') return null;
   let cur = spec;
   for (const seg of ref.slice(1).split('/').filter(Boolean)) {
-    cur = cur?.[seg];
+    const key = decodeURIComponent(seg).replace(/~1/g, '/').replace(/~0/g, '~');
+    cur = cur?.[key];
     if (cur == null) return null;
   }
   return cur;
+}
+
+function resolveOpenApiObject(spec, value) {
+  return value?.$ref ? (resolveRef(spec, value.$ref) || value) : value;
 }
 
 // 拍平 schema：解析 $ref / 合并 allOf / 取 oneOf·anyOf 首项，返回带确定 type 的 schema
@@ -402,40 +476,148 @@ function schemaToMock(spec, schema, fieldName = '') {
   }
 }
 
-// 从 OpenAPI spec 提取首个接口（path + method）
-function extractEndpoint(spec) {
+const IMPORT_HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'head', 'options'];
+
+// 从 OpenAPI / Swagger spec 提取全部接口。单接口文档同样返回长度为 1 的数组。
+function extractEndpoints(spec) {
   if (!spec || !spec.paths) throw new Error('未找到 paths，不是合法的 OpenAPI/Swagger 文档');
-  const HTTP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'head', 'options'];
+  const endpoints = [];
   for (const path of Object.keys(spec.paths)) {
     const pathItem = spec.paths[path];
     if (!pathItem || typeof pathItem !== 'object') continue;
     for (const method of Object.keys(pathItem)) {
-      if (!HTTP_METHODS.includes(method.toLowerCase())) continue;
+      if (!IMPORT_HTTP_METHODS.includes(method.toLowerCase())) continue;
       const operation = pathItem[method];
       if (!operation || typeof operation !== 'object') continue;
-      return { path, method: method.toUpperCase(), operation };
+      endpoints.push({ path, method: method.toUpperCase(), operation, pathItem });
     }
   }
+  if (endpoints.length > 0) return endpoints;
   throw new Error('未找到可导入的接口（paths 内无 HTTP 方法）');
 }
 
-// 取响应体 schema
-function getResponseSchema(spec, operation) {
-  const responses = operation.responses || {};
-  const okKey = Object.keys(responses).find(k => /^(2\d\d|200)$/.test(String(k))) || Object.keys(responses)[0];
-  const resp = responses[okKey];
-  return resp?.content?.['application/json']?.schema || null;
+// 保留原单接口提取入口，供旧调用方继续使用。
+function extractEndpoint(spec) {
+  return extractEndpoints(spec)[0];
 }
 
-// 取请求体 schema
-function getRequestSchema(spec, operation) {
-  return operation.requestBody?.content?.['application/json']?.schema || null;
+function getJsonMediaTypeContent(content) {
+  if (!content || typeof content !== 'object') return null;
+  const mediaType = Object.keys(content).find(type => {
+    const normalized = type.toLowerCase().split(';', 1)[0].trim();
+    return normalized === 'application/json' || normalized.endsWith('+json');
+  });
+  return mediaType ? content[mediaType] : null;
+}
+
+function explicitExample(spec, value) {
+  if (!value || typeof value !== 'object') return { found: false, value: undefined };
+  if (Object.prototype.hasOwnProperty.call(value, 'example')) {
+    return { found: true, value: value.example };
+  }
+  if (!value.examples || typeof value.examples !== 'object') {
+    return { found: false, value: undefined };
+  }
+
+  const firstExample = value.examples[Object.keys(value.examples)[0]];
+  const resolved = resolveOpenApiObject(spec, firstExample);
+  if (resolved && typeof resolved === 'object' && Object.prototype.hasOwnProperty.call(resolved, 'value')) {
+    return { found: true, value: resolved.value };
+  }
+  return { found: false, value: undefined };
+}
+
+// 取响应体 schema 与实际选中的 2xx 状态码，兼容 OpenAPI 3.x 与 Swagger 2.0。
+function getResponseDefinition(spec, operation) {
+  const responses = operation.responses || {};
+  const responseKeys = Object.keys(responses);
+  const okKey = responseKeys.find(key => /^2\d\d$/.test(String(key)))
+    || responseKeys.find(key => /^2xx$/i.test(String(key)))
+    || responseKeys[0];
+  const response = resolveOpenApiObject(spec, responses[okKey]);
+  const media = getJsonMediaTypeContent(response?.content);
+  let example = explicitExample(spec, media);
+  if (!example.found && response && Object.prototype.hasOwnProperty.call(response, 'example')) {
+    example = { found: true, value: response.example };
+  }
+  if (!example.found && response?.examples && typeof response.examples === 'object') {
+    const swaggerExampleKey = Object.keys(response.examples).find(type => {
+      const normalized = type.toLowerCase().split(';', 1)[0].trim();
+      return normalized === 'application/json' || normalized.endsWith('+json');
+    });
+    if (swaggerExampleKey) example = { found: true, value: response.examples[swaggerExampleKey] };
+  }
+  const numericStatus = Number(okKey);
+  return {
+    schema: media?.schema || response?.schema || null,
+    example: example.value,
+    hasExample: example.found,
+    status: Number.isInteger(numericStatus) && numericStatus >= 100 && numericStatus <= 599
+      ? numericStatus
+      : 200,
+  };
+}
+
+function getResponseSchema(spec, operation) {
+  return getResponseDefinition(spec, operation).schema;
+}
+
+// 取入参定义：优先请求体；没有请求体时将 query 参数组装成对象。
+function getRequestDefinition(spec, operation, pathItem = {}) {
+  const requestBody = resolveOpenApiObject(spec, operation.requestBody);
+  const media = getJsonMediaTypeContent(requestBody?.content);
+  if (media?.schema) {
+    let example = explicitExample(spec, media);
+    if (!example.found) example = explicitExample(spec, requestBody);
+    return { schema: media.schema, example: example.value, hasExample: example.found };
+  }
+
+  const parameters = [...(pathItem.parameters || []), ...(operation.parameters || [])];
+  for (const parameterRef of parameters) {
+    const parameter = resolveOpenApiObject(spec, parameterRef);
+    if (parameter?.in === 'body' && parameter.schema) {
+      const example = explicitExample(spec, parameter);
+      return { schema: parameter.schema, example: example.value, hasExample: example.found };
+    }
+  }
+
+  const queryParameters = new Map();
+  parameters.forEach((parameterRef) => {
+    const parameter = resolveOpenApiObject(spec, parameterRef);
+    if (parameter?.in === 'query' && parameter.name) queryParameters.set(parameter.name, parameter);
+  });
+  if (queryParameters.size > 0) {
+    const properties = {};
+    const example = {};
+    queryParameters.forEach((parameter, name) => {
+      const schema = parameter.schema || {
+        type: parameter.type,
+        format: parameter.format,
+        enum: parameter.enum,
+        default: parameter.default,
+      };
+      properties[name] = schema;
+      const parameterExample = explicitExample(spec, parameter);
+      example[name] = parameterExample.found
+        ? parameterExample.value
+        : schemaToMock(spec, schema, name);
+    });
+    return { schema: { type: 'object', properties }, example, hasExample: true };
+  }
+  return { schema: null, example: undefined, hasExample: false };
+}
+
+function getRequestSchema(spec, operation, pathItem = {}) {
+  return getRequestDefinition(spec, operation, pathItem).schema;
 }
 
 // 拼接完整 URL（servers[0].url + path）
 function buildEndpointUrl(spec, path) {
   const server = (spec.servers && spec.servers[0] && spec.servers[0].url) || '';
-  return server.replace(/\/+$/, '') + path;
+  const swaggerBasePath = !server && spec.swagger
+    ? String(spec.basePath || '').replace(/\/+$/, '')
+    : '';
+  return (server || swaggerBasePath).replace(/\/+$/, '') + '/' + String(path).replace(/^\/+/, '');
 }
 
 // 导入接口的 URL：仅取 spec 的路径部分（含上下文路径，如 /ai-reading/），不携带域名。
@@ -445,39 +627,41 @@ function buildImportUrl(spec, path) {
   try {
     return new URL(fullSpecUrl).pathname;
   } catch (_) {
-    return path; // spec 无 server（相对路径）时，直接用 path
+    return fullSpecUrl.startsWith('/') ? fullSpecUrl : path;
   }
 }
 
-// 解析 + 生成 + 构造 Mock 规则
-function buildRuleFromSpec(text) {
-  const spec = parseOpenApiSpec(text);
-  const { path, method, operation } = extractEndpoint(spec);
+// 为单个 operation 生成 Mock 规则。
+function buildRuleFromEndpoint(spec, endpoint, id) {
+  const { path, method, operation, pathItem } = endpoint;
   const url = buildImportUrl(spec, path); // 仅路径，不携带域名
 
-  const responseSchema = getResponseSchema(spec, operation);
-  const requestSchema = getRequestSchema(spec, operation);
+  const response = getResponseDefinition(spec, operation);
+  const responseSchema = response.schema;
+  const request = getRequestDefinition(spec, operation, pathItem);
   if (!responseSchema) {
-    throw new Error(`接口 ${method} ${path} 未定义 200 响应体，无法生成 Mock`);
+    throw new Error(`接口 ${method} ${path} 未定义 JSON 响应体，无法生成 Mock`);
   }
 
-  const responseMock = schemaToMock(spec, responseSchema);
-  const requestMock = requestSchema ? schemaToMock(spec, requestSchema) : null;
+  const responseMock = response.hasExample ? response.example : schemaToMock(spec, responseSchema);
+  const requestMock = request.hasExample
+    ? request.example
+    : (request.schema ? schemaToMock(spec, request.schema) : null);
 
   const now = Date.now();
   return {
-    id: now.toString(),
+    id: id || now.toString(),
     url,
     method,
     mockMode: 'response',
     mockData: responseMock,
     enabled: true,
     imported: true,
-    status: 200,
+    status: response.status,
     createdAt: now,
     updatedAt: now,
     captured: {
-      status: 200,
+      status: response.status,
       requestPayload: requestMock,
       responsePayload: responseMock,
       timestamp: now,
@@ -485,6 +669,34 @@ function buildRuleFromSpec(text) {
       summary: operation.summary || '',
     },
   };
+}
+
+// 解析整份文档并生成全部规则。先完成所有规则校验，再交给导入流程统一写入。
+function buildRulesFromSpec(text) {
+  const spec = parseOpenApiSpec(text);
+  const endpoints = extractEndpoints(spec);
+  const batchId = Date.now();
+  const rules = [];
+  const errors = [];
+
+  endpoints.forEach((endpoint, index) => {
+    try {
+      rules.push(buildRuleFromEndpoint(spec, endpoint, `${batchId}-${index}`));
+    } catch (err) {
+      errors.push(err.message || String(err));
+    }
+  });
+
+  if (errors.length === 1) throw new Error(errors[0]);
+  if (errors.length > 1) {
+    throw new Error(`有 ${errors.length} 个接口无法导入：${errors.join('；')}`);
+  }
+  return rules;
+}
+
+// 保留单接口 API 的返回结构；多接口导入使用 buildRulesFromSpec。
+function buildRuleFromSpec(text) {
+  return buildRulesFromSpec(text)[0];
 }
 
 // ── 导入弹窗交互 ──
@@ -512,15 +724,413 @@ function setImportStatus(msg, kind) {
   el.className = 'modal-status' + (kind ? ' ' + kind : '');
 }
 
+function interfacePageOrigin(endpoint, fallbackEndpoint) {
+  return endpoint?.pageOrigin || endpoint?.captured?.pageOrigin ||
+    fallbackEndpoint?.pageOrigin || fallbackEndpoint?.captured?.pageOrigin;
+}
+
+// 相同接口只认“相同请求方式 + 相同 URL（去除 Query Parameters）”。
+// 导入规则只存相对路径时，必须有捕获记录携带的 pageOrigin 才能还原为完整 URL；
+// 绝对 URL 始终保留 origin/端口参与比较，不能只按 pathname 判断。
+function normalizedInterfaceUrl(endpoint, fallbackEndpoint) {
+  const raw = endpointUrl(endpoint?.url);
+  if (!raw) return '';
+  try {
+    return new URL(raw).href;
+  } catch (_) {
+    const pageOrigin = interfacePageOrigin(endpoint, fallbackEndpoint);
+    if (!pageOrigin) return `relative:${raw}`;
+    try {
+      return new URL(raw, pageOrigin).href;
+    } catch (_) {
+      return `relative:${raw}`;
+    }
+  }
+}
+
+function sameInterface(left, right) {
+  if (!left || !right) return false;
+  return String(left.method || '').toUpperCase() === String(right.method || '').toUpperCase() &&
+    normalizedInterfaceUrl(left, right) === normalizedInterfaceUrl(right, left);
+}
+
+function findImportConflicts(importedRule) {
+  const conflicts = [];
+  const captured = requestLog.find(request => sameInterface(importedRule, request));
+  if (captured) {
+    conflicts.push({ choice: 'capture', mode: 'capture', label: '捕获', request: captured });
+  }
+
+  const emoRules = (mockRules || []).filter(rule => isCaptureRule(rule) && sameInterface(importedRule, rule));
+  emoRules.forEach((rule, index) => {
+    conflicts.push({
+      choice: `emo:${rule.id}`,
+      mode: 'emo',
+      label: emoRules.length > 1 ? `Emo ${index + 1}` : 'Emo',
+      rule,
+    });
+  });
+  return conflicts;
+}
+
+function buildConflictVersion(candidate) {
+  if (candidate.mode === 'edited') {
+    const rule = candidate.rule;
+    const captured = rule.captured || {};
+    const parts = getMockParts(rule);
+    return {
+      ...candidate,
+      dataSource: '导入文档',
+      method: rule.method,
+      url: displayInterfaceUrl(rule.url),
+      summary: captured.summary || '',
+      status: captured.status ?? parts.responseMock.status ?? rule.status ?? 200,
+      requestPayload: hasOwn(captured, 'requestPayload')
+        ? captured.requestPayload
+        : (parts.requestMock.hasMockData ? parts.requestMock.mockData : undefined),
+      responsePayload: hasOwn(captured, 'responsePayload')
+        ? captured.responsePayload
+        : (parts.responseMock.hasMockData ? parts.responseMock.mockData : undefined),
+      requestMockData: parts.requestMock.hasMockData ? parts.requestMock.mockData : undefined,
+      responseMockData: parts.responseMock.hasMockData ? parts.responseMock.mockData : undefined,
+      interceptState: isRuleMocked(rule) ? '已开启' : '未开启',
+    };
+  }
+
+  if (candidate.mode === 'capture') {
+    const request = candidate.request;
+    const snapshot = getOriginalRequestSnapshot(request);
+    return {
+      ...candidate,
+      dataSource: '原始捕获',
+      method: snapshot?.method || request.method,
+      url: displayInterfaceUrl(snapshot?.url || request.url),
+      summary: '',
+      status: snapshot?.status,
+      requestPayload: snapshot?.requestPayload,
+      responsePayload: snapshot?.responsePayload,
+      requestMockData: undefined,
+      responseMockData: undefined,
+      interceptState: request.mocked
+        ? (snapshot ? '已命中 Mock（展示原始快照）' : '已命中 Mock（无原始快照）')
+        : '实时捕获',
+    };
+  }
+
+  const rule = candidate.rule;
+  const captured = rule.captured || {};
+  const parts = getMockParts(rule);
+  return {
+    ...candidate,
+    dataSource: 'Emo 保存快照',
+    method: rule.method,
+    url: displayInterfaceUrl(rule.url),
+    summary: captured.summary || '',
+    status: captured.status,
+    requestPayload: captured.requestPayload,
+    responsePayload: captured.responsePayload,
+    requestMockData: parts.requestMock.hasMockData ? parts.requestMock.mockData : undefined,
+    responseMockData: parts.responseMock.hasMockData ? parts.responseMock.mockData : undefined,
+    interceptState: isRuleMocked(rule) ? '已开启' : '未开启',
+  };
+}
+
+function conflictValueKey(value) {
+  if (value === undefined) return '__undefined__';
+  try {
+    return JSON.stringify(value);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function formatConflictValue(value) {
+  if (value === undefined) return '未提供';
+  if (value === '') return '空';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_) {
+    return String(value);
+  }
+}
+
+function hideImportConflictModal(selection = null) {
+  const modal = document.getElementById('importConflictModal');
+  if (modal) modal.setAttribute('hidden', '');
+  const resolve = importConflictResolver;
+  importConflictResolver = null;
+  if (resolve) resolve(selection);
+}
+
+function defaultConflictChoice(candidates) {
+  return candidates.find(candidate => candidate.mode === 'edited')?.choice || candidates[0]?.choice || null;
+}
+
+function buildConflictCandidates(importedRule, conflicts) {
+  return [
+    { choice: 'edited', mode: 'edited', label: '已编', rule: importedRule },
+    ...conflicts,
+  ];
+}
+
+// “应用到后续”按来源类型与同来源候选序号匹配。Emo 规则的 id 每个接口都不同，
+// 因而不能直接复用 choice 字符串；保留序号可正确对应 Emo 1 / Emo 2。
+function createConflictChoiceTemplate(candidates, choice) {
+  const selected = candidates.find(candidate => candidate.choice === choice);
+  if (!selected) return null;
+  const sameMode = candidates.filter(candidate => candidate.mode === selected.mode);
+  return {
+    mode: selected.mode,
+    modeIndex: sameMode.findIndex(candidate => candidate.choice === selected.choice),
+  };
+}
+
+function findConflictChoiceByTemplate(candidates, template) {
+  if (!template) return null;
+  return candidates.filter(candidate => candidate.mode === template.mode)[template.modeIndex]?.choice || null;
+}
+
+function withSelectedConflictVersion(rule, source) {
+  if (!rule) return null;
+  return {
+    ...rule,
+    conflictVersionSelected: true,
+    conflictVersionSource: source,
+  };
+}
+
+function selectedConflictVersionIcon(extraClass = '') {
+  const classes = ['selected-conflict-version-icon', extraClass].filter(Boolean).join(' ');
+  return `<span class="${classes}" role="img" aria-label="${SELECTED_CONFLICT_VERSION_TITLE}" title="${SELECTED_CONFLICT_VERSION_TITLE}">✓</span>`;
+}
+
+function showImportConflictModal(importedRule, conflicts, { remainingConflictCount = 0 } = {}) {
+  const modal = document.getElementById('importConflictModal');
+  const endpoint = document.getElementById('importConflictEndpoint');
+  const content = document.getElementById('importConflictContent');
+  const confirmBtn = document.getElementById('importConflictConfirmBtn');
+  const applyRemainingBtn = document.getElementById('importConflictApplyRemainingBtn');
+  if (!modal || !endpoint || !content || !confirmBtn || !applyRemainingBtn) return Promise.resolve(null);
+
+  const candidates = buildConflictCandidates(importedRule, conflicts).map(buildConflictVersion);
+  let selectedChoice = defaultConflictChoice(candidates);
+  const fields = [
+    { key: 'dataSource', label: '数据来源' },
+    { key: 'method', label: 'Method' },
+    { key: 'url', label: 'URL' },
+    { key: 'summary', label: '接口摘要' },
+    { key: 'status', label: 'HTTP 状态' },
+    { key: 'requestPayload', label: '原始入参' },
+    { key: 'responsePayload', label: '原始出参' },
+    { key: 'requestMockData', label: 'Mock 入参' },
+    { key: 'responseMockData', label: 'Mock 出参' },
+    { key: 'interceptState', label: '拦截状态' },
+  ];
+  const differences = fields.filter(field =>
+    new Set(candidates.map(candidate => conflictValueKey(candidate[field.key]))).size > 1
+  );
+
+  endpoint.textContent = `${importedRule.method} ${displayInterfaceUrl(importedRule.url)}`;
+  const header = candidates.map((candidate, index) => `
+    <th data-conflict-index="${index}">
+      <label class="conflict-version-option">
+        <input type="radio" name="importConflictChoice" value="${escapeHtml(candidate.choice)}" data-index="${index}"${candidate.choice === selectedChoice ? ' checked' : ''}>
+        <span class="conflict-version-copy">
+          <span class="conflict-version-label">${escapeHtml(candidate.label)}${selectedConflictVersionIcon('conflict-version-selection-icon')}</span>
+          <span class="conflict-version-meta">${escapeHtml(candidate.method)} ${escapeHtml(candidate.url)}</span>
+        </span>
+      </label>
+    </th>
+  `).join('');
+  const rows = differences.map(field => `
+    <tr>
+      <td class="conflict-field">${escapeHtml(field.label)}</td>
+      ${candidates.map((candidate, index) => `<td data-conflict-index="${index}"><pre class="conflict-value">${escapeHtml(formatConflictValue(candidate[field.key]))}</pre></td>`).join('')}
+    </tr>
+  `).join('');
+
+  content.innerHTML = `
+    <table class="conflict-table">
+      <thead><tr><th class="conflict-field">差异项</th>${header}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="${candidates.length + 1}" class="conflict-no-diff">接口内容一致，请选择要保留的归属版本。</td></tr>`}</tbody>
+    </table>
+  `;
+  const inputs = [...content.querySelectorAll('input[name="importConflictChoice"]')];
+  const selectCandidate = (index) => {
+    const input = inputs[index];
+    const candidate = candidates[index];
+    if (!input || !candidate) return;
+    selectedChoice = candidate.choice;
+    inputs.forEach((item, itemIndex) => { item.checked = itemIndex === index; });
+    content.querySelectorAll('[data-conflict-index]').forEach(cell => {
+      cell.classList.toggle('is-selected', Number(cell.dataset.conflictIndex) === index);
+    });
+    confirmBtn.disabled = false;
+    confirmBtn.removeAttribute('disabled');
+  };
+  // 候选顺序固定以“已编”为首列，弹窗打开时默认保留导入版本。
+  selectCandidate(candidates.findIndex(candidate => candidate.choice === selectedChoice));
+  applyRemainingBtn.hidden = remainingConflictCount < 1;
+  applyRemainingBtn.textContent = '为后续接口都应用此项';
+  content.onclick = (event) => {
+    const cell = event.target.closest('[data-conflict-index]');
+    if (!cell || !content.contains(cell)) return;
+    selectCandidate(Number(cell.dataset.conflictIndex));
+  };
+  content.onchange = (event) => {
+    const input = event.target.closest('input[data-index]');
+    if (input) selectCandidate(Number(input.dataset.index));
+  };
+  // 每次打开弹窗时直接绑定本次确认动作，避免依赖 init 的事件绑定时序。
+  confirmBtn.onclick = () => {
+    if (!selectedChoice) return;
+    confirmBtn.disabled = true;
+    hideImportConflictModal({ choice: selectedChoice, applyToRemaining: false });
+  };
+  applyRemainingBtn.onclick = () => {
+    if (!selectedChoice) return;
+    applyRemainingBtn.disabled = true;
+    confirmBtn.disabled = true;
+    hideImportConflictModal({ choice: selectedChoice, applyToRemaining: true });
+  };
+  applyRemainingBtn.disabled = false;
+  modal.removeAttribute('hidden');
+
+  return new Promise(resolve => {
+    importConflictResolver = resolve;
+  });
+}
+
+function activateListMode(mode) {
+  listMode = mode;
+  document.getElementById('tabCapture').classList.toggle('active', mode === 'capture');
+  document.getElementById('tabEmo').classList.toggle('active', mode === 'emo');
+  document.getElementById('tabEdited').classList.toggle('active', mode === 'edited');
+}
+
+function ruleWithConflictOrigin(rule, conflicts) {
+  const pageOrigin = conflicts.find(conflict => conflict.mode === 'capture')?.request?.pageOrigin ||
+    conflicts.find(conflict => conflict.mode === 'emo')?.rule?.captured?.pageOrigin;
+  if (!pageOrigin) return rule;
+  return { ...rule, captured: { ...(rule.captured || {}), pageOrigin } };
+}
+
+async function applyImportChoice(rule, conflicts, choice, existingImported = false) {
+  const selectedConflict = conflicts.find(conflict => conflict.choice === choice) || null;
+  const selectedMode = choice === 'edited' ? 'edited' : selectedConflict?.mode;
+  const keepEmoRuleId = selectedConflict?.mode === 'emo' ? selectedConflict.rule.id : null;
+  const removeRuleIds = conflicts
+    .filter(conflict => conflict.mode === 'emo' && conflict.rule.id !== keepEmoRuleId)
+    .map(conflict => conflict.rule.id);
+  if (existingImported && choice !== 'edited') removeRuleIds.push(rule.id);
+  const selectedRule = choice === 'edited'
+    ? withSelectedConflictVersion({
+        ...ruleWithConflictOrigin(rule, conflicts),
+        listSource: 'edited',
+        captureConflictResolved: true,
+      }, selectedMode)
+    : (selectedConflict?.mode === 'emo'
+        ? withSelectedConflictVersion(selectedConflict.rule, selectedMode)
+        : null);
+
+  const res = await sendMessage({
+    type: 'RESOLVE_IMPORT_CONFLICT',
+    selectedRule,
+    removeRuleIds,
+    tabId,
+  });
+  if (!res.ok) throw new Error(res.error || '保存版本选择失败');
+
+  if (selectedConflict?.mode === 'capture') {
+    selectedConflictRequestKeys.add(requestKeyOf(selectedConflict.request));
+  }
+
+  if (choice === 'edited') {
+    activateListMode('edited');
+    await loadData();
+    selectedRuleId = rule.id;
+    selectedRequest = null;
+    selectedRequestKey = null;
+  } else if (selectedConflict?.mode === 'emo') {
+    activateListMode('emo');
+    await loadData();
+    selectedRuleId = selectedConflict.rule.id;
+    selectedRequest = null;
+    selectedRequestKey = null;
+  } else {
+    activateListMode('capture');
+    await loadData();
+    selectedRequest = selectedConflict?.request || null;
+    selectedRequestKey = requestKeyOf(selectedRequest);
+    selectedRuleId = null;
+    showPanelNotice('已保留捕获版本；点击保存后才会存入 Emo。');
+  }
+
+  selectedDataTab = 'response';
+  editorDraftState = null;
+  renderList();
+  renderEditor();
+}
+
+function findCapturedImportConflicts() {
+  return (mockRules || []).flatMap(rule => {
+    const imported = rule?.imported === true || rule?.captured?.source === 'imported';
+    if (!imported || rule?.captureConflictResolved === true || isCaptureRule(rule)) return [];
+    if (!requestLog.some(request => sameInterface(rule, request))) return [];
+    const conflicts = findImportConflicts(rule);
+    return conflicts.length > 0 ? [{ rule, conflicts }] : [];
+  });
+}
+
+async function maybeShowCapturedImportConflict() {
+  if (capturedImportConflictInProgress || importConflictResolver) return;
+  const pendingConflicts = findCapturedImportConflicts();
+  const pending = pendingConflicts[0];
+  if (!pending) {
+    capturedConflictChoiceTemplate = null;
+    return;
+  }
+
+  capturedImportConflictInProgress = true;
+  let resolved = false;
+  try {
+    const candidates = buildConflictCandidates(pending.rule, pending.conflicts);
+    let choice = findConflictChoiceByTemplate(candidates, capturedConflictChoiceTemplate);
+    if (!choice) {
+      const selection = await showImportConflictModal(pending.rule, pending.conflicts, {
+        remainingConflictCount: pendingConflicts.length - 1,
+      });
+      if (!selection) {
+        capturedConflictChoiceTemplate = null;
+        return;
+      }
+      choice = selection.choice;
+      if (selection.applyToRemaining) {
+        capturedConflictChoiceTemplate = createConflictChoiceTemplate(candidates, choice);
+      }
+    }
+    await applyImportChoice(pending.rule, pending.conflicts, choice, true);
+    resolved = true;
+  } catch (err) {
+    capturedConflictChoiceTemplate = null;
+    window.alert('处理接口版本冲突失败: ' + (err.message || 'unknown'));
+  } finally {
+    capturedImportConflictInProgress = false;
+    // 同一批捕获可能命中多个已编接口；当前项完成后继续处理下一项。
+    if (resolved) setTimeout(() => { void maybeShowCapturedImportConflict(); }, 0);
+  }
+}
+
 async function handleImportConfirm() {
   const ta = document.getElementById('importTextarea');
   const confirmBtn = document.getElementById('importConfirmBtn');
   const text = ta?.value || '';
   setImportStatus('解析中…', '');
 
-  let rule;
+  let rules;
   try {
-    rule = buildRuleFromSpec(text);
+    rules = buildRulesFromSpec(text);
   } catch (err) {
     setImportStatus('解析失败：' + err.message, 'err');
     return;
@@ -528,23 +1138,112 @@ async function handleImportConfirm() {
 
   confirmBtn.disabled = true;
   try {
-    const res = await sendMessage({ type: 'ADD_MOCK_RULE', rule, tabId });
+    // 以提交时的最新捕获与规则为准，避免弹窗打开期间新请求造成漏判。
+    await loadData({ checkCapturedConflicts: false });
+
+    // 先收集整批冲突选择，用户取消时不会留下已经写入的半批规则。
+    const conflictEntries = rules.map(rule => ({ rule, conflicts: findImportConflicts(rule) }));
+    const plans = [];
+    let choiceTemplate = null;
+    for (let index = 0; index < conflictEntries.length; index++) {
+      const { rule, conflicts } = conflictEntries[index];
+      let choice = 'edited';
+      if (conflicts.length > 0) {
+        const candidates = buildConflictCandidates(rule, conflicts);
+        choice = findConflictChoiceByTemplate(candidates, choiceTemplate);
+        if (!choice) {
+          setImportStatus(
+            `已解析 ${rules.length} 个接口，正在处理冲突 ${index + 1}/${rules.length}：${rule.method} ${displayInterfaceUrl(rule.url)}`,
+            '',
+          );
+          const remainingConflictCount = conflictEntries
+            .slice(index + 1)
+            .filter(entry => entry.conflicts.length > 0)
+            .length;
+          const selection = await showImportConflictModal(rule, conflicts, { remainingConflictCount });
+          if (!selection) {
+            setImportStatus('已取消导入，本批接口均未写入。', '');
+            return;
+          }
+          choice = selection.choice;
+          if (selection.applyToRemaining) {
+            choiceTemplate = createConflictChoiceTemplate(candidates, choice);
+          }
+        }
+      }
+      plans.push({ rule, conflicts, choice });
+    }
+
+    const selectedRules = new Map();
+    const removeRuleIds = new Set();
+    const capturedConflictKeys = new Set();
+    plans.forEach(({ rule, conflicts, choice }) => {
+      const selectedConflict = conflicts.find(conflict => conflict.choice === choice) || null;
+      const keepEmoRuleId = selectedConflict?.mode === 'emo' ? selectedConflict.rule.id : null;
+      conflicts.forEach(conflict => {
+        if (conflict.mode === 'emo' && conflict.rule.id !== keepEmoRuleId) {
+          removeRuleIds.add(conflict.rule.id);
+        }
+      });
+      if (choice === 'edited') {
+        let selectedRule = { ...ruleWithConflictOrigin(rule, conflicts), listSource: 'edited' };
+        if (conflicts.length > 0) {
+          selectedRule.captureConflictResolved = true;
+          selectedRule = withSelectedConflictVersion(selectedRule, 'edited');
+        }
+        selectedRules.set(String(selectedRule.id), selectedRule);
+      } else if (selectedConflict?.mode === 'emo') {
+        const selectedRule = withSelectedConflictVersion(selectedConflict.rule, 'emo');
+        selectedRules.set(String(selectedRule.id), selectedRule);
+      } else if (selectedConflict?.mode === 'capture') {
+        capturedConflictKeys.add(requestKeyOf(selectedConflict.request));
+      }
+    });
+
+    setImportStatus(`正在导入 ${rules.length} 个接口…`, '');
+    const res = await sendMessage({
+      type: 'RESOLVE_IMPORT_CONFLICT',
+      selectedRules: [...selectedRules.values()],
+      removeRuleIds: [...removeRuleIds],
+      tabId,
+    });
     if (!res.ok) throw new Error(res.error || '保存失败');
 
-    // 切换到“已编”并选中刚导入的规则
-    listMode = 'edited';
-    document.getElementById('tabCapture').classList.remove('active');
-    document.getElementById('tabEdited').classList.add('active');
-    const ta2 = document.getElementById('toolbarActions');
-    if (ta2) ta2.setAttribute('hidden', '');
-
-    await loadData();
-    selectedRuleId = rule.id;
-    selectedRequest = null;
-    selectedRequestKey = null;
+    capturedConflictKeys.forEach(key => selectedConflictRequestKeys.add(key));
+    await loadData({ checkCapturedConflicts: false });
+    const lastEditedPlan = [...plans].reverse().find(plan => plan.choice === 'edited');
+    if (lastEditedPlan) {
+      activateListMode('edited');
+      selectedRuleId = lastEditedPlan.rule.id;
+      selectedRequest = null;
+      selectedRequestKey = null;
+    } else {
+      const lastPlan = plans[plans.length - 1];
+      const selectedConflict = lastPlan.conflicts.find(conflict => conflict.choice === lastPlan.choice);
+      if (selectedConflict?.mode === 'emo') {
+        activateListMode('emo');
+        selectedRuleId = selectedConflict.rule.id;
+        selectedRequest = null;
+        selectedRequestKey = null;
+      } else {
+        activateListMode('capture');
+        selectedRequest = selectedConflict?.request || null;
+        selectedRequestKey = requestKeyOf(selectedRequest);
+        selectedRuleId = null;
+      }
+    }
+    selectedDataTab = 'response';
+    editorDraftState = null;
     renderList();
     renderEditor();
-
+    const capturedChoiceCount = plans.filter(plan => plan.choice === 'capture').length;
+    if (capturedChoiceCount > 0) {
+      showPanelNotice(
+        capturedChoiceCount === 1
+          ? '已保留捕获版本；点击保存后才会存入 Emo。'
+          : `已保留 ${capturedChoiceCount} 个捕获版本；点击各接口的保存按钮后才会存入 Emo。`,
+      );
+    }
     hideImportModal();
   } catch (err) {
     setImportStatus('导入失败：' + err.message, 'err');
@@ -593,7 +1292,7 @@ function renderDisableMonitorList() {
       <div class="request-item" data-key="${escapeHtml(key)}">
         <div class="request-row">
           <span class="request-method method-${escapeHtml(method)}">${escapeHtml(method)}</span>
-          <span class="request-url" title="${escapeHtml(url)}">${escapeHtml(url)}</span>
+          <span class="request-url" title="${escapeHtml(displayInterfaceUrl(url))}">${escapeHtml(displayInterfaceUrl(url))}</span>
           <button class="request-item-delete" data-key="${escapeHtml(key)}" title="放开监听">×</button>
         </div>
       </div>
@@ -638,13 +1337,14 @@ async function init() {
     loadData();
   });
 
-  // 绑定侧栏 tab 切换：捕获 / 已编
+  // 绑定侧栏 tab 切换：捕获 / Emo / 已编
   document.getElementById('tabCapture').addEventListener('click', () => switchListMode('capture'));
+  document.getElementById('tabEmo').addEventListener('click', () => switchListMode('emo'));
   document.getElementById('tabEdited').addEventListener('click', () => switchListMode('edited'));
 
   // 绑定清空按钮：按当前 tab 语义清空
   //  - 捕获：清空 content script 中的请求记录
-  //  - 已编：清空当前项目所有已保存的 Mock 规则（手动清空，需二次确认）
+  //  - Emo / 已编：分别清空对应来源的持久化规则（需二次确认）
   const clearBtn = document.getElementById('clearBtn');
   if (clearBtn) {
     clearBtn.addEventListener('click', () => handleClear());
@@ -667,8 +1367,21 @@ async function init() {
       if (e.target === importModal) hideImportModal();
     });
   }
+
+  const importConflictModal = document.getElementById('importConflictModal');
+  const importConflictModalClose = document.getElementById('importConflictModalClose');
+  const importConflictCancelBtn = document.getElementById('importConflictCancelBtn');
+  if (importConflictModalClose) importConflictModalClose.addEventListener('click', () => hideImportConflictModal());
+  if (importConflictCancelBtn) importConflictCancelBtn.addEventListener('click', () => hideImportConflictModal());
+  if (importConflictModal) {
+    importConflictModal.addEventListener('click', (e) => {
+      if (e.target === importConflictModal) hideImportConflictModal();
+    });
+  }
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && importModal && !importModal.hasAttribute('hidden')) {
+    if (e.key === 'Escape' && importConflictModal && !importConflictModal.hasAttribute('hidden')) {
+      hideImportConflictModal();
+    } else if (e.key === 'Escape' && importModal && !importModal.hasAttribute('hidden')) {
       hideImportModal();
     }
     if (e.key === 'Escape') {
@@ -696,42 +1409,45 @@ async function init() {
   // 监听来自 content script 的新请求通知
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === 'REQUEST_LOGGED') {
-      // 新请求到达，刷新数据（仅在捕获 tab 下需要重渲染列表）
-      loadData();
+      // 关闭态编辑器是只读的；真实请求回来后同步刷新原始数据回显。
+      loadData().then((applied) => {
+        if (!applied) return;
+        const ctx = buildContext();
+        if (ctx && !isRuleMocked(ctx.existingRule)) renderEditor();
+      });
     }
   });
 }
 
 // 切换侧栏列表模式
-function switchListMode(mode) {
+async function switchListMode(mode) {
   if (mode === listMode) return;
   listMode = mode;
 
   document.getElementById('tabCapture').classList.toggle('active', mode === 'capture');
+  document.getElementById('tabEmo').classList.toggle('active', mode === 'emo');
   document.getElementById('tabEdited').classList.toggle('active', mode === 'edited');
-
-  // 刷新/清空按钮仅在“捕获”tab 下出现
-  const toolbarActions = document.getElementById('toolbarActions');
-  if (toolbarActions) {
-    if (mode === 'capture') {
-      toolbarActions.removeAttribute('hidden');
-    } else {
-      toolbarActions.setAttribute('hidden', '');
-    }
-  }
 
   // 切换 tab 时清除选中，回到空态
   selectedRequest = null;
   selectedRequestKey = null;
   selectedRuleId = null;
-  renderList();
+  selectedDataTab = 'response';
+  editorDraftState = null;
+  const requestList = document.getElementById('requestList');
+  if (requestList) requestList.innerHTML = '<div class="list-empty">刷新中…</div>';
   renderEmptyState();
+  await loadData();
+  // 快速连续切换时，旧 Tab 的异步加载完成后不能覆盖新 Tab 的选中状态。
+  if (mode !== listMode) return;
+  selectFirstVisibleItem();
 }
 
 // 清空操作（按当前 tab 语义）
 async function handleClear() {
   if (listMode === 'capture') {
     await sendMessage({ type: 'CLEAR_REQUEST_LOG', tabId });
+    selectedConflictRequestKeys.clear();
     selectedRequest = null;
     selectedRequestKey = null;
     await loadData();
@@ -739,12 +1455,13 @@ async function handleClear() {
     return;
   }
 
-  // 已编：清空全部已保存 Mock 规则
-  if (!mockRules || mockRules.length === 0) return;
-  if (!window.confirm(`确定清空全部 ${mockRules.length} 条已编 Mock 规则？\n该操作不可恢复，且会立即停止所有拦截。`)) {
+  const rulesToClear = rulesForMode(listMode, false);
+  if (rulesToClear.length === 0) return;
+  const modeLabel = listMode === 'emo' ? 'Emo' : '已编';
+  if (!window.confirm(`确定清空全部 ${rulesToClear.length} 条 ${modeLabel} Mock 规则？\n该操作不可恢复，且会立即停止这些接口的拦截。`)) {
     return;
   }
-  const res = await sendMessage({ type: 'CLEAR_MOCK_RULES', tabId });
+  const res = await sendMessage({ type: 'CLEAR_MOCK_RULES', scope: listMode, tabId });
   if (!res.ok) {
     window.alert('清空失败: ' + (res.error || 'unknown'));
     return;
@@ -754,40 +1471,79 @@ async function handleClear() {
   renderEmptyState();
 }
 
-// 删除单条已编规则
+// 删除单条 Emo / 已编规则，并清理当前页面中该接口的捕获与规则缓存。
 async function handleDeleteRule(ruleId) {
   const rule = mockRules.find(r => r.id === ruleId);
   if (!rule) return;
-  if (!window.confirm(`删除已编规则？\n${rule.method} ${rule.url}`)) return;
+  const modeLabel = listMode === 'emo' ? 'Emo' : '已编';
+  if (!window.confirm(`删除 ${modeLabel} 接口？\n${rule.method} ${displayInterfaceUrl(rule.url)}\n对应的捕获信息与缓存也会一并删除。`)) return;
 
-  const res = await sendMessage({ type: 'DELETE_MOCK_RULE', ruleId, tabId });
+  const res = await sendMessage({
+    type: 'DELETE_MOCK_ENDPOINT',
+    ruleId,
+    tabId,
+    method: rule.method,
+    url: rule.url,
+  });
   if (!res.ok) {
     window.alert('删除失败: ' + (res.error || 'unknown'));
     return;
   }
+  selectedConflictRequestKeys.delete(endpointRequestKey(rule.method, rule.url));
   if (selectedRuleId === ruleId) {
     selectedRuleId = null;
+    editorDraftState = null;
     renderEmptyState();
   }
   await loadData();
 }
 
-async function loadData() {
-  // 获取 Mock 规则（“已编”列表数据源，按项目持久化）
-  const rulesRes = await sendMessage({ type: 'GET_MOCK_RULES', projectId: currentProjectId });
+// 删除单条捕获接口，仅清理实时捕获记录，不影响 Emo / 已编中的持久化规则。
+async function handleDeleteCapturedRequest(requestId) {
+  const request = requestLog.find(r => r.id === requestId);
+  if (!request) return;
+  if (!window.confirm(`删除捕获接口？\n${request.method} ${displayInterfaceUrl(request.url)}\n仅删除捕获记录，不影响 Emo 和已编中的相同接口。`)) return;
+
+  const res = await sendMessage({
+    type: 'DELETE_CAPTURED_REQUEST',
+    tabId,
+    method: request.method,
+    url: request.url,
+  });
+  if (!res.ok) {
+    window.alert('删除失败: ' + (res.error || 'unknown'));
+    return;
+  }
+
+  selectedConflictRequestKeys.delete(requestKeyOf(request));
+
+  if (selectedRequestKey === requestKeyOf(request)) {
+    selectedRequest = null;
+    selectedRequestKey = null;
+    editorDraftState = null;
+    renderEmptyState();
+  }
+  await loadData();
+}
+
+async function loadData({ checkCapturedConflicts = true } = {}) {
+  const revision = ++dataLoadRevision;
+  const [rulesRes, disRes, logRes] = await Promise.all([
+    sendMessage({ type: 'GET_MOCK_RULES', projectId: currentProjectId }),
+    sendMessage({ type: 'GET_MONITOR_DISABLED' }),
+    sendMessage({ type: 'GET_REQUEST_LOG', tabId }),
+  ]);
+
+  // 保存操作或更新的加载已先完成时，旧响应不能再覆盖面板中的新状态。
+  if (revision !== dataLoadRevision) return false;
+
   mockRules = rulesRes.rules || [];
-
-  // 获取禁监接口池（按项目持久化）
-  const disRes = await sendMessage({ type: 'GET_MONITOR_DISABLED' });
   monitorDisabled = Array.isArray(disRes.disabled) ? disRes.disabled : [];
-
-  // 获取接口记录（“捕获”列表数据源，来自 content script 内存）
-  const logRes = await sendMessage({ type: 'GET_REQUEST_LOG', tabId });
   requestLog = logRes.requests || [];
   csReady = logRes.csReady !== false; // 未显式标记为 false 则视为就绪
 
   // 过滤掉禁监接口：已禁监的接口不显示在捕获列表中
-  const disabledSet = new Set(monitorDisabled);
+  const disabledSet = new Set(monitorDisabled.map(normalizeRequestKey));
   if (disabledSet.size > 0) {
     requestLog = requestLog.filter(r => !disabledSet.has(requestKeyOf(r)));
   }
@@ -801,15 +1557,10 @@ async function loadData() {
     if (!latest) selectedRequestKey = null;
   }
 
-  // 更新两个 tab 的计数角标（已编计数仅含用户主动添加的接口，排除捕获态规则与已禁监接口）
+  // 更新三个 tab 的计数角标。Emo 展示从捕获页保存的规则，已编展示导入/手工规则。
   const capEl = document.getElementById('countCapture');
-  const edEl = document.getElementById('countEdited');
   if (capEl) capEl.textContent = requestLog.length;
-  const visibleEdited = mockRules.filter(r =>
-    r.captured?.source !== 'capture' &&
-    !disabledSet.has(r.method + ' ' + r.url)
-  );
-  if (edEl) edEl.textContent = visibleEdited.length;
+  updateRuleCounts();
 
   // 禁监按钮角标
   const disBtn = document.getElementById('disableMonitorBtn');
@@ -822,18 +1573,109 @@ async function loadData() {
   }
 
   renderList();
+  if (checkCapturedConflicts) void maybeShowCapturedImportConflict();
+  return true;
 }
 
 function findRuleForRequest(req) {
   if (!mockRules || !req) return null;
-  return mockRules.find(r => r.url === req.url && r.method === req.method) || null;
+  return mockRules.find(rule => ruleMatchesRequest(rule, req)) || null;
 }
 
-// 接口的稳定 key（method + ' ' + url），与 hook / content script 中的去重 key 一致。
+// 捕获页只能复用已由“保存”创建的 Emo 规则；同接口的已编规则保持独立。
+function findEmoRuleForRequest(req, rules = mockRules) {
+  if (!Array.isArray(rules) || !req) return null;
+  return rules.find(rule => isCaptureRule(rule) && ruleMatchesRequest(rule, req)) || null;
+}
+
+function endpointUrl(url) {
+  return String(url || '').split('#', 1)[0].split('?', 1)[0];
+}
+
+// 仅用于 UI：隐藏协议、域名和端口，保留路径及 Query Parameters。
+// 底层 rule.url / request.url 仍保留完整 URL，供严格接口识别与 Mock 匹配使用。
+function displayInterfaceUrl(url) {
+  const raw = String(url || '').split('#', 1)[0];
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    return parsed.pathname + parsed.search;
+  } catch (_) {
+    if (raw.startsWith('//')) {
+      try {
+        const parsed = new URL(`https:${raw}`);
+        return parsed.pathname + parsed.search;
+      } catch (_) {}
+    }
+    return raw;
+  }
+}
+
+function endpointRequestKey(method, url) {
+  return String(method || '').toUpperCase() + ' ' + endpointUrl(url);
+}
+
+function normalizeRequestKey(key) {
+  const raw = String(key || '');
+  const separator = raw.indexOf(' ');
+  return separator > 0
+    ? endpointRequestKey(raw.slice(0, separator), raw.slice(separator + 1))
+    : raw;
+}
+
+// 与页面 hook 保持一致：真实 method + 同接口 URL / 同源 path / wildcard 命中。
+// pageOrigin 由 hook 随请求记录上报；旧记录没有该字段时不做 path 匹配，避免跨域误命中。
+function ruleMatchesRequest(rule, req) {
+  if (!rule || !req || rule.method !== req.method) return false;
+
+  const ruleUrl = rule.url || '';
+  const requestUrl = req.url || '';
+  if (endpointUrl(ruleUrl) === endpointUrl(requestUrl)) return true;
+
+  if (ruleUrl.startsWith('/') && !/:\/\//.test(ruleUrl)) {
+    try {
+      if (!req.pageOrigin) return false;
+      const parsed = new URL(requestUrl, req.pageOrigin || undefined);
+      if (parsed.origin === req.pageOrigin && parsed.pathname === endpointUrl(ruleUrl)) return true;
+    } catch (_) {}
+  }
+
+  if (!ruleUrl.includes('*')) return false;
+  try {
+    const pattern = ruleUrl.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+    return new RegExp('^' + pattern + '$').test(requestUrl);
+  } catch (_) {
+    return false;
+  }
+}
+
+// 接口的稳定 key（method + ' ' + 无 query/hash 的 url），与 hook / content script 一致。
 // 轮询接口每次捕获会重新生成 id，但 key 不变，故用作禁监与选中判定的唯一标识。
 function requestKeyOf(req) {
   if (!req) return '';
-  return req.key || (req.method + ' ' + req.url);
+  return endpointRequestKey(req.method, req.url);
+}
+
+function isCaptureRule(rule) {
+  return rule?.listSource === 'emo' || rule?.captured?.source === 'capture';
+}
+
+function rulesForMode(mode, excludeDisabled = true) {
+  if (mode !== 'emo' && mode !== 'edited') return [];
+  const disabledSet = excludeDisabled
+    ? new Set(monitorDisabled.map(normalizeRequestKey))
+    : null;
+  return (mockRules || []).filter((rule) => {
+    const belongsToMode = mode === 'emo' ? isCaptureRule(rule) : !isCaptureRule(rule);
+    return belongsToMode && (!disabledSet || !disabledSet.has(endpointRequestKey(rule.method, rule.url)));
+  });
+}
+
+function updateRuleCounts() {
+  const emoEl = document.getElementById('countEmo');
+  const editedEl = document.getElementById('countEdited');
+  if (emoEl) emoEl.textContent = rulesForMode('emo').length;
+  if (editedEl) editedEl.textContent = rulesForMode('edited').length;
 }
 
 // 按当前 listMode 渲染侧栏列表
@@ -843,7 +1685,7 @@ function renderList() {
   if (listMode === 'capture') {
     renderCaptureList(container);
   } else {
-    renderEditedList(container);
+    renderRuleList(container, listMode);
   }
 }
 
@@ -861,19 +1703,24 @@ function renderCaptureList(container) {
 
   const html = requestLog.map(req => {
     const time = new Date(req.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    // 轮询接口每次捕获都会重新生成 id，故按稳定 key（method + ' ' + url）判定高亮
-    const reqKey = req.key || (req.method + ' ' + req.url);
+    // 轮询接口每次捕获都会重新生成 id，按不含请求参数的稳定 key 判定高亮。
+    const reqKey = requestKeyOf(req);
     const isActive = selectedRequestKey === reqKey ? ' active' : '';
     const statusOk = req.status >= 200 && req.status < 400;
     const statusClass = req.status === 0 ? '' : (statusOk ? ' ok' : ' err');
     const rule = findRuleForRequest(req);
     const mocked = isRuleMocked(rule) ? '<span class="mocked-tag">MOCK</span>' : '';
+    const conflictSelected = selectedConflictRequestKeys.has(reqKey)
+      ? selectedConflictVersionIcon()
+      : '';
     return `
       <div class="request-item${isActive}" data-id="${escapeHtml(req.id)}">
         <div class="request-row">
           <span class="request-method method-${escapeHtml(req.method)}">${escapeHtml(req.method)}</span>
-          <span class="request-url" title="${escapeHtml(req.url)}">${escapeHtml(req.url)}</span>
+          <span class="request-url" title="${escapeHtml(displayInterfaceUrl(req.url))}">${escapeHtml(displayInterfaceUrl(req.url))}</span>
+          ${conflictSelected}
           ${mocked}
+          <button class="request-item-delete" data-request-id="${escapeHtml(req.id)}" title="删除该接口">×</button>
         </div>
         <div class="request-meta">
           <span class="status-dot${statusClass}"></span>
@@ -886,23 +1733,22 @@ function renderCaptureList(container) {
 
   container.innerHTML = html;
   bindItemClicks(container, 'capture');
+
+  container.querySelectorAll('.request-item-delete').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleDeleteCapturedRequest(btn.dataset.requestId);
+    });
+  });
 }
 
-function renderEditedList(container) {
-  if (!mockRules || mockRules.length === 0) {
-    container.innerHTML = '<div class="list-empty">暂无已编 Mock<br>保存规则后将持久保留于此</div>';
-    return;
-  }
-
-  // “已编”列表仅展示用户主动添加（导入）的接口：
-  // 排除捕获态规则（captured.source === 'capture'，由捕获 tab 开启 mock 生成）与已禁监接口
-  const disabledSet = new Set(monitorDisabled);
-  const visible = mockRules.filter(r =>
-    r.captured?.source !== 'capture' &&
-    !disabledSet.has(r.method + ' ' + r.url)
-  );
+function renderRuleList(container, mode) {
+  const isEmo = mode === 'emo';
+  const modeLabel = isEmo ? 'Emo' : '已编';
+  const emptyHint = isEmo ? '在捕获页保存接口后将持久保留于此' : '导入接口后将持久保留于此';
+  const visible = rulesForMode(mode);
   if (visible.length === 0) {
-    container.innerHTML = '<div class="list-empty">暂无已编 Mock<br>保存规则后将持久保留于此</div>';
+    container.innerHTML = `<div class="list-empty">暂无${modeLabel} Mock<br>${emptyHint}</div>`;
     return;
   }
 
@@ -912,6 +1758,9 @@ function renderEditedList(container) {
   const html = sorted.map(rule => {
     const isActive = selectedRuleId === rule.id ? ' active' : '';
     const mocked = isRuleMocked(rule) ? '<span class="mocked-tag">MOCK</span>' : '<span class="mocked-tag" style="background:var(--bg-hover);color:var(--text-tertiary)">OFF</span>';
+    const conflictSelected = rule.conflictVersionSelected === true
+      ? selectedConflictVersionIcon()
+      : '';
     const mode = ruleModeLabel(rule);
     const time = rule.updatedAt
       ? new Date(rule.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -920,9 +1769,10 @@ function renderEditedList(container) {
       <div class="request-item${isActive}" data-id="${escapeHtml(rule.id)}">
         <div class="request-row">
           <span class="request-method method-${escapeHtml(rule.method)}">${escapeHtml(rule.method)}</span>
-          <span class="request-url" title="${escapeHtml(rule.url)}">${escapeHtml(rule.url)}</span>
+          <span class="request-url" title="${escapeHtml(displayInterfaceUrl(rule.url))}">${escapeHtml(displayInterfaceUrl(rule.url))}</span>
+          ${conflictSelected}
           ${mocked}
-          <button class="request-item-delete" data-rule-id="${escapeHtml(rule.id)}" title="删除该规则">×</button>
+          <button class="request-item-delete" data-rule-id="${escapeHtml(rule.id)}" title="删除该接口">×</button>
         </div>
         <div class="request-meta">
           <span>${mode}</span>
@@ -934,7 +1784,7 @@ function renderEditedList(container) {
   }).join('');
 
   container.innerHTML = html;
-  bindItemClicks(container, 'edited');
+  bindItemClicks(container, mode);
 
   // 绑定单条删除按钮
   container.querySelectorAll('.request-item-delete').forEach(btn => {
@@ -958,14 +1808,34 @@ function bindItemClicks(container, mode) {
   });
 }
 
+function selectFirstVisibleItem() {
+  if (listMode === 'capture') {
+    const firstRequest = requestLog[0];
+    if (firstRequest) {
+      selectRequest(firstRequest.id);
+      return;
+    }
+  } else {
+    const firstRule = [...rulesForMode(listMode)]
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+    if (firstRule) {
+      selectRule(firstRule.id);
+      return;
+    }
+  }
+  renderEmptyState();
+}
+
 function selectRequest(id) {
   selectedRequest = requestLog.find(r => r.id === id);
   selectedRuleId = null;
   if (!selectedRequest) return;
 
-  // 记录稳定 key：轮询接口每次捕获会重新生成 id，但 key（method+url）不变，
+  // 记录稳定 key：轮询接口每次捕获会重新生成 id，但接口路径 key 不变，
   // 后续 loadData 刷新列表后据此保持高亮，并重新解析到最新记录以同步编辑器。
-  selectedRequestKey = selectedRequest.key || (selectedRequest.method + ' ' + selectedRequest.url);
+  selectedRequestKey = requestKeyOf(selectedRequest);
+  selectedDataTab = 'response';
+  editorDraftState = null;
 
   renderList(); // 更新高亮
   renderEditor();
@@ -976,12 +1846,14 @@ function selectRule(id) {
   selectedRequest = null;
   selectedRequestKey = null;
   if (!mockRules.find(r => r.id === id)) return;
+  selectedDataTab = 'response';
+  editorDraftState = null;
 
   renderList(); // 更新高亮
   renderEditor();
 }
 
-// 构建统一的编辑上下文，屏蔽“捕获请求”与“已编规则”的差异
+// 构建统一的编辑上下文，屏蔽“捕获请求”与“Emo / 已编规则”的差异
 // responsePayload / requestPayload / status 始终为“真实数据”：
 //  - 已编模式：取自 rule.captured 快照（导入时生成或捕获态转存时冻结）。
 //  - 捕获模式：若该接口已存在规则，优先取自规则的 captured 快照——规则在首次开启
@@ -989,42 +1861,84 @@ function selectRule(id) {
 //    responsePayload 变成 mock 数据，快照仍保持原始值，保证关闭拦截时回显真实数据。
 //    无规则时回退到捕获记录（selectedRequest）的实时数据。
 // 编辑器据此在关闭拦截时回显真实数据；开启拦截时改显对应 mock 数据。
+function hasOwn(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function snapshotValue(snapshot, key, fallback) {
+  return hasOwn(snapshot, key) ? snapshot[key] : fallback;
+}
+
+// Mock 请求会替换捕获列表中的最新记录。content script 会把被替换前的真实记录
+// 放进 original；若没有 original，则只有明确标记为非 Mock 的记录才可作为真实数据。
+function getOriginalRequestSnapshot(req) {
+  if (!req) return null;
+  if (!req.mocked) return req;
+  if (req.original && typeof req.original === 'object') return req.original;
+  return null;
+}
+
 function buildContext() {
-  if (listMode === 'edited') {
+  if (listMode !== 'capture') {
     const rule = mockRules.find(r => r.id === selectedRuleId);
     if (!rule) return null;
-    const cap = rule.captured || {};
+    const cap = rule.captured || null;
     return {
-      mode: 'edited',
+      mode: listMode,
       id: rule.id,
       url: rule.url,
       method: rule.method,
-      status: cap.status ?? 0,
-      responsePayload: cap.responsePayload ?? null,
-      requestPayload: cap.requestPayload ?? null,
+      status: snapshotValue(cap, 'status', 0),
+      pageOrigin: snapshotValue(cap, 'pageOrigin', ''),
+      responsePayload: snapshotValue(cap, 'responsePayload', null),
+      requestPayload: snapshotValue(cap, 'requestPayload', null),
+      hasRealSnapshot: !!cap,
+      conflictVersionSelected: rule.conflictVersionSelected === true,
       existingRule: rule,
     };
   }
 
   if (!selectedRequest) return null;
-  const rule = findRuleForRequest(selectedRequest);
-  // 命中规则且规则带有 captured 快照：用快照作为“真实数据”，避免 hook 上报被 mock
-  // 数据覆盖后污染；否则回退到捕获记录的实时数据。
+  const rule = findEmoRuleForRequest(selectedRequest);
   const snap = rule && rule.captured ? rule.captured : null;
+  const original = getOriginalRequestSnapshot(selectedRequest);
   return {
     mode: 'capture',
     id: selectedRequest.id,
     url: selectedRequest.url,
     method: selectedRequest.method,
-    status: snap ? (snap.status ?? selectedRequest.status) : selectedRequest.status,
-    responsePayload: snap ? (snap.responsePayload ?? selectedRequest.responsePayload) : selectedRequest.responsePayload,
-    requestPayload: snap ? (snap.requestPayload ?? selectedRequest.requestPayload) : selectedRequest.requestPayload,
+    pageOrigin: selectedRequest.pageOrigin || '',
+    status: snapshotValue(snap, 'status', snapshotValue(original, 'status', 0)),
+    responsePayload: snapshotValue(snap, 'responsePayload', snapshotValue(original, 'responsePayload', null)),
+    requestPayload: snapshotValue(snap, 'requestPayload', snapshotValue(original, 'requestPayload', null)),
+    hasRealSnapshot: !!snap || !!original,
+    conflictVersionSelected: selectedConflictRequestKeys.has(requestKeyOf(selectedRequest)),
     existingRule: rule,
   };
 }
 
 function formatJson(data) {
   return JSON.stringify(data ?? null, null, 2);
+}
+
+function createEditorDraftState(retainedDraft, draftKey, draftFor) {
+  return retainedDraft || {
+    key: draftKey,
+    drafts: {
+      response: draftFor('response'),
+      request: draftFor('request'),
+    },
+    dirtyTabs: new Set(),
+    headerDirty: false,
+    overrides: {},
+    interceptEnabled: undefined,
+  };
+}
+
+// 关闭态始终即时读取真实数据；开启态读取独立的 Mock 草稿。
+// 此函数只决定展示内容，不修改任一数据源。
+function editorPayloadText(interceptOn, draftState, draftFor, tab) {
+  return interceptOn ? draftState.drafts[tab] : draftFor(tab);
 }
 
 // 常见 HTTP 状态码（Mock 响应状态下拉选项）
@@ -1045,12 +1959,12 @@ const MOCK_STATUS_OPTIONS = [
 
 // 从规则读取双份 Mock 意图 + mock 头部字段，统一兼容旧结构。
 // 返回扁平对象，字段始终存在（缺省补默认），供面板按 interceptOn 选择展示 mock / 真实两套数据。
-//   responseMock: { enabled, mockData, status }；requestMock: { enabled, mockData }
+//   responseMock: { enabled, hasMockData, mockData, status }；requestMock: { enabled, hasMockData, mockData }
 //   mockMethod / mockUrl: mock 的请求方式与地址（仅展示与持久化，不影响 mock-hook 匹配）
 function getMockParts(rule) {
   const base = {
-    responseMock: { enabled: false, mockData: null, status: 200 },
-    requestMock: { enabled: false, mockData: null },
+    responseMock: { enabled: false, hasMockData: false, mockData: null, status: 200 },
+    requestMock: { enabled: false, hasMockData: false, mockData: null },
     mockMethod: null,
     mockUrl: null,
   };
@@ -1062,11 +1976,13 @@ function getMockParts(rule) {
     return {
       responseMock: {
         enabled: !!(rm && rm.enabled),
+        hasMockData: !!(rm && (rm.hasMockData !== undefined ? rm.hasMockData : rm.mockData != null)),
         mockData: rm ? rm.mockData : null,
         status: rm && rm.status != null ? Number(rm.status) : 200,
       },
       requestMock: {
         enabled: !!(qm && qm.enabled),
+        hasMockData: !!(qm && (qm.hasMockData !== undefined ? qm.hasMockData : qm.mockData != null)),
         mockData: qm ? qm.mockData : null,
       },
       mockMethod: rule.mockMethod || null,
@@ -1079,15 +1995,16 @@ function getMockParts(rule) {
   // mock Method/URL 用规则顶层值兜底
   const oldEnabled = rule.enabled !== false;
   const oldData = rule.mockData;
+  const oldHasMockData = rule.hasMockData !== undefined ? !!rule.hasMockData : oldData != null;
   const oldStatus = rule.status != null ? Number(rule.status) : 200;
   const parts = rule.mockMode === 'request'
     ? {
-        responseMock: { enabled: false, mockData: null, status: oldStatus },
-        requestMock: { enabled: oldEnabled, mockData: oldData },
+        responseMock: { enabled: false, hasMockData: false, mockData: null, status: oldStatus },
+        requestMock: { enabled: oldEnabled, hasMockData: oldHasMockData, mockData: oldData },
       }
     : {
-        responseMock: { enabled: oldEnabled, mockData: oldData, status: oldStatus },
-        requestMock: { enabled: false, mockData: null },
+        responseMock: { enabled: oldEnabled, hasMockData: oldHasMockData, mockData: oldData, status: oldStatus },
+        requestMock: { enabled: false, hasMockData: false, mockData: null },
       };
   return { ...parts, mockMethod: rule.method || null, mockUrl: rule.url || null };
 }
@@ -1109,7 +2026,9 @@ function ruleModeLabel(rule) {
 
 // 空态：未选中任何条目时展示
 function renderEmptyState() {
+  editorSessionRevision++;
   const content = document.getElementById('content');
+  const isEmo = listMode === 'emo';
   const isEdited = listMode === 'edited';
   content.innerHTML = `
     <div class="empty-state">
@@ -1120,15 +2039,18 @@ function renderEmptyState() {
           <line x1="10" y1="14" x2="14" y2="14"></line>
         </svg>
       </div>
-      <div class="empty-title">${isEdited ? '已编 Mock' : '暂无选中'}</div>
-      <div class="empty-hint">${isEdited
-        ? '从左侧选择规则进行编辑<br>或保存捕获的接口至此'
+      <div class="empty-title">${isEmo ? 'Emo Mock' : (isEdited ? '已编 Mock' : '暂无选中')}</div>
+      <div class="empty-hint">${isEmo
+        ? '从左侧选择已保存的捕获规则<br>进行 Mock 编排'
+        : isEdited
+        ? '从左侧选择导入的规则<br>进行 Mock 编排'
         : '从左侧列表选择一条记录<br>进行 Mock 编排'}</div>
     </div>
   `;
 }
 
 function renderEditor() {
+  const sessionRevision = ++editorSessionRevision;
   const ctx = buildContext();
   if (!ctx) {
     renderEmptyState();
@@ -1138,13 +2060,26 @@ function renderEditor() {
   const content = document.getElementById('content');
   const existingRule = ctx.existingRule;
   const parts = getMockParts(existingRule);
-  // 总开关：任一方向开启即视为拦截开启
-  const interceptOn = parts.responseMock.enabled || parts.requestMock.enabled;
+  const initialTab = selectedDataTab;
+  const draftKey = endpointRequestKey(ctx.method, ctx.url);
+  const retainedDraft = editorDraftState && editorDraftState.key === draftKey
+    ? editorDraftState
+    : null;
+  // 捕获页开关先进入草稿态，只有点击保存后才写入 Emo 并真正改变拦截规则。
+  const persistedInterceptOn = parts.responseMock.enabled || parts.requestMock.enabled;
+  const interceptOn = retainedDraft?.interceptEnabled ?? persistedInterceptOn;
+  const pendingIntercept = ctx.mode === 'capture' &&
+    retainedDraft?.interceptEnabled !== undefined &&
+    retainedDraft.interceptEnabled !== persistedInterceptOn;
 
   // 头部展示值：开启拦截显示 mock 值（可编辑），关闭显示真实值（只读）
-  const headerMethod = interceptOn ? (parts.mockMethod || ctx.method) : ctx.method;
-  const headerUrl = interceptOn ? (parts.mockUrl || ctx.url) : ctx.url;
-  const headerStatus = interceptOn ? (parts.responseMock.status || ctx.status || 200) : (ctx.status || '—');
+  const headerMethod = interceptOn
+    ? (retainedDraft?.overrides.method || parts.mockMethod || ctx.method)
+    : ctx.method;
+  const headerUrl = interceptOn
+    ? (retainedDraft?.overrides.url || parts.mockUrl || ctx.url)
+    : ctx.url;
+  const displayedHeaderUrl = displayInterfaceUrl(headerUrl);
   const statusText = ctx.status || '—';
 
   const statusOk = ctx.status >= 200 && ctx.status < 400;
@@ -1159,27 +2094,30 @@ function renderEditor() {
   const methodOptions = methodList
     .map(m => `<option value="${m}"${m === headerMethod ? ' selected' : ''}>${m}</option>`)
     .join('');
-  const statusValue = interceptOn ? (parts.responseMock.status || 200) : (ctx.status || 200);
+  const statusValue = interceptOn
+    ? (retainedDraft?.overrides.status || parts.responseMock.status || 200)
+    : (ctx.status || 200);
   const statusOptions = MOCK_STATUS_OPTIONS
     .map(o => `<option value="${o.code}"${Number(statusValue) === o.code ? ' selected' : ''}>${escapeHtml(o.text)}</option>`)
     .join('');
 
-  // 已编 tab 下提示来源；捕获 tab 下提示正常
-  const sourceBadge = ctx.mode === 'edited'
-    ? '<span class="badge mocked">已编</span>'
-    : '';
+  const sourceBadge = ctx.mode === 'emo'
+    ? '<span class="badge mocked">Emo</span>'
+    : ctx.mode === 'edited'
+      ? '<span class="badge mocked">已编</span>'
+      : '';
 
   // 该接口是否已禁监（按 key 判定）
-  const ctxKey = ctx.method + ' ' + ctx.url;
-  const monitorDisabledOn = monitorDisabled.includes(ctxKey);
+  const ctxKey = endpointRequestKey(ctx.method, ctx.url);
+  const monitorDisabledOn = monitorDisabled.some(key => normalizeRequestKey(key) === ctxKey);
 
   // 头部：开启拦截后 Method/URL/Status 均可编辑；关闭时只读展示真实值
   const headerFields = canEditHeader
     ? `<select class="editor-method-select method-${escapeHtml(headerMethod)}" id="editMethod" title="HTTP 方法">${methodOptions}</select>
-       <input class="editor-url-input" id="editUrl" value="${escapeHtml(headerUrl)}" title="接口 URL（可编辑）" spellcheck="false" autocomplete="off">
+       <input class="editor-url-input" id="editUrl" value="${escapeHtml(displayedHeaderUrl)}" title="接口 URL（可编辑）" spellcheck="false" autocomplete="off">
        <select class="editor-status-input" id="editStatus" title="Mock 响应状态码（可编辑）">${statusOptions}</select>`
     : `<span class="editor-header-method method-${escapeHtml(ctx.method)}">${escapeHtml(ctx.method)}</span>
-       <span class="editor-header-url" title="${escapeHtml(ctx.url)}">${escapeHtml(ctx.url)}</span>
+       <span class="editor-header-url" title="${escapeHtml(displayedHeaderUrl)}">${escapeHtml(displayedHeaderUrl)}</span>
        <span class="badge${statusBadgeClass}">${statusText}</span>`;
 
   const html = `
@@ -1189,7 +2127,9 @@ function renderEditor() {
       <div class="editor-header">
         ${headerFields}
         ${sourceBadge}
-        ${interceptOn ? '<span class="badge mocked">INTERCEPTED</span>' : ''}
+        ${pendingIntercept
+          ? '<span class="badge badge-warn">待保存</span>'
+          : (interceptOn ? '<span class="badge mocked">INTERCEPTED</span>' : '')}
         ${monitorDisabledOn ? '<span class="badge badge-warn">禁监中</span>' : ''}
       </div>
 
@@ -1199,8 +2139,8 @@ function renderEditor() {
           <div class="section-title">Request Info</div>
           <div class="section-body">
             <div class="kv">
-              <div class="kv-row"><div class="kv-key">Source</div><div class="kv-val">${ctx.mode === 'edited' ? '已编（本地持久化）' : '捕获（实时请求）'}</div></div>
-              <div class="kv-row"><div class="kv-key">URL</div><div class="kv-val" style="word-break:break-all">${escapeHtml(ctx.url)}</div></div>
+              <div class="kv-row"><div class="kv-key">Source</div><div class="kv-val">${ctx.mode === 'emo' ? 'Emo（捕获后持久化）' : ctx.mode === 'edited' ? '已编（本地持久化）' : '捕获（实时请求）'}</div></div>
+              <div class="kv-row"><div class="kv-key">URL</div><div class="kv-val" style="word-break:break-all">${escapeHtml(displayInterfaceUrl(ctx.url))}</div></div>
               <div class="kv-row"><div class="kv-key">Method</div><div class="kv-val">${escapeHtml(ctx.method)}</div></div>
               <div class="kv-row"><div class="kv-key">Status</div><div class="kv-val">${statusText}</div></div>
             </div>
@@ -1222,10 +2162,13 @@ function renderEditor() {
                 <input type="checkbox" id="interceptToggle" ${interceptOn ? 'checked' : ''}>
                 <span class="switch-track"><span class="switch-thumb"></span></span>
               </label>
-              <span class="intercept-label">${interceptOn ? '拦截已开启' : '已关闭，正常透传'}</span>
+              <span class="intercept-label">${pendingIntercept
+                ? (interceptOn ? '保存后开启拦截' : '保存后关闭拦截')
+                : (interceptOn ? '拦截已开启' : '已关闭，正常透传')}</span>
             </div>
             <div class="mock-actions">
-              <button class="btn btn-secondary" id="generateBtn">⚡ 生成假数据</button>
+              <button class="btn btn-secondary" id="generateBtn"${interceptOn ? '' : ' disabled'}>⚡ 生成假数据</button>
+              <button class="btn btn-primary" id="saveMockBtn"${interceptOn || pendingIntercept ? '' : ' disabled'}>保存</button>
               <div class="status-msg" id="statusMsg"></div>
             </div>
           </div>
@@ -1237,15 +2180,15 @@ function renderEditor() {
         <div id="tabContent" class="json-frame">
           <div class="json-frame-bar">
             <div class="mock-data-tabs" id="mockDataTabs">
-              <button type="button" class="mock-data-tab active" data-tab="response">出参</button>
-              <button type="button" class="mock-data-tab" data-tab="request">入参</button>
+              <button type="button" class="mock-data-tab${initialTab === 'response' ? ' active' : ''}" data-tab="response">出参</button>
+              <button type="button" class="mock-data-tab${initialTab === 'request' ? ' active' : ''}" data-tab="request">入参</button>
             </div>
             <div class="json-frame-title">mock.payload.json</div>
           </div>
           <div id="mockDataEditor" class="json-editor-host"></div>
           <div id="jsonLintStatus" class="json-lint-status"></div>
         </div>
-        <div class="hint" id="editorHint">${interceptOn ? '编辑 JSON 数据，或使用生成器快速构造假数据。改动将自动保存。' : '已关闭拦截，展示真实数据。开启拦截后可编辑 Mock 数据。'}</div>
+        <div class="hint" id="editorHint">${interceptOn ? '编辑 JSON 数据，或使用生成器快速构造假数据。点击保存后生效。' : '已关闭拦截，展示真实数据。开启拦截后可编辑 Mock 数据。'}</div>
       </div>
     </div>
   `;
@@ -1259,29 +2202,36 @@ function renderEditor() {
   //  - 拦截关闭：显示真实数据（ctx.responsePayload / ctx.requestPayload），编辑器只读，
   //    保留之前编辑过的 mockData 不动，重新开启时恢复。
   const editorHost = document.getElementById('mockDataEditor');
-  const initialTab = 'response';
 
-  // 判定某方向是否“无数据”：真实 payload 与 mockData 均为空
-  const isEmptyPayload = (val) => val == null || val === '' || val === '{}' || val === '[]';
+  // 判定某方向是否“无数据”
+  const isEmptyPayload = (val) => {
+    if (val == null || val === '' || val === '{}' || val === '[]') return true;
+    if (Array.isArray(val)) return val.length === 0;
+    return typeof val === 'object' && Object.keys(val).length === 0;
+  };
   const realRequestEmpty = isEmptyPayload(ctx.requestPayload);
-  const mockRequestEmpty = isEmptyPayload(parts.requestMock.mockData);
+  const mockRequestEmpty = !parts.requestMock.hasMockData;
 
   // 出参始终可编辑展示（即便为空也显示 null，便于构造）；入参为空时显示空状态
   const draftFor = (tab) => {
     if (interceptOn) {
-      const md = tab === 'response' ? parts.responseMock.mockData : parts.requestMock.mockData;
+      const mockPart = tab === 'response' ? parts.responseMock : parts.requestMock;
       const real = tab === 'response' ? ctx.responsePayload : ctx.requestPayload;
-      return formatJson(md != null ? md : real);
+      return formatJson(mockPart.hasMockData ? mockPart.mockData : real);
     }
     return formatJson(tab === 'response' ? ctx.responsePayload : ctx.requestPayload);
   };
-  const editorDrafts = {
-    response: draftFor('response'),
-    request: draftFor('request'),
-  };
+  const draftState = createEditorDraftState(retainedDraft, draftKey, draftFor);
+  // 关闭开关只改变当前展示内容，不改写 Mock 草稿。否则已保存后清空了 dirtyTabs 的
+  // 草稿会在关闭时被真实数据覆盖，下一次开启就无法恢复之前编辑的出参/入参。
+  editorDraftState = draftState;
+  const editorDrafts = draftState.drafts;
 
   let activeTab = initialTab;
-  let jsonEditor = createJsonEditor(editorHost, editorDrafts[activeTab]);
+  let jsonEditor = createJsonEditor(
+    editorHost,
+    editorPayloadText(interceptOn, draftState, draftFor, activeTab),
+  );
 
   // 关闭拦截时编辑器只读：禁用编辑（CodeJar 通过 contenteditable 生效，置 contentEditable=false）
   if (!interceptOn) {
@@ -1289,8 +2239,10 @@ function renderEditor() {
     if (codeEl) codeEl.contentEditable = 'false';
   }
 
-  // 入参空状态：真实入参与 mock 入参均为空时，切到入参 Tab 显示空状态提示
-  const requestEmpty = realRequestEmpty && mockRequestEmpty;
+  // 关闭时只看真实入参；开启时已有 Mock 入参即可编辑展示。
+  const requestEmpty = interceptOn
+    ? realRequestEmpty && mockRequestEmpty
+    : realRequestEmpty;
   function applyRequestEmptyState() {
     const frame = document.getElementById('tabContent');
     if (!frame) return;
@@ -1317,21 +2269,19 @@ function renderEditor() {
     }
   }
 
-  // 出参/入参 Tab 切换：先把当前 Tab 草稿落盘（拦截开启时），再切到目标 Tab。
-  // 这样两个方向的 mockData 始终同步到规则，重渲染（如切开关）不丢数据。
+  // Tab 切换只保留面板内草稿，不写入持久化存储。
   const tabBtns = content.querySelectorAll('.mock-data-tab');
   tabBtns.forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', () => {
       const nextTab = btn.dataset.tab;
       if (nextTab === activeTab) return;
-      // 拦截开启时，离开当前 Tab 前先静默保存其草稿，避免切换/重渲染丢失
       if (interceptOn) {
         editorDrafts[activeTab] = jsonEditor.getText();
-        await autoSaveMockRule(activeTab, jsonEditor, { silent: true });
       }
       activeTab = nextTab;
+      selectedDataTab = nextTab;
       tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === nextTab));
-      jsonEditor.updateCode(editorDrafts[activeTab]);
+      jsonEditor.updateCode(editorPayloadText(interceptOn, draftState, draftFor, activeTab));
       if (!interceptOn) {
         const codeEl2 = editorHost.querySelector('code.language-json');
         if (codeEl2) codeEl2.contentEditable = 'false';
@@ -1344,12 +2294,26 @@ function renderEditor() {
   applyRequestEmptyState();
 
   // 绑定按钮
-  document.getElementById('generateBtn').addEventListener('click', () => handleGenerateMockData(jsonEditor, activeTab));
+  document.getElementById('generateBtn').addEventListener('click', () => {
+    const generated = handleGenerateMockData(jsonEditor, activeTab);
+    if (generated && interceptOn) {
+      editorDrafts[activeTab] = jsonEditor.getText();
+      draftState.dirtyTabs.add(activeTab);
+    }
+  });
+  document.getElementById('saveMockBtn').addEventListener('click', () => {
+    saveMockRuleDrafts(activeTab, jsonEditor, draftState);
+  });
 
-  // 拦截开关：实时保存 enabled 状态，无需点保存
+  // 捕获页开关只改变草稿；点击保存后才创建/更新 Emo。Emo / 已编沿用即时开关。
   const toggle = document.getElementById('interceptToggle');
   if (toggle) {
-    toggle.addEventListener('change', () => handleToggleIntercept(toggle.checked, jsonEditor, activeTab));
+    toggle.addEventListener('change', async () => {
+      if (interceptOn) editorDrafts[activeTab] = jsonEditor.getText();
+      editorDraftState = draftState;
+      toggle.disabled = true;
+      await handleToggleIntercept(toggle.checked, draftState);
+    });
   }
 
   // 禁监开关：开启则将该接口加入禁监池（不再捕获/显示），关闭则放开监听
@@ -1358,35 +2322,36 @@ function renderEditor() {
     monitorToggle.addEventListener('change', () => handleToggleMonitorDisable(monitorToggle.checked));
   }
 
-  // Method / URL / Status 可编辑：变更立即保存
+  // Method / URL / Status 只更新草稿，由保存按钮统一提交。
   const editMethod = document.getElementById('editMethod');
   if (editMethod) {
     editMethod.addEventListener('change', () => {
       editMethod.className = 'editor-method-select method-' + editMethod.value;
-      autoSaveMockRule(activeTab, jsonEditor);
+      draftState.overrides.method = editMethod.value;
+      draftState.headerDirty = true;
     });
   }
   const editUrl = document.getElementById('editUrl');
   if (editUrl) {
     editUrl.addEventListener('change', () => {
-      autoSaveMockRule(activeTab, jsonEditor);
+      draftState.overrides.url = editUrl.value;
+      draftState.headerDirty = true;
     });
   }
   const editStatus = document.getElementById('editStatus');
   if (editStatus) {
     editStatus.addEventListener('change', () => {
-      autoSaveMockRule(activeTab, jsonEditor);
+      draftState.overrides.status = editStatus.value;
+      draftState.headerDirty = true;
     });
   }
 
-  // 拦截开启时：编辑器内容变化自动保存（debounce ~500ms，且仅合法 JSON）
+  // 编辑器输入只更新内存草稿。
   if (interceptOn) {
-    let saveTimer = null;
     editorHost.addEventListener('input', () => {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        autoSaveMockRule(activeTab, jsonEditor, { silent: true });
-      }, 500);
+      if (sessionRevision !== editorSessionRevision) return;
+      editorDrafts[activeTab] = jsonEditor.getText();
+      draftState.dirtyTabs.add(activeTab);
     });
   }
 }
@@ -1610,14 +2575,22 @@ function readEditorOverrides() {
 
 // 基于当前编辑上下文构造 Mock 规则（双份模型 + mock 头部字段）。
 // 捕获模式保存时附带原始接口快照（status / 请求体 / 响应体）并标记 source:'capture'，
-// 使其不进“已编”列表（已编列表仅展示导入接口）；已编模式沿用规则上已有的快照。
+// 使其进入 Emo 而不进“已编”列表；Emo / 已编模式沿用规则上已有的快照。
 //
 // 数据来源分离（核心，满足“关闭显示真实 / 开启恢复 mock”）：
 //   - rule.url / rule.method：真实值，供 mock-hook 匹配命中，始终来自 ctx（捕获/导入值）。
-//   - mockMethod / mockUrl / responseMock.status：mock 展示值，开启拦截时由面板字段写入，
-//     关闭拦截时沿用既有值（不覆盖），保证重开可复原。
+//   - mockMethod / mockUrl / responseMock.status：mock 展示值，与真实头部分开持久化。
 //   - responseMock.mockData / requestMock.mockData：各方向 mock 数据，与开关解耦，关闭仅置 enabled=false。
-function buildRule(ctx, { activeTab, mockData, enabled, url, method, status }) {
+function buildRule(ctx, {
+  activeTab,
+  mockData,
+  mockDataByTab,
+  updateMockData = mockData !== undefined,
+  enabled,
+  url,
+  method,
+  status,
+}) {
   const existing = ctx.existingRule;
   const now = Date.now();
 
@@ -1630,13 +2603,23 @@ function buildRule(ctx, { activeTab, mockData, enabled, url, method, status }) {
   let mockMethod = prev.mockMethod;
   let mockUrl = prev.mockUrl;
 
-  // 用当前编辑器内容更新 activeTab 方向的 mockData。
-  // mockData 为 null/undefined 时保留既有值（如关闭拦截时不覆盖已编辑数据）。
-  if (mockData != null) {
+  // 批量草稿用于一次保存出参与入参；updateMockData 则兼容单方向更新。
+  if (mockDataByTab) {
+    if (hasOwn(mockDataByTab, 'response')) {
+      responseMock.mockData = mockDataByTab.response;
+      responseMock.hasMockData = true;
+    }
+    if (hasOwn(mockDataByTab, 'request')) {
+      requestMock.mockData = mockDataByTab.request;
+      requestMock.hasMockData = true;
+    }
+  } else if (updateMockData) {
     if (activeTab === 'response') {
       responseMock.mockData = mockData;
+      responseMock.hasMockData = true;
     } else {
       requestMock.mockData = mockData;
+      requestMock.hasMockData = true;
     }
   }
 
@@ -1647,17 +2630,14 @@ function buildRule(ctx, { activeTab, mockData, enabled, url, method, status }) {
     requestMock.enabled = !!enabled;
   }
 
-  // mock 头部字段：仅在“开启拦截”时用面板字段更新；关闭时保留既有值不覆盖
-  const turningOn = enabledDefined && enabled;
-  if (turningOn) {
-    if (method) mockMethod = method.toUpperCase();
-    if (url) mockUrl = String(url).trim() || mockUrl;
-    if (status !== undefined && status !== '' && status !== null) {
-      const s = Number(status);
-      if (Number.isFinite(s)) responseMock.status = s;
-    }
+  // Mock 头部字段与数据由同一个保存操作统一提交。
+  if (method) mockMethod = method.toUpperCase();
+  if (url !== undefined && url !== null) mockUrl = String(url).trim() || mockUrl;
+  if (status !== undefined && status !== '' && status !== null) {
+    const s = Number(status);
+    if (Number.isFinite(s)) responseMock.status = s;
   }
-  // status 兜底：开启但面板未给值时，沿用既有 status，否则用真实 status
+
   if (responseMock.status == null || !Number.isFinite(Number(responseMock.status))) {
     responseMock.status = ctx.status || 200;
   }
@@ -1671,59 +2651,123 @@ function buildRule(ctx, { activeTab, mockData, enabled, url, method, status }) {
     mockMethod,
     mockUrl,
     imported,
+    ...(ctx.mode === 'capture'
+      ? { listSource: 'emo' }
+      : (existing?.listSource ? { listSource: existing.listSource } : {})),
+    ...(existing?.captureConflictResolved === true ? { captureConflictResolved: true } : {}),
+    ...((existing?.conflictVersionSelected === true || ctx.conflictVersionSelected === true)
+      ? {
+          conflictVersionSelected: true,
+          conflictVersionSource: existing?.conflictVersionSource || (ctx.mode === 'capture' ? 'capture' : ctx.mode),
+        }
+      : {}),
     createdAt: existing ? existing.createdAt : now,
     updatedAt: now,
   };
 
-  if (ctx.mode === 'capture') {
+  // 真实快照只在首次创建规则时冻结。后续保存永不从最新请求日志重写，
+  // 因为拦截开启后日志中的 payload/status 可能已经是 Mock 值。
+  if (existing && existing.captured) {
+    rule.captured = existing.captured;
+  } else if (ctx.mode === 'capture' && ctx.hasRealSnapshot) {
     rule.captured = {
       status: ctx.status,
       requestPayload: ctx.requestPayload,
       responsePayload: ctx.responsePayload,
+      pageOrigin: ctx.pageOrigin || undefined,
       timestamp: now,
       source: 'capture', // 标记为捕获态规则：不进“已编”列表
     };
-  } else if (existing && existing.captured) {
-    rule.captured = existing.captured;
   }
 
   return rule;
 }
 
-// 实时自动保存：由编辑器 input（debounce）、开关/状态/Method 切换触发。
-// silent=true 时不在 UI 上提示成功（避免输入过程中频繁闪烁），仅失败时提示。
-async function autoSaveMockRule(activeTab, jsonEditor, opts = {}) {
+function findLatestRuleForContext(ctx) {
+  const id = ctx.existingRule && ctx.existingRule.id;
+  if (id) return mockRules.find(rule => rule.id === id) || ctx.existingRule;
+  if (ctx.mode === 'capture') return findEmoRuleForRequest(ctx, mockRules);
+  const ctxKey = endpointRequestKey(ctx.method, ctx.url);
+  return mockRules.find(rule => endpointRequestKey(rule.method, rule.url) === ctxKey) || null;
+}
+
+function upsertLocalMockRule(rule) {
+  // 使仍在途中的 loadData 失效，避免旧 GET_MOCK_RULES 响应覆盖刚保存的数据。
+  dataLoadRevision++;
+  const index = mockRules.findIndex(item => item.id === rule.id);
+  if (index >= 0) {
+    mockRules[index] = rule;
+  } else {
+    mockRules.push(rule);
+  }
+  updateRuleCounts();
+}
+
+// 整条规则写入必须按用户操作顺序执行；每个任务在真正执行时读取上一个任务
+// 已回写的本地规则，确保编辑出参后再编辑入参不会互相覆盖。
+function persistMockRule(ctx, paramsOrFactory) {
+  const contextSnapshot = { ...ctx };
+  const task = mockRuleSaveQueue.then(async () => {
+    const latestContext = {
+      ...contextSnapshot,
+      existingRule: findLatestRuleForContext(contextSnapshot),
+    };
+    const params = typeof paramsOrFactory === 'function'
+      ? paramsOrFactory(latestContext)
+      : paramsOrFactory;
+    const rule = buildRule(latestContext, params);
+    const result = await sendMessage({ type: 'ADD_MOCK_RULE', rule, tabId });
+    if (!result.ok) throw new Error(result.error || 'Save failed');
+    upsertLocalMockRule(rule);
+    return rule;
+  });
+
+  mockRuleSaveQueue = task.catch(() => {});
+  return task;
+}
+
+// 显式保存本次编辑的 Mock 草稿。两个 Tab 均有修改时会一次写入，
+// 未修改数据但调整了 Method / URL / Status 时只更新头部字段。
+async function saveMockRuleDrafts(activeTab, jsonEditor, draftState) {
   const statusEl = document.getElementById('statusMsg');
+  const saveBtn = document.getElementById('saveMockBtn');
   try {
     const ctx = buildContext();
     if (!ctx) throw new Error('未选中接口');
 
-    let mockData;
-    try {
-      mockData = jsonEditor ? jsonEditor.get() : null;
-    } catch (parseErr) {
-      // JSON 非法时不保存，但也不报红（编辑中途常见），仅更新 lint 状态由编辑器自身处理
-      return;
-    }
-
+    if (saveBtn) saveBtn.disabled = true;
     const enabled = document.getElementById('interceptToggle')?.checked ?? false;
-    const rule = buildRule(ctx, {
+    // 关闭态编辑器展示的是真实数据，不能用它覆盖保留在草稿中的 Mock 数据。
+    if (jsonEditor && enabled) draftState.drafts[activeTab] = jsonEditor.getText();
+
+    const tabsToSave = draftState.dirtyTabs.size > 0
+      ? [...draftState.dirtyTabs]
+      : (draftState.headerDirty ? [] : [activeTab]);
+    const parsedDrafts = parseMockDraftTabs(draftState, tabsToSave);
+
+    const overrides = { ...draftState.overrides, ...readEditorOverrides() };
+    const rule = await persistMockRule(ctx, {
       activeTab,
-      mockData,
+      mockDataByTab: tabsToSave.length > 0 ? parsedDrafts : undefined,
+      updateMockData: false,
       enabled,
-      ...readEditorOverrides(),
+      ...overrides,
     });
 
-    const result = await sendMessage({ type: 'ADD_MOCK_RULE', rule, tabId });
-    if (!result.ok) throw new Error(result.error || 'Save failed');
-
-    if (ctx.mode === 'edited') {
+    if (ctx.mode !== 'capture') {
       selectedRuleId = rule.id;
     }
+    renderList();
 
-    if (!opts.silent && statusEl) {
+    draftState.dirtyTabs.clear();
+    draftState.headerDirty = false;
+    draftState.overrides = {};
+    draftState.interceptEnabled = undefined;
+    editorDraftState = draftState;
+
+    if (statusEl) {
       statusEl.className = 'status-msg show ok';
-      statusEl.textContent = '已自动保存，刷新页面后生效';
+      statusEl.textContent = '已保存，刷新页面后生效';
       setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'status-msg'; }, 2000);
     }
   } catch (err) {
@@ -1731,7 +2775,22 @@ async function autoSaveMockRule(activeTab, jsonEditor, opts = {}) {
       statusEl.className = 'status-msg show err';
       statusEl.textContent = '保存失败: ' + err.message;
     }
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
   }
+}
+
+function parseMockDraftTabs(draftState, tabs) {
+  const parsed = {};
+  for (const tab of tabs) {
+    try {
+      parsed[tab] = JSON.parse(draftState.drafts[tab]);
+    } catch (parseErr) {
+      const label = tab === 'response' ? '出参' : '入参';
+      throw new Error(`${label} JSON 格式错误: ${parseErr.message}`);
+    }
+  }
+  return parsed;
 }
 
 // 禁监开关：开启则将该接口加入禁监池（不再捕获与显示），关闭则从池中移除（放开监听）
@@ -1740,12 +2799,12 @@ async function handleToggleMonitorDisable(enabled) {
   try {
     const ctx = buildContext();
     if (!ctx) throw new Error('未选中接口');
-    const key = ctx.method + ' ' + ctx.url;
+    const key = endpointRequestKey(ctx.method, ctx.url);
 
     if (enabled) {
       const res = await sendMessage({ type: 'ADD_MONITOR_DISABLED', entry: key, tabId });
       if (!res.ok) throw new Error(res.error || 'failed');
-      // 禁监的正是当前选中接口：清除选中（接口将不再显示在捕获/已编列表）
+      // 禁监的正是当前选中接口：清除选中（接口将不再显示在捕获 / Emo / 已编列表）
       selectedRequest = null;
       selectedRequestKey = null;
       selectedRuleId = null;
@@ -1778,42 +2837,63 @@ async function handleToggleMonitorDisable(enabled) {
   }
 }
 
-// 拦截总开关：开启/关闭时同步两个方向的 enabled，但 mockData 始终保留不动，
-// 保证“关闭→重开”能恢复之前编辑过的出参/入参 mock 数据。
-async function handleToggleIntercept(enabled, jsonEditor, activeTab) {
+function shouldPersistInterceptToggle(ctx) {
+  return ctx?.mode !== 'capture';
+}
+
+// 捕获页开关只切换本地编辑草稿，保存按钮是创建/更新 Emo 的唯一入口。
+// Emo / 已编中的既有规则仍即时同步开关状态。
+async function handleToggleIntercept(enabled, draftState = null) {
   const statusEl = document.getElementById('statusMsg');
   try {
     const ctx = buildContext();
     if (!ctx) throw new Error('未选中接口');
 
-    // 开启时：若当前方向尚无 mockData，用编辑器当前内容（真实数据兜底）初始化，
-    // 避免开启拦截后 mockData 为空导致拦截不生效。
-    let mockData;
-    if (enabled) {
-      try {
-        mockData = jsonEditor ? jsonEditor.get() : null;
-      } catch (_) {
-        mockData = null;
+    if (!shouldPersistInterceptToggle(ctx)) {
+      if (draftState) {
+        draftState.interceptEnabled = enabled;
+        editorDraftState = draftState;
       }
+      renderEditor();
+      const nextStatusEl = document.getElementById('statusMsg');
+      if (nextStatusEl) {
+        nextStatusEl.className = 'status-msg show ok';
+        nextStatusEl.textContent = enabled ? '已开启编辑，点击保存后生效' : '已关闭编辑，点击保存后生效';
+      }
+      return;
     }
 
-    const rule = buildRule(ctx, {
-      activeTab,
-      mockData,
+    const dirtyTabs = draftState ? [...draftState.dirtyTabs] : [];
+    const mockDataByTab = draftState ? parseMockDraftTabs(draftState, dirtyTabs) : undefined;
+    const overrides = draftState?.headerDirty
+      ? { ...draftState.overrides, ...readEditorOverrides() }
+      : {};
+
+    await persistMockRule(ctx, {
+      activeTab: selectedDataTab,
+      mockDataByTab: dirtyTabs.length > 0 ? mockDataByTab : undefined,
+      updateMockData: false,
       enabled,
-      ...readEditorOverrides(),
+      ...overrides,
     });
 
-    const result = await sendMessage({ type: 'ADD_MOCK_RULE', rule, tabId });
-    if (!result.ok) throw new Error(result.error || 'failed');
-
-    if (statusEl) {
-      statusEl.className = 'status-msg show ok';
-      statusEl.textContent = enabled ? '已开启拦截，刷新页面生效' : '已关闭拦截，恢复正常请求';
-      setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'status-msg'; }, 2000);
+    if (draftState) {
+      draftState.dirtyTabs.clear();
+      draftState.headerDirty = false;
+      draftState.overrides = {};
     }
-    await loadData();
+
+    renderList();
     renderEditor();
+    const nextStatusEl = document.getElementById('statusMsg');
+    if (nextStatusEl) {
+      nextStatusEl.className = 'status-msg show ok';
+      nextStatusEl.textContent = enabled ? '已开启拦截，刷新页面生效' : '已关闭拦截，恢复正常请求';
+      setTimeout(() => {
+        nextStatusEl.textContent = '';
+        nextStatusEl.className = 'status-msg';
+      }, 2000);
+    }
   } catch (err) {
     if (statusEl) {
       statusEl.className = 'status-msg show err';
@@ -1821,12 +2901,15 @@ async function handleToggleIntercept(enabled, jsonEditor, activeTab) {
     }
     // 失败时回滚开关视觉态
     const t = document.getElementById('interceptToggle');
-    if (t) t.checked = !enabled;
+    if (t) {
+      t.checked = !enabled;
+      t.disabled = false;
+    }
   }
 }
 
 // 生成假数据：作用于当前 active tab 方向，基于该方向真实数据推断 Schema。
-// 生成后立即写入编辑器并自动保存（拦截开启时）。
+// 生成后只写入编辑器草稿，用户点击保存后才持久化。
 function handleGenerateMockData(jsonEditor, activeTab) {
   const statusEl = document.getElementById('statusMsg');
 
@@ -1844,22 +2927,18 @@ function handleGenerateMockData(jsonEditor, activeTab) {
     // 更新编辑器
     if (jsonEditor) jsonEditor.set(fakeData);
 
-    // 拦截开启时立即自动保存生成的数据
-    const interceptOn = document.getElementById('interceptToggle')?.checked;
-    if (interceptOn) {
-      autoSaveMockRule(activeTab, jsonEditor, { silent: true });
-    }
-
     statusEl.className = 'status-msg show ok';
-    statusEl.textContent = '假数据已生成';
+    statusEl.textContent = '假数据已生成，请点击保存';
 
     setTimeout(() => {
       statusEl.textContent = '';
       statusEl.className = 'status-msg';
     }, 2000);
+    return true;
   } catch (err) {
     statusEl.className = 'status-msg show err';
     statusEl.textContent = '生成失败: ' + err.message;
+    return false;
   }
 }
 
