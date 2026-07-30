@@ -12,6 +12,12 @@
       return;
     }
 
+    // 单项目时无需切换，隐藏整个 pill 容器
+    if (ns.projects.PROJECTS.length <= 1) {
+      pillsContainer.style.display = 'none';
+      return;
+    }
+
     const pills = ns.projects.PROJECTS.map(p => {
       const isActive = p.id === currentId;
       return `<div class="project-pill ${isActive ? 'active' : ''}" data-project-id="${p.id}">${p.name}</div>`;

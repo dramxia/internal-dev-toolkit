@@ -8,7 +8,7 @@
 const PROJECTS = [
   {
     id: 'gpt-admin-pre',
-    name: 'GPT后台-预发布',
+    name: 'AI平台',
     baseUrl: 'https://gpt-admin-pre.hwzxs.com',
     authPath: '/huayun-ai/admin/auth',
     tenantApiPaths: {
@@ -20,21 +20,6 @@ const PROJECTS = [
     cookieKeys: ['HWWAFSESID', 'HWWAFSESTIME'],
     enabledFeatures: ['adminPanel', 'quickLogin'],
     hosts: ['gpt-admin-pre.hwzxs.com', '*.hwzxs.com'],
-  },
-  {
-    id: 'local-test',
-    name: '生产',
-    baseUrl: 'https://ai-admin.huayuntiantu.com',
-    authPath: '/api/auth',
-    tenantApiPaths: {
-      tenantPage: '/api/tenant/page',
-      deptList: '/api/dept/list',
-      userPage: '/api/user/page',
-      virtualLogin: '/api/user/virtualLogin',
-    },
-    cookieKeys: [],
-    enabledFeatures: ['adminPanel', 'quickLogin'],
-    hosts: ['ai-admin.huayuntiantu.com', '*.huayuntiantu.com'],
   },
 ];
 
@@ -673,6 +658,12 @@ if (typeof module !== 'undefined' && module.exports) {
     const pillsContainer = document.getElementById('projectPills');
     if (!pillsContainer) {
       console.warn('[项目切换器] #projectPills 容器不存在');
+      return;
+    }
+
+    // 单项目时无需切换，隐藏整个 pill 容器
+    if (ns.projects.PROJECTS.length <= 1) {
+      pillsContainer.style.display = 'none';
       return;
     }
 

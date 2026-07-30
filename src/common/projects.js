@@ -5,7 +5,7 @@
 const PROJECTS = [
   {
     id: 'gpt-admin-pre',
-    name: 'GPT后台-预发布',
+    name: 'AI平台',
     baseUrl: 'https://gpt-admin-pre.hwzxs.com',
     authPath: '/huayun-ai/admin/auth',
     tenantApiPaths: {
@@ -17,21 +17,6 @@ const PROJECTS = [
     cookieKeys: ['HWWAFSESID', 'HWWAFSESTIME'],
     enabledFeatures: ['adminPanel', 'quickLogin'],
     hosts: ['gpt-admin-pre.hwzxs.com', '*.hwzxs.com'],
-  },
-  {
-    id: 'local-test',
-    name: '生产',
-    baseUrl: 'https://ai-admin.huayuntiantu.com',
-    authPath: '/api/auth',
-    tenantApiPaths: {
-      tenantPage: '/api/tenant/page',
-      deptList: '/api/dept/list',
-      userPage: '/api/user/page',
-      virtualLogin: '/api/user/virtualLogin',
-    },
-    cookieKeys: [],
-    enabledFeatures: ['adminPanel', 'quickLogin'],
-    hosts: ['ai-admin.huayuntiantu.com', '*.huayuntiantu.com'],
   },
 ];
 
