@@ -3612,76 +3612,31 @@ if (typeof module !== 'undefined' && module.exports) {
     }
 
     // ── APP 端登录（学生 APP token 获取） ──
-    if (msg.type === 'APP_LIST_SCHOOLS' && ns.appLogin) {
-      ns.appLogin
-        .listSchools(msg.payload)
-        .then((result) => sendResponse({ ok: true, ...result }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === 'APP_LOGIN' && ns.appLogin) {
-      ns.appLogin
-        .doLogin(msg.payload)
-        .then((result) => sendResponse({ ok: true, ...result }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === 'APP_GET_CREDENTIALS' && ns.appLogin) {
-      ns.appLogin
-        .getCredentials()
-        .then((creds) => sendResponse({ ok: true, ...creds }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === 'APP_SAVE_CREDENTIALS' && ns.appLogin) {
-      ns.appLogin
-        .saveCredentials(msg.payload || {})
-        .then((creds) => sendResponse({ ok: true, ...creds }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === 'APP_GET_TOKEN' && ns.appLogin) {
-      ns.appLogin
-        .getToken()
-        .then((state) => sendResponse({ ok: true, ...state }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === 'APP_SAVE_TOKEN' && ns.appLogin) {
-      ns.appLogin
-        .saveToken(msg.payload?.token || '', msg.payload?.user || null)
-        .then((state) => sendResponse({ ok: true, ...state }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === 'APP_CLEAR_TOKEN' && ns.appLogin) {
-      ns.appLogin
-        .clearToken()
-        .then(() => sendResponse({ ok: true }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === 'APP_GET_HISTORY' && ns.appLogin) {
-      ns.appLogin
-        .getHistory()
-        .then((records) => sendResponse({ ok: true, records }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
-    }
-
-    if (msg.type === 'APP_DELETE_HISTORY' && ns.appLogin) {
-      ns.appLogin
-        .deleteHistory(msg.payload)
-        .then((result) => sendResponse(result))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
-      return true;
+    // 统一守卫：APP_* 消息到达时若 appLogin 模块未加载，返回明确错误而非静默忽略，
+    // 避免 popup 端收到 "message port closed before a response was received"。
+    if (typeof msg.type === 'string' && msg.type.startsWith('APP_')) {
+      if (!ns.appLogin) {
+        sendResponse({ ok: false, error: 'APP 登录模块未加载，请重新加载扩展' });
+        return true;
+      }
+      const handlers = {
+        APP_LIST_SCHOOLS: (p) => ns.appLogin.listSchools(p),
+        APP_LOGIN: (p) => ns.appLogin.doLogin(p),
+        APP_GET_CREDENTIALS: () => ns.appLogin.getCredentials(),
+        APP_SAVE_CREDENTIALS: (p) => ns.appLogin.saveCredentials(p || {}),
+        APP_GET_TOKEN: () => ns.appLogin.getToken(),
+        APP_SAVE_TOKEN: (p) => ns.appLogin.saveToken(p?.token || '', p?.user || null),
+        APP_CLEAR_TOKEN: () => ns.appLogin.clearToken(),
+        APP_GET_HISTORY: () => ns.appLogin.getHistory(),
+        APP_DELETE_HISTORY: (p) => ns.appLogin.deleteHistory(p),
+      };
+      const handler = handlers[msg.type];
+      if (handler) {
+        handler(msg.payload)
+          .then((result) => sendResponse(result && typeof result === 'object' && 'ok' in result ? result : { ok: true, ...result }))
+          .catch((err) => sendResponse({ ok: false, error: err.message }));
+        return true;
+      }
     }
 
     // Mock 相关消息处理
