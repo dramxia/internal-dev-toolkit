@@ -288,6 +288,7 @@
       admin: $('panel-admin'),
       quick: $('panel-quick'),
       other: $('panel-other'),
+      app: $('panel-app'),
     };
     tabs.forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -322,6 +323,59 @@
       if (quickLoginSection) quickLoginSection.style.display = 'none';
     }
 
+    // 按项目功能控制 tab 显隐：未启用的 tab 隐藏。
+    // 仅一个可见 tab 时隐藏整个 tab-rail（无切换需求）。
+    const featureTabs = [
+      { tab: 'admin', feature: 'adminPanel', panel: 'panel-admin' },
+      { tab: 'quick', feature: 'quickLogin', panel: 'panel-quick' },
+      { tab: 'other', feature: 'otherLogin', panel: 'panel-other' },
+      { tab: 'app', feature: 'appLogin', panel: 'panel-app' },
+    ];
+    const allTabs = document.querySelectorAll('.tab-btn');
+    const visibleTabs = [];
+    allTabs.forEach((btn) => {
+      const key = btn.dataset.tab;
+      const ft = featureTabs.find((f) => f.tab === key);
+      const visible = ft ? enabledFeatures.includes(ft.feature) : false;
+      btn.style.display = visible ? '' : 'none';
+      if (visible) visibleTabs.push(btn);
+    });
+    const tabRail = document.querySelector('.tab-rail');
+    const panelsEl = document.querySelector('.panels');
+
+    // 无任何功能：隐藏整个 tab 栏 + 功能区，仅显示空占位
+    const isEmptyProject = enabledFeatures.length === 0;
+    if (isEmptyProject) {
+      if (tabRail) tabRail.style.display = 'none';
+      if (panelsEl) panelsEl.style.display = 'none';
+      let emptyEl = $('projectEmptyState');
+      if (!emptyEl) {
+        emptyEl = document.createElement('div');
+        emptyEl.id = 'projectEmptyState';
+        emptyEl.className = 'list-empty';
+        emptyEl.style.padding = '60px 20px';
+        emptyEl.textContent = '「' + ns.currentProject.getName() + '」相关功能开发中，敬请期待';
+        panelsEl?.parentNode?.insertBefore(emptyEl, panelsEl.nextSibling);
+      }
+      return;
+    }
+    // 恢复正常显示（从空项目切回时）；tab-rail 显隐由可见 tab 数量决定
+    if (panelsEl) panelsEl.style.display = '';
+    if (tabRail) tabRail.style.display = visibleTabs.length <= 1 ? 'none' : '';
+    const emptyState = $('projectEmptyState');
+    if (emptyState) emptyState.remove();
+
+    // 默认激活该项目首个可用 tab（修正 active 状态，避免隐藏 tab 仍激活）
+    const firstAvailable = featureTabs.find((f) => enabledFeatures.includes(f.feature));
+    if (firstAvailable) {
+      allTabs.forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
+      const firstTabBtn = document.querySelector(`.tab-btn[data-tab="${firstAvailable.tab}"]`);
+      const firstPanel = $(firstAvailable.panel);
+      if (firstTabBtn) firstTabBtn.classList.add('active');
+      if (firstPanel) firstPanel.classList.add('active');
+    }
+
     await renderCredentials();
     await renderToken();
     await renderDomain();
@@ -333,6 +387,9 @@
     }
     if (ns.otherLoginUi) {
       await ns.otherLoginUi.init();
+    }
+    if (ns.appLoginUi && enabledFeatures.includes('appLogin')) {
+      await ns.appLoginUi.init();
     }
   }
 

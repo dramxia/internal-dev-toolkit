@@ -18,8 +18,24 @@ const PROJECTS = [
       virtualLogin: '/huayun-ai/admin/tenant/user/virtualLogin',
     },
     cookieKeys: ['HWWAFSESID', 'HWWAFSESTIME'],
-    enabledFeatures: ['adminPanel', 'quickLogin'],
+    enabledFeatures: ['adminPanel', 'quickLogin', 'otherLogin'],
     hosts: ['gpt-admin-pre.hwzxs.com', '*.hwzxs.com'],
+  },
+  {
+    id: 'app',
+    name: 'APP',
+    baseUrl: '',
+    authPath: '',
+    tenantApiPaths: {},
+    // APP 端登录接口：站点地址由用户填写，路径在此集中配置
+    appLoginApiPaths: {
+      educationList: '/huayun-ai/client/tenant/educationList',
+      getCaptcha: '/huayun-ai/app/auth/getCaptcha',
+      studentLogin: '/huayun-ai/app/auth/studentLogin',
+    },
+    cookieKeys: [],
+    enabledFeatures: ['appLogin'],
+    hosts: [],
   },
 ];
 

@@ -37,6 +37,7 @@ const popupFiles = [
   'src/popup/project-switcher-ui.js',
   'src/popup/quick-login-ui.js',
   'src/popup/other-login-ui.js',
+  'src/popup/app-login-ui.js',
   'src/popup/index.js',
 ];
 
@@ -54,6 +55,7 @@ const backgroundFiles = [
   'src/background/tenant-api.js',
   'src/background/quick-login.js',
   'src/background/other-login.js',
+  'src/background/app-login.js',
   'src/background/mock-handler.js',
   'src/background/index.js',
 ];

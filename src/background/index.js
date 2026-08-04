@@ -182,6 +182,79 @@
       return true;
     }
 
+    // ── APP 端登录（学生 APP token 获取） ──
+    if (msg.type === 'APP_LIST_SCHOOLS' && ns.appLogin) {
+      ns.appLogin
+        .listSchools(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APP_LOGIN' && ns.appLogin) {
+      ns.appLogin
+        .doLogin(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APP_GET_CREDENTIALS' && ns.appLogin) {
+      ns.appLogin
+        .getCredentials()
+        .then((creds) => sendResponse({ ok: true, ...creds }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APP_SAVE_CREDENTIALS' && ns.appLogin) {
+      ns.appLogin
+        .saveCredentials(msg.payload || {})
+        .then((creds) => sendResponse({ ok: true, ...creds }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APP_GET_TOKEN' && ns.appLogin) {
+      ns.appLogin
+        .getToken()
+        .then((state) => sendResponse({ ok: true, ...state }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APP_SAVE_TOKEN' && ns.appLogin) {
+      ns.appLogin
+        .saveToken(msg.payload?.token || '', msg.payload?.user || null)
+        .then((state) => sendResponse({ ok: true, ...state }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APP_CLEAR_TOKEN' && ns.appLogin) {
+      ns.appLogin
+        .clearToken()
+        .then(() => sendResponse({ ok: true }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APP_GET_HISTORY' && ns.appLogin) {
+      ns.appLogin
+        .getHistory()
+        .then((records) => sendResponse({ ok: true, records }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APP_DELETE_HISTORY' && ns.appLogin) {
+      ns.appLogin
+        .deleteHistory(msg.payload)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     // Mock 相关消息处理
     if (msg.type === 'GET_MOCK_RULES' && commonNs.mockHandler) {
       commonNs.mockHandler

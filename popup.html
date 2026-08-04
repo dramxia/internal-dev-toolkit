@@ -947,6 +947,10 @@
       <span class="tab-icon">🌐</span>
       其它
     </button>
+    <button class="tab-btn" data-tab="app">
+      <span class="tab-icon">📱</span>
+      APP
+    </button>
   </div>
 
   <!-- ═══════════ PANELS ═══════════ -->
@@ -1215,6 +1219,97 @@
       </div>
 
     </div><!-- /panel-other -->
+
+    <!-- ── PANEL D : APP (学生 APP token) ── -->
+    <div class="panel" id="panel-app">
+
+      <div class="section-block expanded" id="appLoginSection">
+        <div class="section-header" id="appLoginHeader">
+          <div class="section-header-left">
+            <div class="section-icon green">📱</div>
+            <span class="section-header-title">APP 登录</span>
+          </div>
+          <div class="section-header-right">
+            <span class="badge success">APP</span>
+          </div>
+        </div>
+        <div class="collapsible-body" id="appLoginBody">
+          <div class="section-content">
+
+            <label class="field-label">站点地址</label>
+            <div class="field">
+              <input class="field-input" id="appSiteUrl" type="text" autocomplete="off"
+                placeholder="http://localhost:5174">
+            </div>
+
+            <label class="field-label">学校</label>
+            <div class="field">
+              <input class="field-input" id="appSchoolSearch" type="text" autocomplete="off"
+                placeholder="选择 / 搜索学校名称">
+              <div class="list hidden" id="appSchoolList"></div>
+              <div class="list-empty hidden" id="appSchoolEmpty">未找到学校</div>
+            </div>
+
+            <label class="field-label">账号</label>
+            <div class="field">
+              <input class="field-input" id="appAccount" type="text" autocomplete="off" placeholder="学生账号">
+            </div>
+
+            <label class="field-label">密码</label>
+            <div class="field">
+              <div class="pw-wrap">
+                <input class="field-input" id="appPassword" type="password" autocomplete="off" placeholder="输入密码">
+                <span class="pw-toggle" id="appPwdToggle">显示</span>
+              </div>
+            </div>
+
+            <div class="btn-row">
+              <button class="btn btn-primary" id="appLoginBtn">一键登录</button>
+            </div>
+
+            <div class="callout">
+              💡 选择学校并填写账号后点击「一键登录」，自动获取 APP 端 token。
+              登录依赖浏览器在站点已建立的会话（请先在浏览器打开站点完成 NextAuth 登录）。
+            </div>
+
+            <div class="divider"></div>
+
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);margin-bottom:6px;">历史记录</div>
+            <div class="recent-list" id="appHistoryList">
+              <div class="recent-empty">暂无历史记录</div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="section-block expanded">
+        <div class="section-header">
+          <div class="section-header-left">
+            <div class="section-icon mint">🔏</div>
+            <span class="section-header-title">Access Token</span>
+          </div>
+        </div>
+        <div class="section-content" style="border-top:1px solid var(--border)">
+
+          <div class="token-shell" id="appTokenWrap">
+            <div class="token-shell-bar">
+              <span class="token-shell-bar-label">JWT / Token</span>
+              <span class="token-shell-bar-dot"></span>
+            </div>
+            <div class="token-box empty" id="appTokenValue" contenteditable="true" role="textbox" aria-multiline="true"
+              data-placeholder="尚未获取 · 请先登录，或点击此处粘贴 Token"></div>
+            <div class="token-meta" id="appTokenUpdated"></div>
+          </div>
+
+          <div class="list-item-meta hidden" id="appUserMeta" style="margin:8px 0 4px;"></div>
+
+          <button class="btn btn-ghost btn-full" id="appCopyTokenBtn" disabled>复制 Token</button>
+
+        </div>
+      </div>
+
+    </div><!-- /panel-app -->
 
   </div><!-- /panels -->
 
