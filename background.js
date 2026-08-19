@@ -494,15 +494,15 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
-  function buildUserPageBody({ tenantId, deptId = '', deptSource = DEFAULT_DEPT_SOURCE, current = 1, size = 10, keyword = '' }) {
+  function buildUserPageBody({ tenantId, deptId = '', current = 1, size = 10, keyword = '' }) {
     if (!tenantId) throw new Error('tenantId 不能为空');
     return {
       current: Number(current) || 1,
       size: Number(size) || 10,
       deptId: String(deptId || ''),
       tenantId: String(tenantId),
-      deptSource: deptSource || DEFAULT_DEPT_SOURCE,
-      keyword: String(keyword || ''),
+      searchKey: String(keyword || ''),
+      searchType: 'username,phone',
     };
   }
 
@@ -1705,7 +1705,7 @@ if (typeof module !== 'undefined' && module.exports) {
     try { json = text ? JSON.parse(text) : {}; }
     catch (_) {
       // 非 JSON 响应：通常是被 WAF 拦截（挑战页 / 登录页 HTML）
-      throw new Error(`非 JSON 响应（疑似被 WAF 拦截，请先在浏览器打开 ${BASE_URL} 完成登录）: ${text.slice(0, 120)}`);
+      throw new Error(`非 JSON 响应（疑似被 WAF 拦截，请先在浏览器打开 ${baseUrl} 完成登录）: ${text.slice(0, 120)}`);
     }
 
     // 业务层错误：HTTP 200 但 code != 200 / success === false（如 token 失效）

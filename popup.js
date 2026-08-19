@@ -494,15 +494,15 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
-  function buildUserPageBody({ tenantId, deptId = '', deptSource = DEFAULT_DEPT_SOURCE, current = 1, size = 10, keyword = '' }) {
+  function buildUserPageBody({ tenantId, deptId = '', current = 1, size = 10, keyword = '' }) {
     if (!tenantId) throw new Error('tenantId 不能为空');
     return {
       current: Number(current) || 1,
       size: Number(size) || 10,
       deptId: String(deptId || ''),
       tenantId: String(tenantId),
-      deptSource: deptSource || DEFAULT_DEPT_SOURCE,
-      keyword: String(keyword || ''),
+      searchKey: String(keyword || ''),
+      searchType: 'username,phone',
     };
   }
 
@@ -730,7 +730,7 @@ if (typeof module !== 'undefined' && module.exports) {
     userSearch: 'userSearch',
     userList: 'userList',
     userEmpty: 'userEmpty',
-    loadMore: 'loadMoreUsers',
+    pager: 'userPager',
     recent: 'recentList',
   };
 
@@ -874,7 +874,7 @@ if (typeof module !== 'undefined' && module.exports) {
     $('userList').innerHTML = '';
     $('userList').classList.add('hidden');
     $('userEmpty').classList.add('hidden');
-    $('loadMore').classList.add('hidden');
+    $('pager').classList.add('hidden');
 
     await loadUsers(true);
   }
@@ -910,6 +910,7 @@ if (typeof module !== 'undefined' && module.exports) {
       $('userList').innerHTML = '';
       $('userList').classList.add('hidden');
       $('userEmpty').classList.add('hidden');
+      $('pager').classList.add('hidden');
     }
     setStatus('加载用户中...', '');
     try {
@@ -927,7 +928,7 @@ if (typeof module !== 'undefined' && module.exports) {
       if (!res || !res.ok) throw new Error(res?.error || '加载用户失败');
       const page = tenantHelpers.extractPageData(res.res);
       state.userPage.total = page.total;
-      state.userPage.records = reset ? page.records : state.userPage.records.concat(page.records);
+      state.userPage.records = page.records;
       renderUsers(state.userPage.records, page.total);
       setStatus('', '');
     } catch (err) {
@@ -940,12 +941,12 @@ if (typeof module !== 'undefined' && module.exports) {
   function renderUsers(records, total) {
     const list = $('userList');
     const empty = $('userEmpty');
-    const loadMore = $('loadMore');
+    const pager = $('pager');
     list.innerHTML = '';
     if (!records || !records.length) {
       list.classList.add('hidden');
       empty.classList.remove('hidden');
-      loadMore.classList.add('hidden');
+      pager.classList.add('hidden');
       return;
     }
     empty.classList.add('hidden');
@@ -971,8 +972,72 @@ if (typeof module !== 'undefined' && module.exports) {
         `</div>`;
       list.appendChild(row);
     }
-    const hasMore = records.length < total;
-    loadMore.classList.toggle('hidden', !hasMore);
+    renderPager(total);
+  }
+
+  function goToPage(page) {
+    const pages = Math.max(1, Math.ceil(state.userPage.total / state.userPage.size));
+    const target = Math.min(Math.max(1, page), pages);
+    if (target === state.userPage.current && state.userPage.records.length) return;
+    state.userPage.current = target;
+    loadUsers(false);
+  }
+
+  function renderPager(total) {
+    const pager = $('pager');
+    if (!pager) return;
+    pager.innerHTML = '';
+    const { current, size } = state.userPage;
+    const pages = Math.ceil(total / size);
+    if (!total || pages <= 1) {
+      pager.classList.add('hidden');
+      return;
+    }
+    pager.classList.remove('hidden');
+
+    const mkBtn = (label, page, { disabled = false, active = false } = {}) => {
+      const b = document.createElement('button');
+      b.className = 'pager-btn' + (active ? ' active' : '');
+      b.textContent = label;
+      b.disabled = disabled;
+      if (!disabled && !active) {
+        b.addEventListener('click', () => goToPage(page));
+      }
+      return b;
+    };
+    const mkEllipsis = () => {
+      const s = document.createElement('span');
+      s.className = 'pager-ellipsis';
+      s.textContent = '…';
+      return s;
+    };
+
+    pager.appendChild(mkBtn('‹', current - 1, { disabled: current <= 1 }));
+
+    // 页码窗口：以当前页为中心最多显示 5 个，首尾补跳转
+    const windowSize = 5;
+    let start = Math.max(1, current - Math.floor(windowSize / 2));
+    let end = Math.min(pages, start + windowSize - 1);
+    start = Math.max(1, end - windowSize + 1);
+
+    if (start > 1) {
+      pager.appendChild(mkBtn('1', 1));
+      if (start > 2) pager.appendChild(mkEllipsis());
+    }
+    for (let p = start; p <= end; p++) {
+      pager.appendChild(mkBtn(String(p), p, { active: p === current }));
+    }
+    if (end < pages) {
+      if (end < pages - 1) pager.appendChild(mkEllipsis());
+      pager.appendChild(mkBtn(String(pages), pages));
+    }
+
+    pager.appendChild(mkBtn('›', current + 1, { disabled: current >= pages }));
+
+    const info = document.createElement('span');
+    info.className = 'pager-info';
+    info.textContent = `共 ${total} 条`;
+    pager.appendChild(info);
   }
 
   function extractTokenQuery(url) {
@@ -1247,11 +1312,6 @@ if (typeof module !== 'undefined' && module.exports) {
     }, 300));
 
     $('userList').addEventListener('click', onLoginClick);
-
-    $('loadMore').addEventListener('click', () => {
-      state.userPage.current += 1;
-      loadUsers(false);
-    });
 
     $('recent').addEventListener('click', onRecentClick);
   }

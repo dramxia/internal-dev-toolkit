@@ -791,6 +791,56 @@
     }
     .load-more.hidden { display: none; }
 
+    /* 用户列表分页 */
+    .pager {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 8px;
+    }
+    .pager.hidden { display: none; }
+    .pager-btn {
+      min-width: 24px;
+      height: 24px;
+      padding: 0 6px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text-2);
+      font-size: 11px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .pager-btn:hover:not(:disabled):not(.active) {
+      background: var(--sage-50);
+      border-color: var(--sage-400);
+      color: var(--sage-600);
+    }
+    .pager-btn.active {
+      background: var(--sage-500);
+      border-color: var(--sage-500);
+      color: #fff;
+      cursor: default;
+    }
+    .pager-btn:disabled {
+      opacity: .4;
+      cursor: not-allowed;
+    }
+    .pager-ellipsis {
+      padding: 0 2px;
+      color: var(--text-3);
+      font-size: 11px;
+    }
+    .pager-info {
+      margin-left: auto;
+      font-size: 10px;
+      color: var(--text-3);
+      white-space: nowrap;
+    }
+
     /* ────────────────────────────────────────
        RECENT LIST
     ──────────────────────────────────────── */
@@ -1109,7 +1159,7 @@
 
             <div class="list hidden" id="userList"></div>
             <div class="list-empty hidden" id="userEmpty">未找到用户</div>
-            <button class="load-more hidden" id="loadMoreUsers">加载更多</button>
+            <div class="pager hidden" id="userPager"></div>
 
             <div class="divider"></div>
 

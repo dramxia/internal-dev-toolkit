@@ -55,7 +55,7 @@
     try { json = text ? JSON.parse(text) : {}; }
     catch (_) {
       // 非 JSON 响应：通常是被 WAF 拦截（挑战页 / 登录页 HTML）
-      throw new Error(`非 JSON 响应（疑似被 WAF 拦截，请先在浏览器打开 ${BASE_URL} 完成登录）: ${text.slice(0, 120)}`);
+      throw new Error(`非 JSON 响应（疑似被 WAF 拦截，请先在浏览器打开 ${baseUrl} 完成登录）: ${text.slice(0, 120)}`);
     }
 
     // 业务层错误：HTTP 200 但 code != 200 / success === false（如 token 失效）

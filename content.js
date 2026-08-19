@@ -389,15 +389,15 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
-  function buildUserPageBody({ tenantId, deptId = '', deptSource = DEFAULT_DEPT_SOURCE, current = 1, size = 10, keyword = '' }) {
+  function buildUserPageBody({ tenantId, deptId = '', current = 1, size = 10, keyword = '' }) {
     if (!tenantId) throw new Error('tenantId 不能为空');
     return {
       current: Number(current) || 1,
       size: Number(size) || 10,
       deptId: String(deptId || ''),
       tenantId: String(tenantId),
-      deptSource: deptSource || DEFAULT_DEPT_SOURCE,
-      keyword: String(keyword || ''),
+      searchKey: String(keyword || ''),
+      searchType: 'username,phone',
     };
   }
 
