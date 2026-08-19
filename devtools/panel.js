@@ -99,7 +99,7 @@ function sendMessage(msg) {
 // 请求 background 激活/关闭当前 inspected tab 的 hook 记录开关。
 // hook 始终由 manifest 在 document_start 静态安装（保证拦得到所有请求），
 // 面板打开时激活记录、面板关闭后不再记录，实现“仅在控制台打开时捕获”。
-// 页面导航（刷新/跳转）会重置 MAIN world，hook 重装为默认未激活，
+// 页面导航（刷新/跳转）会重置 MAIN world，hook 重新注入后为默认未激活，
 // 故 onNavigated 后需重新激活。
 function setHookActive(active) {
   sendMessage({ type: 'SET_HOOK_ACTIVE', tabId, active }).then((res) => {
@@ -1279,6 +1279,7 @@ function hideDisableMonitorModal() {
 
 // 渲染禁监列表：解析 key（method + ' ' + url）拆分为 method / url 展示，并支持放开
 // 接口 Mock 总开关：持久化新状态并推送到当前标签页的 content script → 页面 hook。
+// 开启时 background 会先按需注入 hook（未注入过则需刷新页面才能拦到早期请求）；
 // 关闭后 hook 不再拦截出/入参、不再记录上报；面板内已有数据保留展示。
 async function handleMockMasterToggle(enabled) {
   const res = await sendMessage({ type: 'SET_MOCK_ENABLED', enabled, tabId });
@@ -1292,7 +1293,9 @@ async function handleMockMasterToggle(enabled) {
   }
   mockEnabled = res.enabled !== false;
   console.log('[Mock Panel] Mock enabled set to', mockEnabled);
-  showPanelNotice(mockEnabled ? '接口 Mock 已启用' : '接口 Mock 已关闭：不再拦截接口，也不再捕获请求');
+  // hook 按需注入后默认为未激活态；面板处于打开状态，立即激活以恢复捕获
+  if (mockEnabled) setHookActive(true);
+  showPanelNotice(mockEnabled ? '接口 Mock 已启用（首次开启需刷新页面后生效）' : '接口 Mock 已关闭：不再拦截接口，也不再捕获请求');
 }
 
 function renderDisableMonitorList() {
@@ -1341,11 +1344,11 @@ async function init() {
     masterSwitch.addEventListener('change', () => handleMockMasterToggle(masterSwitch.checked));
   }
 
-  // hook 由 manifest 在 document_start 静态安装（保证拦得到所有请求，含早期请求与
-  // 缓存原生引用的库）。面板打开时激活记录，实现“仅在控制台打开时捕获”。
+  // hook 按需注入（接口 Mock 总开关开启时才注入页面主上下文）。
+  // 面板打开时激活记录，实现“仅在控制台打开时捕获”。
   setHookActive(true);
 
-  // 页面导航（刷新 / 跳转）会重置 MAIN world，hook 重装为默认未激活。
+  // 页面导航（刷新 / 跳转）会重置 MAIN world，hook 需重新注入并默认未激活。
   // 监听导航事件，导航后重新激活，使“打开面板 → 刷新页面 → 操作”能正常捕获。
   chrome.devtools.network.onNavigated.addListener(() => {
     console.log('[Mock Panel] Navigation detected, re-activating hook for tab', tabId);

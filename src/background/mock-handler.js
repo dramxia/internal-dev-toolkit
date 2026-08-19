@@ -315,7 +315,9 @@
     }
   }
 
-  // 处理：设置接口 Mock 总开关，并同步到指定标签页的 content script → 页面 hook。
+  // 处理：设置接口 Mock 总开关。
+  // 开启时：先按需向该标签页注入页面 hook（未注入过时），再同步状态到 content → 页面；
+  // 关闭时：仅同步状态（已注入的 hook 收到后变为透传，页面刷新后彻底不再注入）。
   async function handleSetMockEnabled(msg) {
     try {
       if (!ns.mockStorage?.setMockEnabled) {
@@ -323,6 +325,11 @@
       }
       const { tabId } = msg;
       const enabled = await ns.mockStorage.setMockEnabled(msg.enabled !== false);
+      const bgNs = globalThis.InternalDevToolkitBg;
+      if (tabId && enabled && bgNs?.mockHook?.ensureInjected) {
+        // 确保 hook 已注入后再下发开关状态，否则页面无 hook 接收
+        await bgNs.mockHook.ensureInjected(tabId).catch(() => ({ ok: false }));
+      }
       if (tabId) {
         chrome.tabs.sendMessage(tabId, {
           type: 'APPLY_MOCK_ENABLED',

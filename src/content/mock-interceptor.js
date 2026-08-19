@@ -17,12 +17,15 @@
   const MAX_LOG_SIZE = 100; // 最多保留 100 条记录
 
   function syncMockRulesToPage() {
+    // 接口 Mock 总开关关闭：页面 hook 未注入或已停用，不再向页面广播任何规则
+    if (!mockEnabled) return;
     window.postMessage({
       type: 'IDT_UPDATE_MOCK_RULES',
       rules: mockRules,
     }, '*');
   }
 
+  // 开关状态本身必须始终下发：它是让已注入 hook 停止拦截/记录的“关闭信号”
   function syncMockEnabledToPage() {
     window.postMessage({ type: 'IDT_SET_MOCK_ENABLED', enabled: mockEnabled }, '*');
   }
@@ -161,17 +164,25 @@
         const arr = Array.isArray(msg.disabled) ? msg.disabled : [];
         disabledKeys = new Set(arr.map(normalizeRequestKey));
         console.log('[Mock Interceptor] Monitor disabled updated:', disabledKeys.size);
-        window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: arr }, '*');
+        // 总开关关闭时页面无 hook，无需广播
+        if (mockEnabled) {
+          window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: arr }, '*');
+        }
         sendResponse({ ok: true });
         return true;
       }
 
       // DevTools 面板开关：激活/关闭页面 hook 的请求记录。
-      // hook 始终在 document_start 静态安装，仅通过本开关控制是否记录上报，
+      // hook 按需注入（总开关开启才注入），仅通过本开关控制是否记录上报，
       // 实现“仅在控制台打开时捕获”。
       if (msg.type === 'SET_HOOK_ACTIVE') {
         const active = !!msg.active;
         console.log('[Mock Interceptor] Set hook active:', active);
+        // 总开关关闭：页面无 hook，不向页面广播
+        if (!mockEnabled) {
+          sendResponse({ ok: true });
+          return true;
+        }
         // 页面刷新会重建 MAIN world，激活时必须把当前规则重新下发给新 hook。
         if (active) syncMockRulesToPage();
         window.postMessage({ type: 'IDT_SET_ACTIVE', active }, '*');
@@ -185,23 +196,29 @@
         mockEnabled = msg.enabled !== false;
         console.log('[Mock Interceptor] Mock enabled set to:', mockEnabled);
         syncMockEnabledToPage();
+        // 重新开启时：hook 刚按需注入或此前被停用，补发规则与禁监池使其立即生效
+        if (mockEnabled) {
+          syncMockRulesToPage();
+          if (disabledKeys.size > 0) {
+            window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: [...disabledKeys] }, '*');
+          }
+        }
         sendResponse({ ok: true });
         return true;
       }
     });
 
-    // 3) 页面刷新会重建 MAIN world 中的 hook；从持久化存储加载完成后立即重放规则，
-    // 保证已开启的 Mock 不依赖再次编辑或重新切换开关才能生效。
+    // 3) 先读接口 Mock 总开关，再决定是否向页面下发规则：
+    //    开关关闭时页面未注入 hook，任何 postMessage 都是空转，直接跳过。
     if (ns.mockStorage) {
-      mockRules = await ns.mockStorage.getMockRules();
-      console.log('[Mock Interceptor] Loaded', mockRules.length, 'rules from storage');
-      syncMockRulesToPage();
-
-      // 接口 Mock 总开关：content script 加载即下发，保证 hook 拦截/捕获与开关状态一致。
       if (ns.mockStorage.getMockEnabled) {
         mockEnabled = await ns.mockStorage.getMockEnabled();
         console.log('[Mock Interceptor] Mock enabled loaded:', mockEnabled);
-        syncMockEnabledToPage();
+      }
+      mockRules = await ns.mockStorage.getMockRules();
+      console.log('[Mock Interceptor] Loaded', mockRules.length, 'rules from storage');
+      if (mockEnabled) {
+        syncMockRulesToPage();
       }
     }
   }

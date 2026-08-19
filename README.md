@@ -11,7 +11,7 @@
 - **工具栏弹窗**：显示当前页面标题 / URL，并提供后台账号管理与 Token 操作
 - **设置持久化**：账号密码、Token 与最近登录记录通过 `chrome.storage.local` 保存（按项目命名空间隔离）
 - **消息通信**：popup ↔ content ↔ background 三方消息链路示例
-- **后台 API 登录**：通过账号密码跨域调用后台登录接口，获取并保存 admin token，同时可在目标页面自动注入 `window.__ADMIN_TOKEN__`
+- **后台 API 登录**：通过账号密码跨域调用后台登录接口，获取 admin token 并保存到插件存储（不注入任何页面）
 - **一键快捷登录**：在已获取 admin token 的前提下，搜索租户 → 选择部门 → 搜索用户 → 一键登录到指定用户的前端会话（调用 `virtualLogin` 并在新标签页打开返回 URL）
 - **最近登录记录**：快捷登录成功后本地保存最近 10 条记录，便于再次进入
 
@@ -99,7 +99,8 @@ internal-dev-toolkit/
 │   │   ├── index.js             # Content Script 入口
 │   │   ├── ui.js                # 页面 UI 注入（Toast）
 │   │   ├── messages.js          # 消息通信（popup/background/content）
-│   │   ├── api-token.js         # 将 token 注入页面
+│   │   ├── mock-interceptor.js  # Mock 拦截协调（规则/开关中转，受总开关门控）
+│   │   ├── mock-hook.js         # 页面主上下文 fetch/XHR hook（按需注入）
 │   │   └── api-proxy.js         # 页面侧代理请求（备用链路）
 │   └── popup/
 │       ├── index.js             # popup 主逻辑
@@ -136,7 +137,7 @@ internal-dev-toolkit/
 2. `POST /login` → 提交手机号、ticket、moveLength、加密后的密码，触发验证码下发
 3. `POST /valid` → 提交手机号、固定验证码、加密后的密码，换取 token
 4. 从 `/valid` 响应中解析 `token`（兼容 `data.token`、`data.accessToken`、`data.access_token` 等常见字段）
-5. 保存到 `chrome.storage.local`，并在目标页面注入 `window.__ADMIN_TOKEN__`
+5. 保存到 `chrome.storage.local`（仅插件内部使用，不注入任何页面）
 
 > **注意**：默认使用 SHA-256 对密码做摘要。若后台采用其他加密方式，请修改 `src/background/api.js` 中的 `encryptPassword`。若 `/getCaptcha` 返回结构或验证码逻辑与当前假设不符，请同步调整 `extractTicket` / `extractMoveLength`。
 

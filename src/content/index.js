@@ -22,12 +22,6 @@
           return { ok: true, token: tokenState.token, updatedAt: tokenState.updatedAt };
         }
 
-        case 'INJECT_TOKEN': {
-          if (!ns.apiToken) return { ok: false, error: 'apiToken 模块未加载' };
-          const tokenState = await ns.apiToken.injectToken();
-          return { ok: true, token: tokenState.token };
-        }
-
         case 'FETCH_TENANTS_CS': {
           if (!ns.apiProxy) return { ok: false, error: 'apiProxy 模块未加载' };
           const res = await ns.apiProxy.fetchTenantPage(msg.payload);
@@ -60,7 +54,6 @@
 
         case 'CLEAR_TOKEN': {
           await ns.token.clearToken();
-          if (ns.apiToken) ns.apiToken.clearPageToken();
           return { ok: true };
         }
 
@@ -69,10 +62,6 @@
       }
     });
 
-    // 目标后台站：若已保存 token，则自动注入页面
-    if (ns.apiToken) {
-      setTimeout(() => ns.apiToken.injectToken().catch(() => {}), 400);
-    }
   }
 
   init().catch((err) => {

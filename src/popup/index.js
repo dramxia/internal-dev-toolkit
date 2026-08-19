@@ -76,9 +76,7 @@
     try {
       await ns.token.saveToken(next);
       await renderToken();
-      setLoginStatus('Token 已保存并注入页面', 'ok');
-      // 立即向当前标签页注入新 token（与 API 登录成功后行为一致）
-      ns.messages.sendToActiveTab({ type: 'INJECT_TOKEN' }).catch(() => {});
+      setLoginStatus('Token 已保存', 'ok');
     } catch (err) {
       setLoginStatus(`保存失败: ${err.message}`, 'err');
     }
@@ -242,7 +240,6 @@
         if (res && res.ok) {
           await renderToken();
           setLoginStatus('登录成功，token 已保存', 'ok');
-          ns.messages.sendToActiveTab({ type: 'INJECT_TOKEN' }).catch(() => {});
         } else {
           setLoginStatus(res?.error || '登录失败', 'err');
         }

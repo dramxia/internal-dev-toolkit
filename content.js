@@ -1430,12 +1430,15 @@ if (typeof module !== 'undefined' && module.exports) {
   const MAX_LOG_SIZE = 100; // 最多保留 100 条记录
 
   function syncMockRulesToPage() {
+    // 接口 Mock 总开关关闭：页面 hook 未注入或已停用，不再向页面广播任何规则
+    if (!mockEnabled) return;
     window.postMessage({
       type: 'IDT_UPDATE_MOCK_RULES',
       rules: mockRules,
     }, '*');
   }
 
+  // 开关状态本身必须始终下发：它是让已注入 hook 停止拦截/记录的“关闭信号”
   function syncMockEnabledToPage() {
     window.postMessage({ type: 'IDT_SET_MOCK_ENABLED', enabled: mockEnabled }, '*');
   }
@@ -1574,17 +1577,25 @@ if (typeof module !== 'undefined' && module.exports) {
         const arr = Array.isArray(msg.disabled) ? msg.disabled : [];
         disabledKeys = new Set(arr.map(normalizeRequestKey));
         console.log('[Mock Interceptor] Monitor disabled updated:', disabledKeys.size);
-        window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: arr }, '*');
+        // 总开关关闭时页面无 hook，无需广播
+        if (mockEnabled) {
+          window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: arr }, '*');
+        }
         sendResponse({ ok: true });
         return true;
       }
 
       // DevTools 面板开关：激活/关闭页面 hook 的请求记录。
-      // hook 始终在 document_start 静态安装，仅通过本开关控制是否记录上报，
+      // hook 按需注入（总开关开启才注入），仅通过本开关控制是否记录上报，
       // 实现“仅在控制台打开时捕获”。
       if (msg.type === 'SET_HOOK_ACTIVE') {
         const active = !!msg.active;
         console.log('[Mock Interceptor] Set hook active:', active);
+        // 总开关关闭：页面无 hook，不向页面广播
+        if (!mockEnabled) {
+          sendResponse({ ok: true });
+          return true;
+        }
         // 页面刷新会重建 MAIN world，激活时必须把当前规则重新下发给新 hook。
         if (active) syncMockRulesToPage();
         window.postMessage({ type: 'IDT_SET_ACTIVE', active }, '*');
@@ -1598,23 +1609,29 @@ if (typeof module !== 'undefined' && module.exports) {
         mockEnabled = msg.enabled !== false;
         console.log('[Mock Interceptor] Mock enabled set to:', mockEnabled);
         syncMockEnabledToPage();
+        // 重新开启时：hook 刚按需注入或此前被停用，补发规则与禁监池使其立即生效
+        if (mockEnabled) {
+          syncMockRulesToPage();
+          if (disabledKeys.size > 0) {
+            window.postMessage({ type: 'IDT_UPDATE_MONITOR_DISABLED', disabled: [...disabledKeys] }, '*');
+          }
+        }
         sendResponse({ ok: true });
         return true;
       }
     });
 
-    // 3) 页面刷新会重建 MAIN world 中的 hook；从持久化存储加载完成后立即重放规则，
-    // 保证已开启的 Mock 不依赖再次编辑或重新切换开关才能生效。
+    // 3) 先读接口 Mock 总开关，再决定是否向页面下发规则：
+    //    开关关闭时页面未注入 hook，任何 postMessage 都是空转，直接跳过。
     if (ns.mockStorage) {
-      mockRules = await ns.mockStorage.getMockRules();
-      console.log('[Mock Interceptor] Loaded', mockRules.length, 'rules from storage');
-      syncMockRulesToPage();
-
-      // 接口 Mock 总开关：content script 加载即下发，保证 hook 拦截/捕获与开关状态一致。
       if (ns.mockStorage.getMockEnabled) {
         mockEnabled = await ns.mockStorage.getMockEnabled();
         console.log('[Mock Interceptor] Mock enabled loaded:', mockEnabled);
-        syncMockEnabledToPage();
+      }
+      mockRules = await ns.mockStorage.getMockRules();
+      console.log('[Mock Interceptor] Loaded', mockRules.length, 'rules from storage');
+      if (mockEnabled) {
+        syncMockRulesToPage();
       }
     }
   }
@@ -1622,67 +1639,6 @@ if (typeof module !== 'undefined' && module.exports) {
   ns.mockInterceptor = {
     init,
   };
-})();
-
-
-/* ===== src/content/api-token.js ===== */
-/* 内部开发工具箱 — Content Script Token 注入 */
-/* 在目标后台站将 token 暴露到页面，方便页面脚本或开发者直接使用；并提供消息接口。 */
-(() => {
-  'use strict';
-
-  const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
-
-  function isTargetSite() {
-    if (!ns.projects || !ns.projects.PROJECTS) return false;
-    const allHosts = ns.projects.PROJECTS.flatMap(p => p.hosts);
-    return allHosts.some(h => {
-      const pattern = h.replace(/^\*\./, ''); // '*.hwzxs.com' -> 'hwzxs.com'
-      if (h.startsWith('*.')) {
-        // 通配符匹配：hostname 以 pattern 结尾或完全相等
-        return location.hostname === pattern || location.hostname.endsWith('.' + pattern);
-      } else {
-        // 精确匹配
-        return location.hostname === h;
-      }
-    });
-  }
-
-  function exposeToken(token) {
-    if (!token) return;
-    try {
-      // 暴露到页面全局，便于页面内调试脚本或业务代码取用
-      Object.defineProperty(window, '__ADMIN_TOKEN__', {
-        value: token,
-        configurable: true,
-        writable: true,
-      });
-      // 同时写入 localStorage，供同域应用读取（key 可按实际项目调整）
-      localStorage.setItem('admin-token', token);
-    } catch (_) {
-      // 某些页面安全策略可能禁止写入 window/localStorage
-    }
-  }
-
-  async function injectToken() {
-    const tokenState = await ns.token.getToken();
-    if (tokenState.token) {
-      exposeToken(tokenState.token);
-      if (ns.ui) {
-        ns.ui.toast('Token 已注入页面');
-      }
-    }
-    return tokenState;
-  }
-
-  function clearPageToken() {
-    try {
-      delete window.__ADMIN_TOKEN__;
-      localStorage.removeItem('admin-token');
-    } catch (_) {}
-  }
-
-  ns.apiToken = { isTargetSite, exposeToken, injectToken, clearPageToken };
 })();
 
 
@@ -1788,12 +1744,6 @@ if (typeof module !== 'undefined' && module.exports) {
           return { ok: true, token: tokenState.token, updatedAt: tokenState.updatedAt };
         }
 
-        case 'INJECT_TOKEN': {
-          if (!ns.apiToken) return { ok: false, error: 'apiToken 模块未加载' };
-          const tokenState = await ns.apiToken.injectToken();
-          return { ok: true, token: tokenState.token };
-        }
-
         case 'FETCH_TENANTS_CS': {
           if (!ns.apiProxy) return { ok: false, error: 'apiProxy 模块未加载' };
           const res = await ns.apiProxy.fetchTenantPage(msg.payload);
@@ -1826,7 +1776,6 @@ if (typeof module !== 'undefined' && module.exports) {
 
         case 'CLEAR_TOKEN': {
           await ns.token.clearToken();
-          if (ns.apiToken) ns.apiToken.clearPageToken();
           return { ok: true };
         }
 
@@ -1835,10 +1784,6 @@ if (typeof module !== 'undefined' && module.exports) {
       }
     });
 
-    // 目标后台站：若已保存 token，则自动注入页面
-    if (ns.apiToken) {
-      setTimeout(() => ns.apiToken.injectToken().catch(() => {}), 400);
-    }
   }
 
   init().catch((err) => {

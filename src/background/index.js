@@ -6,6 +6,37 @@
   const ns = (globalThis.InternalDevToolkitBg = globalThis.InternalDevToolkitBg || {});
   const commonNs = globalThis.InternalDevToolkit;
 
+  // 按需向指定标签页主上下文注入 mock-hook.js（绕过页面 CSP）。
+  // 前置条件：「接口 Mock 总开关」开启；hook 内部有防重复安装守卫，重复调用安全。
+  // 注入成功后把当前项目规则同步给 content script → 页面主上下文。
+  async function ensureMockHookInjected(tabId) {
+    if (!chrome.scripting?.executeScript) {
+      return { ok: false, error: '当前环境不支持 scripting.executeScript' };
+    }
+    if (!commonNs.mockStorage?.getMockEnabled) {
+      return { ok: false, error: 'mockStorage not available' };
+    }
+    const enabled = await commonNs.mockStorage.getMockEnabled();
+    if (!enabled) {
+      return { ok: false, skipped: 'mock-disabled', error: '接口 Mock 总开关已关闭，跳过注入' };
+    }
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      world: 'MAIN',
+      files: ['mock-hook.js'],
+    });
+    // hook 装好后，把当前项目的规则同步给 content script → 页面主上下文
+    try {
+      const rules = commonNs.mockStorage ? await commonNs.mockStorage.getMockRules() : [];
+      chrome.tabs.sendMessage(tabId, { type: 'APPLY_MOCK_RULES', rules }, () => {
+        void chrome.runtime?.lastError;
+      });
+    } catch (_) {}
+    return { ok: true };
+  }
+
+  ns.mockHook = { ensureInjected: ensureMockHookInjected };
+
   // Service Worker 启动时初始化：加载当前项目并执行数据迁移
   (async () => {
     try {
@@ -348,59 +379,60 @@
     }
 
     // DevTools 面板开关：激活/关闭指定标签页 hook 的请求记录。
-    // hook 始终在 document_start 静态安装（见 manifest content_scripts），
-    // 仅由本消息经 content script → postMessage(IDT_SET_ACTIVE) 控制是否记录上报。
-    // 面板打开时激活，面板关闭/导航后由面板按需重新激活或保持激活。
+    // hook 不再静态安装，改为按需注入：仅当「接口 Mock 总开关」开启时，
+    // 面板激活（active=true）才确保 hook 注入当前标签页，再转发激活消息；
+    // 开关关闭时不注入、不转发，页面保持零侵入。
     if (msg.type === 'SET_HOOK_ACTIVE') {
       const { tabId, active } = msg;
       if (!tabId) {
         sendResponse({ ok: false, error: 'tabId required' });
         return true;
       }
-      chrome.tabs.sendMessage(tabId, { type: 'SET_HOOK_ACTIVE', active }, () => {
-        if (chrome.runtime?.lastError) {
-          sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+      (async () => {
+        if (active && ns.mockHook?.ensureInjected) {
+          // 开关关闭时 ensureInjected 内部会拒绝注入；此处失败不阻断后续判断
+          await ns.mockHook.ensureInjected(tabId).catch(() => ({ ok: false }));
+        }
+        const mockEnabled = commonNs.mockStorage?.getMockEnabled
+          ? await commonNs.mockStorage.getMockEnabled()
+          : true;
+        if (!mockEnabled) {
+          // 总开关关闭：不向页面注入/转发任何 hook 相关消息
+          sendResponse({ ok: true, skipped: 'mock-disabled' });
           return;
         }
-        // 激活时一并下发持久化的禁监接口池，使 hook 立即按最新列表跳过记录。
-        // 面板关闭（active=false）时无需下发。
-        if (active && commonNs.mockStorage) {
-          commonNs.mockStorage.getMonitorDisabled().then((disabled) => {
-            chrome.tabs.sendMessage(tabId, { type: 'APPLY_MONITOR_DISABLED', disabled }, () => {
-              void chrome.runtime?.lastError;
-            });
-          }).catch(() => {});
-        }
-        sendResponse({ ok: true });
-      });
+        chrome.tabs.sendMessage(tabId, { type: 'SET_HOOK_ACTIVE', active }, () => {
+          if (chrome.runtime?.lastError) {
+            sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          // 激活时一并下发持久化的禁监接口池，使 hook 立即按最新列表跳过记录。
+          // 面板关闭（active=false）时无需下发。
+          if (active && commonNs.mockStorage) {
+            commonNs.mockStorage.getMonitorDisabled().then((disabled) => {
+              chrome.tabs.sendMessage(tabId, { type: 'APPLY_MONITOR_DISABLED', disabled }, () => {
+                void chrome.runtime?.lastError;
+              });
+            }).catch(() => {});
+          }
+          sendResponse({ ok: true });
+        });
+      })().catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }
 
-    // 在指定标签页的主上下文注入 mock-hook.js（绕过页面 CSP）
-    // 兜底入口：正常情况下 hook 由 manifest content_scripts 在 document_start 静态注入，
-    // 本消息仅在静态注入未命中（如扩展重载后页面未刷新）时作手动补注入用。
+    // 在指定标签页的主上下文注入 mock-hook.js（绕过页面 CSP）。
+    // 前置条件：「接口 Mock 总开关」开启；hook 内部有防重复安装守卫，重复调用安全。
+    // 触发点：DevTools 面板激活（SET_HOOK_ACTIVE）、面板打开总开关（SET_MOCK_ENABLED）。
     if (msg.type === 'INJECT_MOCK_HOOK') {
       const tabId = msg.tabId || (_sender.tab && _sender.tab.id);
       if (!tabId) {
         sendResponse({ ok: false, error: 'no target tab' });
         return true;
       }
-      chrome.scripting
-        .executeScript({
-          target: { tabId, allFrames: true },
-          world: 'MAIN',
-          files: ['mock-hook.js'],
-        })
-        .then(async () => {
-          // hook 装好后，把当前项目的规则同步给 content script → 页面主上下文
-          try {
-            const rules = commonNs.mockStorage ? await commonNs.mockStorage.getMockRules() : [];
-            chrome.tabs.sendMessage(tabId, { type: 'APPLY_MOCK_RULES', rules }, () => {
-              void chrome.runtime?.lastError;
-            });
-          } catch (_) {}
-          sendResponse({ ok: true });
-        })
+      ns.mockHook
+        .ensureInjected(tabId)
+        .then((result) => sendResponse(result))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }

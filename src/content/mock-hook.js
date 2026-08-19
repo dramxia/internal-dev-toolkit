@@ -1,12 +1,12 @@
 /* 内部开发工具箱 — Mock 拦截器（页面主上下文 / MAIN world） */
-/* 由 manifest content_scripts 在 document_start 静态注入（world:MAIN），
+/* 不再静态注入；由 background 在「接口 Mock 总开关」开启时经 scripting.executeScript
+   按需注入（DevTools 面板激活或开启总开关时触发），绕过页面 CSP。
    运行在页面真实 window 上，可拦截页面代码发起的 fetch/XHR。
    与 content script 之间通过 window.postMessage 通信：
      - 入：IDT_UPDATE_MOCK_RULES（规则更新）、IDT_SET_ACTIVE（激活开关）
      - 出：IDT_REQUEST_LOGGED（请求记录上报）
-   hook 始终安装（抢在页面脚本缓存原生引用之前），但默认不记录上报；
-   仅当 DevTools 面板打开时经 IDT_SET_ACTIVE 激活后才记录，
-   实现“仅在控制台打开时捕获”。Mock 规则改写不受激活开关影响，始终生效。 */
+   hook 注入后默认不记录上报；仅当 DevTools 面板打开时经 IDT_SET_ACTIVE 激活后才记录，
+   实现“仅在控制台打开时捕获”。Mock 规则改写不受激活开关影响，注入即生效。 */
 (() => {
   // 防止重复注入（页面内多次注入时只装一次 hook）
   if (window.__IDT_MOCK_HOOK_INSTALLED__) {
