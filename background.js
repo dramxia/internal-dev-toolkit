@@ -573,6 +573,7 @@ if (typeof module !== 'undefined' && module.exports) {
   const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
   const KEY_PREFIX = 'mockRules';
   const DISABLED_PREFIX = 'monitorDisabled';
+  const MOCK_ENABLED_KEY = 'mockEnabled'; // 接口 Mock 总开关（全局，不按项目隔离）
   let ruleMutationQueue = Promise.resolve();
 
   function normalizeRequestKey(key) {
@@ -924,6 +925,31 @@ if (typeof module !== 'undefined' && module.exports) {
     });
   }
 
+  // 读取接口 Mock 总开关。默认 true（未写入过视为启用），保证存量用户行为不变。
+  async function getMockEnabled() {
+    if (!hasChromeStorage()) return true;
+    return new Promise((resolve) => {
+      chrome.storage.local.get(MOCK_ENABLED_KEY, (items) => {
+        if (chrome.runtime?.lastError) {
+          resolve(true);
+          return;
+        }
+        resolve(items[MOCK_ENABLED_KEY] !== false);
+      });
+    });
+  }
+
+  // 写入接口 Mock 总开关，返回最终生效值。
+  async function setMockEnabled(enabled) {
+    const value = enabled !== false;
+    if (!hasChromeStorage()) return value;
+    return new Promise((resolve) => {
+      chrome.storage.local.set({ [MOCK_ENABLED_KEY]: value }, () => {
+        resolve(value);
+      });
+    });
+  }
+
   ns.mockStorage = {
     getMockRules,
     saveMockRule,
@@ -935,6 +961,8 @@ if (typeof module !== 'undefined' && module.exports) {
     getMonitorDisabled,
     addMonitorDisabled,
     removeMonitorDisabled,
+    getMockEnabled,
+    setMockEnabled,
   };
 })();
 
@@ -3407,6 +3435,39 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
+  // 处理：获取接口 Mock 总开关（默认启用）
+  async function handleGetMockEnabled() {
+    try {
+      if (!ns.mockStorage?.getMockEnabled) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const enabled = await ns.mockStorage.getMockEnabled();
+      return { ok: true, enabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // 处理：设置接口 Mock 总开关，并同步到指定标签页的 content script → 页面 hook。
+  async function handleSetMockEnabled(msg) {
+    try {
+      if (!ns.mockStorage?.setMockEnabled) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const { tabId } = msg;
+      const enabled = await ns.mockStorage.setMockEnabled(msg.enabled !== false);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MOCK_ENABLED',
+          enabled,
+        }).catch(() => {});
+      }
+      return { ok: true, enabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   // 导出处理器
   ns.mockHandler = {
     handleGetMockRules,
@@ -3422,6 +3483,8 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetMonitorDisabled,
     handleAddMonitorDisabled,
     handleRemoveMonitorDisabled,
+    handleGetMockEnabled,
+    handleSetMockEnabled,
   };
 })();
 
@@ -3738,6 +3801,22 @@ if (typeof module !== 'undefined' && module.exports) {
     if (msg.type === 'REMOVE_MONITOR_DISABLED' && commonNs.mockHandler) {
       commonNs.mockHandler
         .handleRemoveMonitorDisabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    // 接口 Mock 总开关：读取 / 设置（设置后同步 content script → 页面 hook）
+    if (msg.type === 'GET_MOCK_ENABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleGetMockEnabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+    if (msg.type === 'SET_MOCK_ENABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleSetMockEnabled(msg)
         .then((result) => sendResponse(result))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;

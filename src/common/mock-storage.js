@@ -6,6 +6,7 @@
   const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
   const KEY_PREFIX = 'mockRules';
   const DISABLED_PREFIX = 'monitorDisabled';
+  const MOCK_ENABLED_KEY = 'mockEnabled'; // 接口 Mock 总开关（全局，不按项目隔离）
   let ruleMutationQueue = Promise.resolve();
 
   function normalizeRequestKey(key) {
@@ -357,6 +358,31 @@
     });
   }
 
+  // 读取接口 Mock 总开关。默认 true（未写入过视为启用），保证存量用户行为不变。
+  async function getMockEnabled() {
+    if (!hasChromeStorage()) return true;
+    return new Promise((resolve) => {
+      chrome.storage.local.get(MOCK_ENABLED_KEY, (items) => {
+        if (chrome.runtime?.lastError) {
+          resolve(true);
+          return;
+        }
+        resolve(items[MOCK_ENABLED_KEY] !== false);
+      });
+    });
+  }
+
+  // 写入接口 Mock 总开关，返回最终生效值。
+  async function setMockEnabled(enabled) {
+    const value = enabled !== false;
+    if (!hasChromeStorage()) return value;
+    return new Promise((resolve) => {
+      chrome.storage.local.set({ [MOCK_ENABLED_KEY]: value }, () => {
+        resolve(value);
+      });
+    });
+  }
+
   ns.mockStorage = {
     getMockRules,
     saveMockRule,
@@ -368,5 +394,7 @@
     getMonitorDisabled,
     addMonitorDisabled,
     removeMonitorDisabled,
+    getMockEnabled,
+    setMockEnabled,
   };
 })();

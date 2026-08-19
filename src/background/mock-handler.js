@@ -302,6 +302,39 @@
     }
   }
 
+  // 处理：获取接口 Mock 总开关（默认启用）
+  async function handleGetMockEnabled() {
+    try {
+      if (!ns.mockStorage?.getMockEnabled) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const enabled = await ns.mockStorage.getMockEnabled();
+      return { ok: true, enabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  // 处理：设置接口 Mock 总开关，并同步到指定标签页的 content script → 页面 hook。
+  async function handleSetMockEnabled(msg) {
+    try {
+      if (!ns.mockStorage?.setMockEnabled) {
+        return { ok: false, error: 'mockStorage not available' };
+      }
+      const { tabId } = msg;
+      const enabled = await ns.mockStorage.setMockEnabled(msg.enabled !== false);
+      if (tabId) {
+        chrome.tabs.sendMessage(tabId, {
+          type: 'APPLY_MOCK_ENABLED',
+          enabled,
+        }).catch(() => {});
+      }
+      return { ok: true, enabled };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  }
+
   // 导出处理器
   ns.mockHandler = {
     handleGetMockRules,
@@ -317,5 +350,7 @@
     handleGetMonitorDisabled,
     handleAddMonitorDisabled,
     handleRemoveMonitorDisabled,
+    handleGetMockEnabled,
+    handleSetMockEnabled,
   };
 })();

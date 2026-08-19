@@ -11,6 +11,7 @@ let listMode = 'capture';   // 'capture' | 'emo' | 'edited'，默认捕获
 let selectedDataTab = 'response'; // 编辑器当前出参/入参 Tab，重渲染后保持
 let csReady = true; // content script 是否在当前标签页就绪
 let monitorDisabled = []; // 被禁监的接口 key（method + ' ' + 无 query/hash 的 url）数组
+let mockEnabled = true; // 接口 Mock 总开关：关闭后页面 hook 不拦截也不捕获
 let dataLoadRevision = 0; // 丢弃晚到的旧 loadData 结果，避免覆盖刚保存的规则
 let editorSessionRevision = 0; // 使旧编辑器的 debounce 回调在重渲染后失效
 let mockRuleSaveQueue = Promise.resolve(); // 串行保存整条规则，防止异步写入互相覆盖
@@ -1277,6 +1278,23 @@ function hideDisableMonitorModal() {
 }
 
 // 渲染禁监列表：解析 key（method + ' ' + url）拆分为 method / url 展示，并支持放开
+// 接口 Mock 总开关：持久化新状态并推送到当前标签页的 content script → 页面 hook。
+// 关闭后 hook 不再拦截出/入参、不再记录上报；面板内已有数据保留展示。
+async function handleMockMasterToggle(enabled) {
+  const res = await sendMessage({ type: 'SET_MOCK_ENABLED', enabled, tabId });
+  if (!res || res.ok === false) {
+    // 失败时回滚 UI 状态
+    mockEnabled = !enabled;
+    const masterSwitch = document.getElementById('mockMasterSwitch');
+    if (masterSwitch) masterSwitch.checked = mockEnabled;
+    window.alert((enabled ? '启用' : '关闭') + '接口 Mock 失败: ' + ((res && res.error) || 'unknown'));
+    return;
+  }
+  mockEnabled = res.enabled !== false;
+  console.log('[Mock Panel] Mock enabled set to', mockEnabled);
+  showPanelNotice(mockEnabled ? '接口 Mock 已启用' : '接口 Mock 已关闭：不再拦截接口，也不再捕获请求');
+}
+
 function renderDisableMonitorList() {
   const container = document.getElementById('disableMonitorList');
   if (!container) return;
@@ -1313,6 +1331,15 @@ function renderDisableMonitorList() {
 
 async function init() {
   console.log('[Mock Panel] Initializing for tab', tabId);
+
+  // 接口 Mock 总开关：读取持久化状态并初始化开关 UI
+  const enabledRes = await sendMessage({ type: 'GET_MOCK_ENABLED' });
+  mockEnabled = !enabledRes || enabledRes.ok === false ? true : enabledRes.enabled !== false;
+  const masterSwitch = document.getElementById('mockMasterSwitch');
+  if (masterSwitch) {
+    masterSwitch.checked = mockEnabled;
+    masterSwitch.addEventListener('change', () => handleMockMasterToggle(masterSwitch.checked));
+  }
 
   // hook 由 manifest 在 document_start 静态安装（保证拦得到所有请求，含早期请求与
   // 缓存原生引用的库）。面板打开时激活记录，实现“仅在控制台打开时捕获”。

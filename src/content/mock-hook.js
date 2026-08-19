@@ -19,6 +19,7 @@
   let mockRules = [];
   let disabledKeys = new Set(); // 被禁监的接口 key（method + ' ' + 无 query/hash 的 url）
   let activated = false; // 是否记录并上报请求（由 DevTools 面板打开时激活）
+  let mockEnabled = true; // 接口 Mock 总开关：false 时既不拦截（出/入参改写）也不记录上报
 
   function endpointUrl(url) {
     return String(url || '').split('#', 1)[0].split('?', 1)[0];
@@ -50,6 +51,9 @@
     } else if (event.data.type === 'IDT_SET_ACTIVE') {
       activated = !!event.data.active;
       console.log('[Mock Interceptor - Page Context] Active set to', activated);
+    } else if (event.data.type === 'IDT_SET_MOCK_ENABLED') {
+      mockEnabled = event.data.enabled !== false;
+      console.log('[Mock Interceptor - Page Context] Mock enabled set to', mockEnabled);
     }
   });
 
@@ -57,7 +61,9 @@
   // 新结构下“是否拦截”由 responseMock.enabled / requestMock.enabled 决定，
   // 此处仅按 url+method 命中规则本身；具体拦截出参还是入参由调用方 resolveMockIntent 判定。
   // 旧结构（无 responseMock/requestMock）仍以 rule.enabled 作为命中门槛，保证兼容。
+  // 接口 Mock 总开关关闭时直接不命中任何规则，请求完全走真实网络。
   function findMatchingRule(url, method) {
+    if (!mockEnabled) return undefined;
     // 预解析请求 URL 的 origin / pathname（用于导入接口的“仅路径 + 当前页面域名”匹配）
     let reqPath = null, reqOrigin = null;
     try { const u = new URL(url, location.href); reqPath = u.pathname; reqOrigin = u.origin; } catch (_) {}
@@ -136,6 +142,7 @@
   const seenKeys = new Set();
   function recordRequest(url, method, requestPayload, responsePayload, status, mocked = false) {
     if (!activated) return; // 未激活：不记录、不上报，保持零开销透传
+    if (!mockEnabled) return; // 接口 Mock 总开关关闭：不记录、不上报
     const key = requestKey(method, url);
     // 命中禁监池：不记录、不上报（避免轮询接口刷屏且无法选中）
     if (disabledKeys.size > 0 && disabledKeys.has(key)) return;
@@ -196,8 +203,8 @@
     try {
       const response = await originalFetch.call(this, input, init);
 
-      // 仅激活时才 clone + 读响应体并记录；未激活时直接透传，零额外开销
-      if (activated) {
+      // 仅激活且接口 Mock 总开关开启时才 clone + 读响应体并记录；否则直接透传，零额外开销
+      if (activated && mockEnabled) {
         const clonedResponse = response.clone();
         clonedResponse.text().then(text => {
           recordRequest(url, method, init?.body, text, response.status, intent.requestEnabled);
@@ -268,8 +275,8 @@
 
       // 用 loadend 记录所有终态（load/error/abort/timeout），且不覆盖页面自身的 onload。
       // 仅靠 onload 会漏掉失败/中止的请求，也无法兼容用 onloadend/onreadystatechange 的库（如 axios）。
-      // 仅激活时注册监听并记录；未激活时直接透传，零额外开销。
-      if (activated) {
+      // 仅激活且接口 Mock 总开关开启时注册监听并记录；否则直接透传，零额外开销。
+      if (activated && mockEnabled) {
         xhr.addEventListener('loadend', function() {
           recordRequest(url, method, requestBody, xhr.responseText, xhr.status, intent.requestEnabled);
         });

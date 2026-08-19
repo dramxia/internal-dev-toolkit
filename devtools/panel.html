@@ -198,6 +198,30 @@
       flex-shrink: 0;
     }
     .toolbar-actions[hidden] { display: none; }
+    .toolbar-actions-right { margin-left: auto; }
+
+    /* 接口 Mock 总开关：品牌区右侧，控制全部 Mock 拦截与捕获 */
+    .mock-master-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      padding: 4px 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--bg-sidebar);
+      cursor: pointer;
+      transition: border-color 0.15s ease;
+    }
+    .mock-master-toggle:hover { border-color: #cbd5e1; }
+    .mock-master-toggle-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      user-select: none;
+      white-space: nowrap;
+    }
+    .mock-master-toggle input:checked ~ .mock-master-toggle-label { color: var(--accent); }
 
     /* ────────────────────────────────────────
        SIDEBAR TABS
@@ -1130,7 +1154,6 @@
     /* ────────────────────────────────────────
        IMPORT MODAL
     ──────────────────────────────────────── */
-    .toolbar-actions-right { margin-left: auto; }
 
     .modal-overlay {
       position: fixed;
@@ -1377,6 +1400,13 @@
         <div class="toolbar-brand-icon">M</div>
         <span class="toolbar-brand-name">API Mock Studio</span>
       </div>
+      <label class="mock-master-toggle" id="mockMasterToggle" title="启用或关闭接口 Mock：关闭后不再拦截接口，也不再捕获请求">
+        <span class="switch">
+          <input type="checkbox" id="mockMasterSwitch" checked>
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </span>
+        <span class="mock-master-toggle-label">接口 Mock</span>
+      </label>
       <div class="toolbar-actions" id="toolbarActions">
         <button class="toolbar-btn" id="refreshBtn" title="刷新列表">
           <svg class="icon icon-sm" viewBox="0 0 24 24">

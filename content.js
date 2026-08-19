@@ -468,6 +468,7 @@ if (typeof module !== 'undefined' && module.exports) {
   const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
   const KEY_PREFIX = 'mockRules';
   const DISABLED_PREFIX = 'monitorDisabled';
+  const MOCK_ENABLED_KEY = 'mockEnabled'; // 接口 Mock 总开关（全局，不按项目隔离）
   let ruleMutationQueue = Promise.resolve();
 
   function normalizeRequestKey(key) {
@@ -819,6 +820,31 @@ if (typeof module !== 'undefined' && module.exports) {
     });
   }
 
+  // 读取接口 Mock 总开关。默认 true（未写入过视为启用），保证存量用户行为不变。
+  async function getMockEnabled() {
+    if (!hasChromeStorage()) return true;
+    return new Promise((resolve) => {
+      chrome.storage.local.get(MOCK_ENABLED_KEY, (items) => {
+        if (chrome.runtime?.lastError) {
+          resolve(true);
+          return;
+        }
+        resolve(items[MOCK_ENABLED_KEY] !== false);
+      });
+    });
+  }
+
+  // 写入接口 Mock 总开关，返回最终生效值。
+  async function setMockEnabled(enabled) {
+    const value = enabled !== false;
+    if (!hasChromeStorage()) return value;
+    return new Promise((resolve) => {
+      chrome.storage.local.set({ [MOCK_ENABLED_KEY]: value }, () => {
+        resolve(value);
+      });
+    });
+  }
+
   ns.mockStorage = {
     getMockRules,
     saveMockRule,
@@ -830,6 +856,8 @@ if (typeof module !== 'undefined' && module.exports) {
     getMonitorDisabled,
     addMonitorDisabled,
     removeMonitorDisabled,
+    getMockEnabled,
+    setMockEnabled,
   };
 })();
 
@@ -1398,6 +1426,7 @@ if (typeof module !== 'undefined' && module.exports) {
   let mockRules = [];
   let requestLog = [];
   let disabledKeys = new Set(); // 被禁监的接口 key（method + ' ' + 无 query/hash 的 url）
+  let mockEnabled = true; // 接口 Mock 总开关：关闭后页面 hook 不拦截、不上报
   const MAX_LOG_SIZE = 100; // 最多保留 100 条记录
 
   function syncMockRulesToPage() {
@@ -1405,6 +1434,10 @@ if (typeof module !== 'undefined' && module.exports) {
       type: 'IDT_UPDATE_MOCK_RULES',
       rules: mockRules,
     }, '*');
+  }
+
+  function syncMockEnabledToPage() {
+    window.postMessage({ type: 'IDT_SET_MOCK_ENABLED', enabled: mockEnabled }, '*');
   }
 
   function endpointUrl(url) {
@@ -1558,6 +1591,16 @@ if (typeof module !== 'undefined' && module.exports) {
         sendResponse({ ok: true });
         return true;
       }
+
+      // 接口 Mock 总开关：同步内存并桥接到页面主上下文。
+      // 关闭时 hook 既不拦截（出参/入参改写失效），也不记录上报。
+      if (msg.type === 'APPLY_MOCK_ENABLED') {
+        mockEnabled = msg.enabled !== false;
+        console.log('[Mock Interceptor] Mock enabled set to:', mockEnabled);
+        syncMockEnabledToPage();
+        sendResponse({ ok: true });
+        return true;
+      }
     });
 
     // 3) 页面刷新会重建 MAIN world 中的 hook；从持久化存储加载完成后立即重放规则，
@@ -1566,6 +1609,13 @@ if (typeof module !== 'undefined' && module.exports) {
       mockRules = await ns.mockStorage.getMockRules();
       console.log('[Mock Interceptor] Loaded', mockRules.length, 'rules from storage');
       syncMockRulesToPage();
+
+      // 接口 Mock 总开关：content script 加载即下发，保证 hook 拦截/捕获与开关状态一致。
+      if (ns.mockStorage.getMockEnabled) {
+        mockEnabled = await ns.mockStorage.getMockEnabled();
+        console.log('[Mock Interceptor] Mock enabled loaded:', mockEnabled);
+        syncMockEnabledToPage();
+      }
     }
   }
 

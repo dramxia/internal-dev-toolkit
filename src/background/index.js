@@ -314,6 +314,22 @@
       return true;
     }
 
+    // 接口 Mock 总开关：读取 / 设置（设置后同步 content script → 页面 hook）
+    if (msg.type === 'GET_MOCK_ENABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleGetMockEnabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+    if (msg.type === 'SET_MOCK_ENABLED' && commonNs.mockHandler) {
+      commonNs.mockHandler
+        .handleSetMockEnabled(msg)
+        .then((result) => sendResponse(result))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     // 清空指定标签页 content script 中的请求记录
     if (msg.type === 'CLEAR_REQUEST_LOG') {
       const { tabId } = msg;
