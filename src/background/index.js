@@ -106,6 +106,31 @@
       return true;
     }
 
+    // ── Client 端 API：教师/学生/班级 ──
+    if (msg.type === 'FETCH_TEACHERS' && ns.tenantApi) {
+      ns.tenantApi
+        .fetchTeacherPage(msg.payload)
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'FETCH_STUDENTS' && ns.tenantApi) {
+      ns.tenantApi
+        .fetchStudentPage(msg.payload)
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'FETCH_SCHOOL_DEPT_TREE' && ns.tenantApi) {
+      ns.tenantApi
+        .fetchSchoolDeptTree(msg.payload)
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'GET_QUICK_LOGIN_RECENT' && ns.quickLogin) {
       ns.quickLogin
         .getRecent()

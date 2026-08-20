@@ -6,11 +6,16 @@
   const tenantHelpers = ns.tenant;
   const messages = ns.messages;
 
+  const DEFAULT_DEV_PORT = '8088';
+
   const IDs = {
     section: 'quickLoginSection',
     header: 'quickLoginHeader',
     body: 'quickLoginBody',
     envBadge: 'envBadge',
+    envOnlineBtn: 'envOnlineBtn',
+    envDevBtn: 'envDevBtn',
+    portField: 'portField',
     localPort: 'localPort',
     tenantSearch: 'tenantSearch',
     tenantList: 'tenantList',
@@ -20,6 +25,15 @@
     userList: 'userList',
     userEmpty: 'userEmpty',
     pager: 'userPager',
+    teacherList: 'teacherList',
+    teacherEmpty: 'teacherEmpty',
+    teacherPager: 'teacherPager',
+    teacherRefreshBtn: 'teacherRefreshBtn',
+    studentSection: 'studentSection',
+    studentSectionTitle: 'studentSectionTitle',
+    studentList: 'studentList',
+    studentEmpty: 'studentEmpty',
+    studentPager: 'studentPager',
     recent: 'recentList',
   };
 
@@ -43,6 +57,18 @@
     loadingLogin: false,
     tenantKeyword: '',
     recentExpanded: false,
+    // 环境切换
+    env: 'online', // 'online' | 'dev'
+    devPort: DEFAULT_DEV_PORT,
+    // 教师列表
+    teacherPage: { current: 1, size: 10, total: 0, records: [] },
+    loadingTeachers: false,
+    selectedTeacher: null,
+    // 学生列表
+    studentPage: { current: 1, size: 10, total: 0, records: [] },
+    loadingStudents: false,
+    // 班级树缓存（用于行政职务 → 班级匹配）
+    classNames: [],
   };
 
   function $(id) { return document.getElementById(IDs[id]); }
@@ -60,7 +86,6 @@
   }
 
   function setStatus(text, kind) {
-    // 统一走顶部悬浮 toast，不再占用面板内容空间
     ns.ui.toast(text, kind);
   }
 
@@ -74,7 +99,6 @@
     if (!el) return;
     const projectName = ns.currentProject.getName();
     el.textContent = projectName;
-    // 简单启发式：名字包含"生产/正式/prod"显示红色警告
     if (projectName.match(/生产|正式|prod/i)) {
       el.className = 'badge error';
     } else if (projectName.match(/预发布|预发|pre/i)) {
@@ -83,6 +107,32 @@
       el.className = 'badge success';
     }
   }
+
+  // ── 环境切换 ──
+
+  function getEffectivePort() {
+    return state.env === 'dev' ? (state.devPort || DEFAULT_DEV_PORT) : '';
+  }
+
+  function getEnvForRequest() {
+    return state.env === 'dev' ? 'local' : 'online';
+  }
+
+  function updateEnvUI() {
+    const onlineBtn = $('envOnlineBtn');
+    const devBtn = $('envDevBtn');
+    const portField = $('portField');
+    if (onlineBtn) onlineBtn.classList.toggle('active', state.env === 'online');
+    if (devBtn) devBtn.classList.toggle('active', state.env === 'dev');
+    if (portField) portField.classList.toggle('hidden', state.env !== 'dev');
+  }
+
+  function switchEnv(env) {
+    state.env = env;
+    updateEnvUI();
+  }
+
+  // ── 面板展开/收起 ──
 
   function toggleSection() {
     state.expanded = !state.expanded;
@@ -105,6 +155,8 @@
       await loadTenants();
     }
   }
+
+  // ── 租户 ──
 
   async function loadTenants() {
     if (state.loadingTenants) return;
@@ -156,6 +208,11 @@
     state.deptId = '';
     state.userKeyword = '';
     state.userPage = { current: 1, size: 10, total: 0, records: [] };
+    state.selectedTeacher = null;
+    state.teacherPage = { current: 1, size: 10, total: 0, records: [] };
+    state.studentPage = { current: 1, size: 10, total: 0, records: [] };
+    state.classNames = [];
+
     $('tenantSearch').value = tenant.tenantName || '';
     $('tenantList').innerHTML = '';
     $('tenantList').classList.add('hidden');
@@ -165,8 +222,16 @@
     $('userEmpty').classList.add('hidden');
     $('pager').classList.add('hidden');
 
+    // 重置教师/学生区域
+    resetTeacherUI();
+    resetStudentUI();
+
     await loadUsers(true);
+    // 选中租户后自动加载教师列表
+    await loadTeachers(true);
   }
+
+  // ── 部门 ──
 
   async function loadDepts() {
     if (!state.selectedTenant) return;
@@ -188,6 +253,8 @@
       }
     } catch (_) {}
   }
+
+  // ── 用户列表 ──
 
   async function loadUsers(reset = false) {
     if (!state.selectedTenant) return;
@@ -275,14 +342,20 @@
   function renderPager(total) {
     const pager = $('pager');
     if (!pager) return;
-    pager.innerHTML = '';
-    const { current, size } = state.userPage;
+    buildPagerUI(pager, state.userPage, total, goToPage);
+  }
+
+  // ── 通用分页构建 ──
+
+  function buildPagerUI(pagerEl, pageState, total, goFn) {
+    pagerEl.innerHTML = '';
+    const { current, size } = pageState;
     const pages = Math.ceil(total / size);
     if (!total || pages <= 1) {
-      pager.classList.add('hidden');
+      pagerEl.classList.add('hidden');
       return;
     }
-    pager.classList.remove('hidden');
+    pagerEl.classList.remove('hidden');
 
     const mkBtn = (label, page, { disabled = false, active = false } = {}) => {
       const b = document.createElement('button');
@@ -290,7 +363,7 @@
       b.textContent = label;
       b.disabled = disabled;
       if (!disabled && !active) {
-        b.addEventListener('click', () => goToPage(page));
+        b.addEventListener('click', () => goFn(page));
       }
       return b;
     };
@@ -301,33 +374,34 @@
       return s;
     };
 
-    pager.appendChild(mkBtn('‹', current - 1, { disabled: current <= 1 }));
+    pagerEl.appendChild(mkBtn('‹', current - 1, { disabled: current <= 1 }));
 
-    // 页码窗口：以当前页为中心最多显示 5 个，首尾补跳转
     const windowSize = 5;
     let start = Math.max(1, current - Math.floor(windowSize / 2));
     let end = Math.min(pages, start + windowSize - 1);
     start = Math.max(1, end - windowSize + 1);
 
     if (start > 1) {
-      pager.appendChild(mkBtn('1', 1));
-      if (start > 2) pager.appendChild(mkEllipsis());
+      pagerEl.appendChild(mkBtn('1', 1));
+      if (start > 2) pagerEl.appendChild(mkEllipsis());
     }
     for (let p = start; p <= end; p++) {
-      pager.appendChild(mkBtn(String(p), p, { active: p === current }));
+      pagerEl.appendChild(mkBtn(String(p), p, { active: p === current }));
     }
     if (end < pages) {
-      if (end < pages - 1) pager.appendChild(mkEllipsis());
-      pager.appendChild(mkBtn(String(pages), pages));
+      if (end < pages - 1) pagerEl.appendChild(mkEllipsis());
+      pagerEl.appendChild(mkBtn(String(pages), pages));
     }
 
-    pager.appendChild(mkBtn('›', current + 1, { disabled: current >= pages }));
+    pagerEl.appendChild(mkBtn('›', current + 1, { disabled: current >= pages }));
 
     const info = document.createElement('span');
     info.className = 'pager-info';
     info.textContent = `共 ${total} 条`;
-    pager.appendChild(info);
+    pagerEl.appendChild(info);
   }
+
+  // ── URL 构建 ──
 
   function extractTokenQuery(url) {
     const idx = url.indexOf('?');
@@ -339,17 +413,14 @@
     const query = queryIdx >= 0 ? url.slice(queryIdx) : '';
 
     if (localPort) {
-      // 使用本地环境
       return `http://localhost:${localPort}${path}${query}`;
     } else {
-      // 使用线上环境
       const base = queryIdx >= 0 ? url.slice(0, queryIdx) : url;
       const origin = base.replace(/\/+$/, '');
       return `${origin}${path}${query}`;
     }
   }
 
-  // 直接跳转接口返回的 URL；若填写本地端口，仅替换域名，保留 path + query
   function buildDirectUrl(url, localPort = '') {
     if (!localPort) return url;
     try {
@@ -360,7 +431,6 @@
       parsed.port = String(localPort);
       return parsed.toString();
     } catch (_) {
-      // 解析失败则退化为简单字符串替换
       return url.replace(/^https?:\/\/[^\/]+/, `http://localhost:${localPort}`);
     }
   }
@@ -374,6 +444,8 @@
     }
   }
 
+  // ── 一键登录操作 ──
+
   async function onLoginClick(e) {
     const btn = e.target.closest('.action-btn');
     if (!btn) return;
@@ -386,8 +458,8 @@
     const groupBtns = row ? row.querySelectorAll('.action-btn') : [btn];
     const originalHtml = btn.innerHTML;
 
-    const localPort = $('localPort') ? $('localPort').value.trim() : '';
-    const env = localPort ? 'local' : 'online';
+    const localPort = getEffectivePort();
+    const env = getEnvForRequest();
 
     state.loadingLogin = true;
     groupBtns.forEach((b) => (b.disabled = true));
@@ -440,6 +512,342 @@
     }
   }
 
+  // ── 教师列表 ──
+
+  function getTenantOrigin() {
+    // 从选中的租户 domain 构造用户端 origin
+    const domain = state.selectedTenant?.domain || '';
+    if (!domain) return '';
+    if (domain.startsWith('http')) return domain.replace(/\/+$/, '');
+    return `https://${domain}`;
+  }
+
+  function resetTeacherUI() {
+    const list = $('teacherList');
+    const empty = $('teacherEmpty');
+    const pager = $('teacherPager');
+    if (list) { list.innerHTML = ''; list.classList.add('hidden'); }
+    if (empty) { empty.textContent = '选中租户后可加载教师列表'; empty.classList.remove('hidden'); }
+    if (pager) { pager.innerHTML = ''; pager.classList.add('hidden'); }
+  }
+
+  async function loadTeachers(reset = false) {
+    if (!state.selectedTenant) return;
+    if (state.loadingTeachers) return;
+
+    const origin = getTenantOrigin();
+    if (!origin) {
+      setStatus('租户缺少域名信息，无法加载教师列表', 'err');
+      return;
+    }
+
+    state.loadingTeachers = true;
+    if (reset) {
+      state.teacherPage.current = 1;
+      state.teacherPage.records = [];
+      state.selectedTeacher = null;
+      resetTeacherUI();
+      resetStudentUI();
+      const empty = $('teacherEmpty');
+      if (empty) { empty.textContent = '加载中...'; empty.classList.remove('hidden'); }
+    }
+
+    try {
+      const res = await messages.sendToBackground({
+        type: 'FETCH_TEACHERS',
+        payload: {
+          origin,
+          current: state.teacherPage.current,
+          size: state.teacherPage.size,
+        },
+      });
+      if (!res || !res.ok) throw new Error(res?.error || '加载教师列表失败');
+      const page = tenantHelpers.extractPageData(res.res);
+      state.teacherPage.total = page.total;
+      state.teacherPage.records = (page.records || []).map(tenantHelpers.normalizeTeacher);
+      renderTeachers();
+    } catch (err) {
+      if (reset) {
+        const empty = $('teacherEmpty');
+        if (empty) { empty.textContent = err.message; empty.classList.remove('hidden'); }
+      }
+      setStatus(err.message, 'err');
+    } finally {
+      state.loadingTeachers = false;
+    }
+  }
+
+  function renderTeachers() {
+    const list = $('teacherList');
+    const empty = $('teacherEmpty');
+    const pager = $('teacherPager');
+    if (!list || !empty || !pager) return;
+
+    list.innerHTML = '';
+    const records = state.teacherPage.records;
+    if (!records.length) {
+      list.classList.add('hidden');
+      empty.textContent = '暂无教师数据';
+      empty.classList.remove('hidden');
+      pager.classList.add('hidden');
+      return;
+    }
+
+    empty.classList.add('hidden');
+    list.classList.remove('hidden');
+
+    for (const t of records) {
+      const row = document.createElement('div');
+      row.className = 'teacher-item fade-in' + (state.selectedTeacher?.id === t.id ? ' selected' : '');
+
+      // 职务标签
+      const badges = [];
+      if (t.adminDuties) badges.push(`<span class="teacher-badge admin">${escapeHtml(t.adminDuties)}</span>`);
+      if (t.teachDuties) badges.push(`<span class="teacher-badge teach">${escapeHtml(t.teachDuties)}</span>`);
+      const statusClass = String(t.status) === '1' || t.status === 1 ? 'status-on' : 'status-off';
+      const statusText = t.statusText || t.status || '';
+      if (statusText) badges.push(`<span class="teacher-badge ${statusClass}">${escapeHtml(statusText)}</span>`);
+
+      row.innerHTML =
+        `<div class="teacher-item-header">` +
+        `<span class="teacher-item-name">${escapeHtml(t.name || '(未命名)')}</span>` +
+        `<span class="teacher-item-account">${escapeHtml(t.account || '')}</span>` +
+        `</div>` +
+        (badges.length ? `<div class="teacher-item-badges">${badges.join('')}</div>` : '');
+
+      row.addEventListener('click', () => onTeacherSelect(t));
+      list.appendChild(row);
+    }
+
+    // 教师分页
+    buildPagerUI(pager, state.teacherPage, state.teacherPage.total, goToTeacherPage);
+  }
+
+  function goToTeacherPage(page) {
+    const pages = Math.max(1, Math.ceil(state.teacherPage.total / state.teacherPage.size));
+    const target = Math.min(Math.max(1, page), pages);
+    if (target === state.teacherPage.current && state.teacherPage.records.length) return;
+    state.teacherPage.current = target;
+    loadTeachers(false);
+  }
+
+  // ── 教师选中 → 学生列表 ──
+
+  function isTeacher(user) {
+    return Boolean(user.adminDuties || user.teachDuties);
+  }
+
+  function resetStudentUI() {
+    const section = $('studentSection');
+    const list = $('studentList');
+    const empty = $('studentEmpty');
+    const pager = $('studentPager');
+    if (section) section.classList.add('hidden');
+    if (list) { list.innerHTML = ''; list.classList.add('hidden'); }
+    if (empty) { empty.textContent = '选择教师后加载学生列表'; empty.classList.remove('hidden'); }
+    if (pager) { pager.innerHTML = ''; pager.classList.add('hidden'); }
+  }
+
+  async function onTeacherSelect(teacher) {
+    // 如果点击已选中的教师，取消选中
+    if (state.selectedTeacher?.id === teacher.id) {
+      state.selectedTeacher = null;
+      resetStudentUI();
+      renderTeachers(); // 去掉选中高亮
+      return;
+    }
+
+    state.selectedTeacher = teacher;
+    renderTeachers(); // 更新选中高亮
+
+    // 如果不是教师（无行政职务且无教学职务），不加载学生
+    if (!isTeacher(teacher)) {
+      resetStudentUI();
+      const section = $('studentSection');
+      if (section) section.classList.remove('hidden');
+      const empty = $('studentEmpty');
+      if (empty) { empty.textContent = '该用户不是教师，无关联学生'; empty.classList.remove('hidden'); }
+      return;
+    }
+
+    // 加载学生列表
+    state.studentPage = { current: 1, size: 10, total: 0, records: [] };
+    await loadStudents(true);
+  }
+
+  async function ensureClassNames() {
+    if (state.classNames.length) return state.classNames;
+    const origin = getTenantOrigin();
+    if (!origin) return [];
+    try {
+      const res = await messages.sendToBackground({
+        type: 'FETCH_SCHOOL_DEPT_TREE',
+        payload: { origin },
+      });
+      if (!res || !res.ok) return [];
+      state.classNames = tenantHelpers.extractClassNames(res.res) || [];
+    } catch (_) {
+      state.classNames = [];
+    }
+    return state.classNames;
+  }
+
+  // 从教师的行政职务中匹配班级名
+  function matchClassNames(adminDuties) {
+    if (!adminDuties) return [];
+    const duties = adminDuties.split(/[,，、\/\s]+/).filter(Boolean);
+    const matched = [];
+    for (const cls of state.classNames) {
+      for (const duty of duties) {
+        if (cls.includes(duty) || duty.includes(cls)) {
+          matched.push(cls);
+          break;
+        }
+      }
+    }
+    // 如果没有匹配到，直接用行政职务作为班级名搜索
+    if (!matched.length) {
+      matched.push(...duties);
+    }
+    return [...new Set(matched)];
+  }
+
+  async function loadStudents(reset = false) {
+    if (!state.selectedTenant || !state.selectedTeacher) return;
+    if (state.loadingStudents) return;
+
+    const origin = getTenantOrigin();
+    if (!origin) return;
+
+    state.loadingStudents = true;
+
+    const section = $('studentSection');
+    const title = $('studentSectionTitle');
+    if (section) section.classList.remove('hidden');
+    if (title) title.textContent = `${state.selectedTeacher.name || ''} 的学生`;
+
+    if (reset) {
+      state.studentPage.current = 1;
+      state.studentPage.records = [];
+      const list = $('studentList');
+      const empty = $('studentEmpty');
+      if (list) { list.innerHTML = ''; list.classList.add('hidden'); }
+      if (empty) { empty.textContent = '加载中...'; empty.classList.remove('hidden'); }
+    }
+
+    try {
+      // 确保已加载班级树
+      await ensureClassNames();
+
+      // 从行政职务匹配班级名
+      const classNames = matchClassNames(state.selectedTeacher.adminDuties);
+
+      // 如果有多个班级，逐个查询并合并；否则查询全部
+      let allRecords = [];
+      let total = 0;
+
+      if (classNames.length) {
+        // 按班级分别查询
+        for (const cls of classNames) {
+          const res = await messages.sendToBackground({
+            type: 'FETCH_STUDENTS',
+            payload: {
+              origin,
+              current: state.studentPage.current,
+              size: state.studentPage.size,
+              className: cls,
+            },
+          });
+          if (res && res.ok) {
+            const page = tenantHelpers.extractPageData(res.res);
+            const records = (page.records || []).map(tenantHelpers.normalizeStudent);
+            allRecords = allRecords.concat(records);
+            total += page.total || 0;
+          }
+        }
+      } else {
+        // 无行政职务，查询全部学生
+        const res = await messages.sendToBackground({
+          type: 'FETCH_STUDENTS',
+          payload: {
+            origin,
+            current: state.studentPage.current,
+            size: state.studentPage.size,
+          },
+        });
+        if (res && res.ok) {
+          const page = tenantHelpers.extractPageData(res.res);
+          allRecords = (page.records || []).map(tenantHelpers.normalizeStudent);
+          total = page.total || 0;
+        }
+      }
+
+      state.studentPage.total = total;
+      state.studentPage.records = allRecords;
+      renderStudents();
+    } catch (err) {
+      if (reset) {
+        const empty = $('studentEmpty');
+        if (empty) { empty.textContent = err.message; empty.classList.remove('hidden'); }
+      }
+      setStatus(err.message, 'err');
+    } finally {
+      state.loadingStudents = false;
+    }
+  }
+
+  function renderStudents() {
+    const list = $('studentList');
+    const empty = $('studentEmpty');
+    const pager = $('studentPager');
+    if (!list || !empty || !pager) return;
+
+    list.innerHTML = '';
+    const records = state.studentPage.records;
+    if (!records.length) {
+      list.classList.add('hidden');
+      empty.textContent = '暂无学生数据';
+      empty.classList.remove('hidden');
+      pager.classList.add('hidden');
+      return;
+    }
+
+    empty.classList.add('hidden');
+    list.classList.remove('hidden');
+
+    for (const s of records) {
+      const row = document.createElement('div');
+      row.className = 'student-item fade-in';
+
+      const statusClass = String(s.status) === '1' || s.status === 1 ? 'status-on' : 'status-off';
+      const statusText = s.statusText || s.status || '';
+
+      row.innerHTML =
+        `<div class="student-item-info">` +
+        `<div class="student-item-name">${escapeHtml(s.name || '(未命名)')}</div>` +
+        `<div class="student-item-meta">` +
+        (s.code ? `<span>学号: ${escapeHtml(s.code)}</span>` : '') +
+        (s.className ? `<span>班级: ${escapeHtml(s.className)}</span>` : '') +
+        `</div>` +
+        `</div>` +
+        (statusText ? `<span class="student-item-badge ${statusClass}">${escapeHtml(statusText)}</span>` : '');
+
+      list.appendChild(row);
+    }
+
+    buildPagerUI(pager, state.studentPage, state.studentPage.total, goToStudentPage);
+  }
+
+  function goToStudentPage(page) {
+    const pages = Math.max(1, Math.ceil(state.studentPage.total / state.studentPage.size));
+    const target = Math.min(Math.max(1, page), pages);
+    if (target === state.studentPage.current && state.studentPage.records.length) return;
+    state.studentPage.current = target;
+    loadStudents(false);
+  }
+
+  // ── 最近登录 ──
+
   async function renderRecent() {
     const wrap = $('recent');
     if (!wrap) return;
@@ -472,12 +880,12 @@
         `data-env="${escapeHtml(r.env || 'online')}" ` +
         `data-local-port="${escapeHtml(r.localPort || '')}"`;
       const isLocal = r.env === 'local';
-      const envBadge = isLocal
+      const envBadgeHtml = isLocal
         ? `<span class="recent-env-badge local" title="本地端口 ${escapeHtml(r.localPort || '')}">本地${r.localPort ? ' :' + escapeHtml(r.localPort) : ''}</span>`
         : `<span class="recent-env-badge online">线上</span>`;
       row.innerHTML =
         `<div class="recent-item-info">` +
-        `<div class="recent-item-text">${envBadge}${escapeHtml(r.tenantName || '(未知租户)')} · ${escapeHtml(r.userName || r.id)}</div>` +
+        `<div class="recent-item-text">${envBadgeHtml}${escapeHtml(r.tenantName || '(未知租户)')} · ${escapeHtml(r.userName || r.id)}</div>` +
         `<div class="recent-item-time">${escapeHtml(time)}</div>` +
         `</div>` +
         `<div class="recent-item-actions">` +
@@ -580,8 +988,23 @@
     }
   }
 
+  // ── 事件绑定 ──
+
   function bindEvents() {
     $('header').addEventListener('click', toggleSection);
+
+    // 环境切换
+    $('envOnlineBtn')?.addEventListener('click', () => switchEnv('online'));
+    $('envDevBtn')?.addEventListener('click', () => switchEnv('dev'));
+
+    // 端口修改
+    const portInput = $('localPort');
+    if (portInput) {
+      portInput.value = state.devPort;
+      portInput.addEventListener('input', debounce(() => {
+        state.devPort = portInput.value.trim() || DEFAULT_DEV_PORT;
+      }, 300));
+    }
 
     const tenantSearch = $('tenantSearch');
     tenantSearch.addEventListener('input', debounce(() => {
@@ -602,6 +1025,9 @@
 
     $('userList').addEventListener('click', onLoginClick);
 
+    // 教师刷新按钮
+    $('teacherRefreshBtn')?.addEventListener('click', () => loadTeachers(true));
+
     $('recent').addEventListener('click', onRecentClick);
   }
 
@@ -612,11 +1038,9 @@
       const first = res.records[0];
       if (!first.tenantId || !first.id) return;
 
-      // 自动填充租户搜索框并触发租户查询
       $('tenantSearch').value = first.tenantName || '';
       state.tenantKeyword = first.tenantName || '';
 
-      // 模拟选中该租户（构造 tenant 对象）
       const tenant = {
         tenantId: first.tenantId,
         tenantName: first.tenantName || '',
@@ -629,11 +1053,11 @@
       state.userKeyword = first.userName || '';
       state.userPage = { current: 1, size: 10, total: 0, records: [] };
 
-      // 填充用户搜索框
       $('userSearch').value = first.userName || '';
 
-      // 加载该租户下的用户列表
       await loadUsers(true);
+      // 也加载教师列表
+      await loadTeachers(true);
     } catch (err) {
       console.error('自动选中最近登录失败:', err);
     }
@@ -642,8 +1066,8 @@
   async function init() {
     const section = document.getElementById(IDs.section);
     updateEnvBadge();
+    updateEnvUI();
     bindEvents();
-    // 默认展开快捷登录面板
     state.expanded = true;
     section?.classList.add('expanded');
     await renderRecent();
