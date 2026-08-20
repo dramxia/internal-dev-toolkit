@@ -29,6 +29,27 @@
     return { ok: true, url, tenantId, id };
   }
 
+  // 仅获取选中用户的会话（virtualLogin → 解析 origin + 用户 token），不记录最近登录
+  async function resolveUserSession({ tenantId, id, industry }) {
+    if (!id) throw new Error('缺少 id');
+    if (!tenantId) throw new Error('缺少 tenantId');
+    if (!ns.tenantApi) throw new Error('tenantApi 模块未加载');
+
+    const res = await ns.tenantApi.quickLogin({ tenantId, id, industry });
+    const url = res?.data;
+    if (!url || typeof url !== 'string') {
+      throw new Error('virtualLogin 未返回有效 URL');
+    }
+    const helpers = globalThis.InternalDevToolkit?.tenant;
+    const parsed = helpers?.parseVirtualLoginUrl
+      ? helpers.parseVirtualLoginUrl(url)
+      : { url, origin: '', token: '' };
+    if (!parsed.origin || !parsed.token) {
+      throw new Error('未能从登录链接中解析 origin/token');
+    }
+    return { url, origin: parsed.origin, token: parsed.token };
+  }
+
   async function openLoginUrl(url) {
     if (!url) throw new Error('缺少 URL');
     return new Promise((resolve, reject) => {
@@ -86,5 +107,5 @@
     });
   }
 
-  ns.quickLogin = { quickLogin, openLoginUrl, getRecent, deleteRecent };
+  ns.quickLogin = { quickLogin, resolveUserSession, openLoginUrl, getRecent, deleteRecent };
 })();

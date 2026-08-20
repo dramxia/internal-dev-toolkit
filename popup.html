@@ -977,6 +977,14 @@
     /* ────────────────────────────────────────
        TEACHER / STUDENT LIST
     ──────────────────────────────────────── */
+    .teacher-search-row {
+      display: flex;
+      gap: 8px;
+    }
+    .teacher-search-row .field-input {
+      flex: 1;
+      min-width: 0;
+    }
     .teacher-item {
       padding: 10px 13px;
       border-bottom: 1px solid var(--border);
@@ -1020,10 +1028,30 @@
       font-weight: 600;
       letter-spacing: .3px;
     }
-    .teacher-badge.admin  { background: var(--mint-100); color: var(--sage-700); }
-    .teacher-badge.teach  { background: var(--sage-100); color: var(--sage-600); }
     .teacher-badge.status-on  { background: var(--success-bg); color: var(--success); }
     .teacher-badge.status-off { background: var(--error-bg); color: var(--error); }
+    .teacher-badge.teach      { background: var(--sage-100); color: var(--sage-600); }
+
+    .teacher-duties {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px;
+      margin-top: 6px;
+    }
+    .teacher-duties.muted,
+    .teacher-duties .muted-text {
+      font-size: 10.5px;
+      color: var(--text-3);
+    }
+    .teacher-duties-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .3px;
+      color: var(--text-3);
+      margin-right: 2px;
+      flex-shrink: 0;
+    }
 
     .student-section.hidden { display: none; }
 
@@ -1295,8 +1323,14 @@
               <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);">教师列表</div>
               <button class="btn btn-ghost" id="teacherRefreshBtn" style="padding:4px 8px;font-size:11px;min-height:auto;">刷新</button>
             </div>
+            <div class="field" style="margin-bottom:8px;">
+              <div class="teacher-search-row">
+                <input class="field-input" id="teacherNameSearch" type="text" autocomplete="off" placeholder="姓名">
+                <input class="field-input" id="teacherAccountSearch" type="text" autocomplete="off" placeholder="账号">
+              </div>
+            </div>
             <div class="list hidden" id="teacherList"></div>
-            <div class="list-empty" id="teacherEmpty">选中租户后可加载教师列表</div>
+            <div class="list-empty" id="teacherEmpty">选中用户后可加载教师列表</div>
             <div class="pager hidden" id="teacherPager"></div>
 
             <!-- 学生子列表：选中教师后展示 -->
@@ -1304,6 +1338,14 @@
               <div class="divider"></div>
               <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
                 <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);" id="studentSectionTitle">学生列表</div>
+                <button class="btn btn-ghost" id="studentRefreshBtn" style="padding:4px 8px;font-size:11px;min-height:auto;">刷新</button>
+              </div>
+              <div class="teacher-duties hidden" id="teacherDuties" style="margin-bottom:6px;"></div>
+              <div class="field" style="margin-bottom:8px;">
+                <div class="teacher-search-row">
+                  <input class="field-input" id="studentNameSearch" type="text" autocomplete="off" placeholder="姓名">
+                  <input class="field-input" id="studentCodeSearch" type="text" autocomplete="off" placeholder="学号">
+                </div>
               </div>
               <div class="list hidden" id="studentList"></div>
               <div class="list-empty" id="studentEmpty">选择教师后加载学生列表</div>

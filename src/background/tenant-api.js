@@ -101,15 +101,19 @@
 
   // ── Client 端 API（教师/学生/班级） ──
   // 这些接口走用户态域名（如 https://uuu.huayungpt.com），而非 admin 域名。
-  // 使用 admin token 鉴权。
+  // 鉴权优先使用 options.token（选中用户的 token，由 virtualLogin 解析而来）；
+  // 未提供时回落到 admin token。
 
-  async function fetchClientJson(origin, path, body, { referer } = {}) {
-    const token = await getToken();
-    if (!token) throw new Error('未获取 admin token，请先登录');
+  async function fetchClientJson(origin, path, body, { referer, token: userToken } = {}) {
+    let token = userToken ? String(userToken).replace(/^Bearer\s+/i, '').trim() : '';
+    if (!token) token = await getToken();
+    if (!token) throw new Error('未获取 token，请先选中用户或登录');
     const cleanOrigin = String(origin || '').replace(/\/+$/, '');
     if (!cleanOrigin) throw new Error('缺少目标域名');
 
-    const cookieHeader = await ns.cookies.getWafCookies();
+    const cookieHeader = ns.cookies.getWafCookiesForUrl
+      ? await ns.cookies.getWafCookiesForUrl(cleanOrigin)
+      : await ns.cookies.getWafCookies();
     const finalReferer = referer || `${cleanOrigin}/`;
 
     const headers = {
@@ -156,32 +160,47 @@
   }
 
   // 教师列表：/client/teacher/page
-  async function fetchTeacherPage({ origin, current = 1, size = 10, name = '', account = '' }) {
+  async function fetchTeacherPage({ origin, token, current = 1, size = 10, name = '', account = '', phone = '' }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
-    const body = helpers?.buildTeacherPageBody({ current, size, name, account }) || { current, size, name, account };
+    const body = helpers?.buildTeacherPageBody({ current, size, name, account, phone }) || { current, size };
     return fetchClientJson(origin, '/huayun-ai/client/teacher/page', body, {
       referer: `${origin}/v2/tenant/teamManagement/teacher`,
+      token,
     });
   }
 
   // 学生列表：/client/student/page
-  async function fetchStudentPage({ origin, current = 1, size = 10, name = '', code = '', className = '' }) {
+  async function fetchStudentPage({ origin, token, current = 1, size = 10, name = '', code = '', className = '' }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
-    const body = helpers?.buildStudentPageBody({ current, size, name, code, className }) || { current, size, name, code, className };
+    const body = helpers?.buildStudentPageBody({ current, size, name, code, className }) || { current, size };
     return fetchClientJson(origin, '/huayun-ai/client/student/page', body, {
       referer: `${origin}/v2/tenant/teamManagement/student`,
+      token,
     });
   }
 
-  // 年级/学段/班级树：/client/schoolDept/tree
-  async function fetchSchoolDeptTree({ origin }) {
-    return fetchClientJson(origin, '/huayun-ai/client/schoolDept/tree', {}, {
-      referer: `${origin}/v2/tenant/teamManagement/student`,
+  // 教师详情：/client/teacher/detail
+  async function fetchTeacherDetail({ origin, token, id }) {
+    const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
+    const body = helpers?.buildTeacherDetailBody({ id }) || { id: String(id) };
+    return fetchClientJson(origin, '/huayun-ai/client/teacher/detail', body, {
+      referer: `${origin}/v2/tenant/teamManagement/teacher`,
+      token,
+    });
+  }
+
+  // 年级/学段/班级树：/client/schoolDept/tree（semesterId 为空时不传）
+  async function fetchSchoolDeptTree({ origin, token, semesterId = '' }) {
+    const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
+    const body = helpers?.buildSchoolDeptTreeBody({ semesterId }) || {};
+    return fetchClientJson(origin, '/huayun-ai/client/schoolDept/tree', body, {
+      referer: `${origin}/v2/tenant/teamManagement/teacher`,
+      token,
     });
   }
 
   ns.tenantApi = {
     fetchTenantPage, fetchDeptList, fetchUserPage, quickLogin,
-    fetchTeacherPage, fetchStudentPage, fetchSchoolDeptTree,
+    fetchTeacherPage, fetchStudentPage, fetchTeacherDetail, fetchSchoolDeptTree,
   };
 })();

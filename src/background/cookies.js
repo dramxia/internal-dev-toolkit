@@ -10,13 +10,18 @@
   }
 
   async function getWafCookies() {
+    return getWafCookiesForUrl(commonNs.currentProject.getBaseUrl());
+  }
+
+  // 按目标 URL 读取 WAF Cookie（用于向租户域名发起 client API 请求）
+  async function getWafCookiesForUrl(targetUrl) {
     if (!hasCookiesApi()) return '';
-    const targetHost = commonNs.currentProject.getBaseUrl();
+    if (!targetUrl) return '';
     const cookieKeys = commonNs.currentProject.getCookieKeys();
     const pairs = [];
     for (const name of cookieKeys) {
       try {
-        const cookie = await chrome.cookies.get({ url: targetHost, name });
+        const cookie = await chrome.cookies.get({ url: targetUrl, name });
         if (cookie && cookie.value) {
           pairs.push(`${cookie.name}=${cookie.value}`);
         }
@@ -27,5 +32,5 @@
     return pairs.join('; ');
   }
 
-  ns.cookies = { getWafCookies };
+  ns.cookies = { getWafCookies, getWafCookiesForUrl };
 })();

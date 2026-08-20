@@ -107,6 +107,14 @@
     }
 
     // ── Client 端 API：教师/学生/班级 ──
+    if (msg.type === 'RESOLVE_USER_SESSION' && ns.quickLogin) {
+      ns.quickLogin
+        .resolveUserSession(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'FETCH_TEACHERS' && ns.tenantApi) {
       ns.tenantApi
         .fetchTeacherPage(msg.payload)
@@ -118,6 +126,14 @@
     if (msg.type === 'FETCH_STUDENTS' && ns.tenantApi) {
       ns.tenantApi
         .fetchStudentPage(msg.payload)
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'FETCH_TEACHER_DETAIL' && ns.tenantApi) {
+      ns.tenantApi
+        .fetchTeacherDetail(msg.payload)
         .then((res) => sendResponse({ ok: true, res }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;

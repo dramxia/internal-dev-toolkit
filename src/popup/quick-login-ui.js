@@ -29,8 +29,14 @@
     teacherEmpty: 'teacherEmpty',
     teacherPager: 'teacherPager',
     teacherRefreshBtn: 'teacherRefreshBtn',
+    teacherNameSearch: 'teacherNameSearch',
+    teacherAccountSearch: 'teacherAccountSearch',
     studentSection: 'studentSection',
     studentSectionTitle: 'studentSectionTitle',
+    studentRefreshBtn: 'studentRefreshBtn',
+    studentNameSearch: 'studentNameSearch',
+    studentCodeSearch: 'studentCodeSearch',
+    teacherDuties: 'teacherDuties',
     studentList: 'studentList',
     studentEmpty: 'studentEmpty',
     studentPager: 'studentPager',
@@ -60,15 +66,22 @@
     // 环境切换
     env: 'online', // 'online' | 'dev'
     devPort: DEFAULT_DEV_PORT,
+    // 选中用户会话（virtualLogin 解析出的 origin + token）
+    selectedUser: null,
+    loadingSession: false,
     // 教师列表
     teacherPage: { current: 1, size: 10, total: 0, records: [] },
     loadingTeachers: false,
     selectedTeacher: null,
+    teacherNameKeyword: '',
+    teacherAccountKeyword: '',
     // 学生列表
     studentPage: { current: 1, size: 10, total: 0, records: [] },
     loadingStudents: false,
-    // 班级树缓存（用于行政职务 → 班级匹配）
-    classNames: [],
+    studentNameKeyword: '',
+    studentCodeKeyword: '',
+    // 教师教学职务（选中教师后加载）
+    loadingDuties: false,
   };
 
   function $(id) { return document.getElementById(IDs[id]); }
@@ -208,10 +221,10 @@
     state.deptId = '';
     state.userKeyword = '';
     state.userPage = { current: 1, size: 10, total: 0, records: [] };
+    state.selectedUser = null;
     state.selectedTeacher = null;
     state.teacherPage = { current: 1, size: 10, total: 0, records: [] };
     state.studentPage = { current: 1, size: 10, total: 0, records: [] };
-    state.classNames = [];
 
     $('tenantSearch').value = tenant.tenantName || '';
     $('tenantList').innerHTML = '';
@@ -223,12 +236,16 @@
     $('pager').classList.add('hidden');
 
     // 重置教师/学生区域
+    state.teacherNameKeyword = '';
+    state.teacherAccountKeyword = '';
+    const teacherNameInput = $('teacherNameSearch');
+    if (teacherNameInput) teacherNameInput.value = '';
+    const teacherAccountInput = $('teacherAccountSearch');
+    if (teacherAccountInput) teacherAccountInput.value = '';
     resetTeacherUI();
     resetStudentUI();
 
     await loadUsers(true);
-    // 选中租户后自动加载教师列表
-    await loadTeachers(true);
   }
 
   // ── 部门 ──
@@ -310,7 +327,7 @@
     for (const item of records) {
       const u = tenantHelpers.normalizeUser(item);
       const row = document.createElement('div');
-      row.className = 'list-item fade-in';
+      row.className = 'list-item fade-in' + (state.selectedUser?.id === u.id ? ' active' : '');
       const dataAttrs =
         `data-id="${escapeHtml(u.id)}" ` +
         `data-user-name="${escapeHtml(u.userName)}" ` +
@@ -326,6 +343,8 @@
         `<button class="action-btn" data-action="student" ${dataAttrs} title="跳转学生评价">${icons.student}</button>` +
         `<button class="action-btn primary" data-action="teacher" ${dataAttrs} title="跳转教师评价">${icons.teacher}</button>` +
         `</div>`;
+      // 点击行（非操作按钮）→ 选中用户，用其会话加载教师/学生列表
+      row.addEventListener('click', () => onUserSelect(u, row));
       list.appendChild(row);
     }
     renderPager(total);
@@ -449,6 +468,8 @@
   async function onLoginClick(e) {
     const btn = e.target.closest('.action-btn');
     if (!btn) return;
+    // 阻止冒泡到行点击（选中用户）
+    e.stopPropagation();
     const action = btn.dataset.action;
     const id = btn.dataset.id;
     if (!action || !id || !state.selectedTenant) return;
@@ -512,14 +533,99 @@
     }
   }
 
-  // ── 教师列表 ──
+  // ── 选中用户 → 解析会话 → 教师列表 ──
+
+  // 选中某个用户：调用 virtualLogin 拿到用户态 origin + token，
+  // 之后教师/学生/班级树接口都使用该用户的会话。
+  async function onUserSelect(user, row) {
+    if (state.loadingSession) return;
+
+    // 再次点击已选中的用户 → 取消选中
+    if (state.selectedUser?.id === user.id) {
+      state.selectedUser = null;
+      state.selectedTeacher = null;
+      state.teacherPage = { current: 1, size: 10, total: 0, records: [] };
+      state.studentPage = { current: 1, size: 10, total: 0, records: [] };
+      state.teacherNameKeyword = '';
+      state.teacherAccountKeyword = '';
+      const nameInput = $('teacherNameSearch');
+      if (nameInput) nameInput.value = '';
+      const accountInput = $('teacherAccountSearch');
+      if (accountInput) accountInput.value = '';
+      row?.classList.remove('active');
+      resetTeacherUI();
+      resetStudentUI();
+      return;
+    }
+
+    if (!state.selectedTenant) {
+      setStatus('请先选择租户', 'err');
+      return;
+    }
+
+    state.loadingSession = true;
+    setStatus('正在获取用户会话...', '');
+    try {
+      const res = await messages.sendToBackground({
+        type: 'RESOLVE_USER_SESSION',
+        payload: {
+          tenantId: state.selectedTenant.tenantId,
+          id: user.id,
+          industry: state.selectedTenant.industry,
+        },
+      });
+      if (!res || !res.ok) throw new Error(res?.error || '获取用户会话失败');
+
+      state.selectedUser = {
+        id: user.id,
+        userId: user.userId,
+        userName: user.userName,
+        account: user.account || user.phone || '',
+        origin: res.origin,
+        token: res.token,
+      };
+
+      // 高亮选中行
+      const list = $('userList');
+      list?.querySelectorAll('.list-item.active').forEach((el) => el.classList.remove('active'));
+      row?.classList.add('active');
+
+      // 重置教师/学生状态并加载教师列表
+      state.selectedTeacher = null;
+      state.teacherPage = { current: 1, size: 10, total: 0, records: [] };
+      state.studentPage = { current: 1, size: 10, total: 0, records: [] };
+      resetStudentUI();
+
+      // 默认用选中用户的姓名填充教师姓名筛选
+      state.teacherNameKeyword = user.userName || '';
+      state.teacherAccountKeyword = '';
+      const nameInput = $('teacherNameSearch');
+      if (nameInput) nameInput.value = state.teacherNameKeyword;
+      const accountInput = $('teacherAccountSearch');
+      if (accountInput) accountInput.value = '';
+
+      setStatus('', '');
+      await loadTeachers(true);
+
+      // 自动选中与当前用户匹配的教师（账号优先，其次姓名，仅一条记录时兜底）
+      const defaultTeacher = findDefaultTeacher();
+      if (defaultTeacher) {
+        await onTeacherSelect(defaultTeacher);
+      }
+    } catch (err) {
+      setStatus(err.message, 'err');
+    } finally {
+      state.loadingSession = false;
+    }
+  }
 
   function getTenantOrigin() {
-    // 从选中的租户 domain 构造用户端 origin
-    const domain = state.selectedTenant?.domain || '';
-    if (!domain) return '';
-    if (domain.startsWith('http')) return domain.replace(/\/+$/, '');
-    return `https://${domain}`;
+    // 使用选中用户会话里的 origin（来自 virtualLogin URL），而非租户 domain
+    return state.selectedUser?.origin || '';
+  }
+
+  function getUserToken() {
+    return state.selectedUser?.token || '';
   }
 
   function resetTeacherUI() {
@@ -527,17 +633,25 @@
     const empty = $('teacherEmpty');
     const pager = $('teacherPager');
     if (list) { list.innerHTML = ''; list.classList.add('hidden'); }
-    if (empty) { empty.textContent = '选中租户后可加载教师列表'; empty.classList.remove('hidden'); }
+    if (empty) {
+      empty.textContent = state.selectedUser ? '加载中...' : '选中用户后可加载教师列表';
+      empty.classList.remove('hidden');
+    }
     if (pager) { pager.innerHTML = ''; pager.classList.add('hidden'); }
   }
 
   async function loadTeachers(reset = false) {
     if (!state.selectedTenant) return;
+    if (!state.selectedUser) {
+      const empty = $('teacherEmpty');
+      if (empty) { empty.textContent = '选中用户后可加载教师列表'; empty.classList.remove('hidden'); }
+      return;
+    }
     if (state.loadingTeachers) return;
 
     const origin = getTenantOrigin();
     if (!origin) {
-      setStatus('租户缺少域名信息，无法加载教师列表', 'err');
+      setStatus('用户会话缺少域名信息，无法加载教师列表', 'err');
       return;
     }
 
@@ -557,8 +671,11 @@
         type: 'FETCH_TEACHERS',
         payload: {
           origin,
+          token: getUserToken(),
           current: state.teacherPage.current,
           size: state.teacherPage.size,
+          name: state.teacherNameKeyword,
+          account: state.teacherAccountKeyword,
         },
       });
       if (!res || !res.ok) throw new Error(res?.error || '加载教师列表失败');
@@ -600,13 +717,10 @@
       const row = document.createElement('div');
       row.className = 'teacher-item fade-in' + (state.selectedTeacher?.id === t.id ? ' selected' : '');
 
-      // 职务标签
+      // 状态标签（0=在线，1=离线）
       const badges = [];
-      if (t.adminDuties) badges.push(`<span class="teacher-badge admin">${escapeHtml(t.adminDuties)}</span>`);
-      if (t.teachDuties) badges.push(`<span class="teacher-badge teach">${escapeHtml(t.teachDuties)}</span>`);
-      const statusClass = String(t.status) === '1' || t.status === 1 ? 'status-on' : 'status-off';
-      const statusText = t.statusText || t.status || '';
-      if (statusText) badges.push(`<span class="teacher-badge ${statusClass}">${escapeHtml(statusText)}</span>`);
+      const statusClass = t.statusOn === true ? 'status-on' : 'status-off';
+      if (t.statusText) badges.push(`<span class="teacher-badge ${statusClass}">${escapeHtml(t.statusText)}</span>`);
 
       row.innerHTML =
         `<div class="teacher-item-header">` +
@@ -623,6 +737,30 @@
     buildPagerUI(pager, state.teacherPage, state.teacherPage.total, goToTeacherPage);
   }
 
+  // 选中教师的教学职务：渲染在学生列表上方（加载中 / 职务列表 / 暂无）
+  function renderTeacherDuties() {
+    const el = $('teacherDuties');
+    if (!el) return;
+    const t = state.selectedTeacher;
+    if (!t) {
+      el.innerHTML = '';
+      el.classList.add('hidden');
+      return;
+    }
+    el.classList.remove('hidden');
+    if (t.detailDuties == null) {
+      el.innerHTML = '<span class="teacher-duties-label">教学职务</span><span class="muted-text">加载中...</span>';
+      return;
+    }
+    if (!t.detailDuties.length) {
+      el.innerHTML = '<span class="teacher-duties-label">教学职务</span><span class="muted-text">暂无</span>';
+      return;
+    }
+    el.innerHTML =
+      '<span class="teacher-duties-label">教学职务</span>' +
+      t.detailDuties.map((d) => `<span class="teacher-badge teach">${escapeHtml(d)}</span>`).join('');
+  }
+
   function goToTeacherPage(page) {
     const pages = Math.max(1, Math.ceil(state.teacherPage.total / state.teacherPage.size));
     const target = Math.min(Math.max(1, page), pages);
@@ -633,8 +771,20 @@
 
   // ── 教师选中 → 学生列表 ──
 
-  function isTeacher(user) {
-    return Boolean(user.adminDuties || user.teachDuties);
+  // 在教师列表中找出与当前选中用户匹配的教师：账号精确匹配 → 姓名精确匹配 → 仅一条记录时兜底
+  function findDefaultTeacher() {
+    const records = state.teacherPage.records || [];
+    if (!records.length || !state.selectedUser) return null;
+    const { userName, account } = state.selectedUser;
+    if (account) {
+      const byAccount = records.find((t) => t.account && t.account === account);
+      if (byAccount) return byAccount;
+    }
+    if (userName) {
+      const byName = records.find((t) => t.name && t.name === userName);
+      if (byName) return byName;
+    }
+    return records.length === 1 ? records[0] : null;
   }
 
   function resetStudentUI() {
@@ -642,10 +792,19 @@
     const list = $('studentList');
     const empty = $('studentEmpty');
     const pager = $('studentPager');
+    const duties = $('teacherDuties');
     if (section) section.classList.add('hidden');
     if (list) { list.innerHTML = ''; list.classList.add('hidden'); }
     if (empty) { empty.textContent = '选择教师后加载学生列表'; empty.classList.remove('hidden'); }
     if (pager) { pager.innerHTML = ''; pager.classList.add('hidden'); }
+    if (duties) { duties.innerHTML = ''; duties.classList.add('hidden'); }
+    // 清空学生筛选
+    state.studentNameKeyword = '';
+    state.studentCodeKeyword = '';
+    const nameInput = $('studentNameSearch');
+    if (nameInput) nameInput.value = '';
+    const codeInput = $('studentCodeSearch');
+    if (codeInput) codeInput.value = '';
   }
 
   async function onTeacherSelect(teacher) {
@@ -658,66 +817,61 @@
     }
 
     state.selectedTeacher = teacher;
+    teacher.detailDuties = null; // 标记加载中
     renderTeachers(); // 更新选中高亮
+    renderTeacherDuties(); // 学生列表上方显示“加载中”
 
-    // 如果不是教师（无行政职务且无教学职务），不加载学生
-    if (!isTeacher(teacher)) {
-      resetStudentUI();
-      const section = $('studentSection');
-      if (section) section.classList.remove('hidden');
-      const empty = $('studentEmpty');
-      if (empty) { empty.textContent = '该用户不是教师，无关联学生'; empty.classList.remove('hidden'); }
-      return;
-    }
-
-    // 加载学生列表
+    // 并行：加载学生列表 + 加载教师教学职务（detail + schoolDept/tree）
     state.studentPage = { current: 1, size: 10, total: 0, records: [] };
-    await loadStudents(true);
+    await Promise.all([
+      loadStudents(true),
+      loadTeacherDuties(teacher),
+    ]);
   }
 
-  async function ensureClassNames() {
-    if (state.classNames.length) return state.classNames;
+  // 教师详情 + 班级树 → 教学职务（科目 · 班级）
+  async function loadTeacherDuties(teacher) {
+    if (!teacher?.id || state.loadingDuties) return;
     const origin = getTenantOrigin();
-    if (!origin) return [];
-    try {
-      const res = await messages.sendToBackground({
-        type: 'FETCH_SCHOOL_DEPT_TREE',
-        payload: { origin },
-      });
-      if (!res || !res.ok) return [];
-      state.classNames = tenantHelpers.extractClassNames(res.res) || [];
-    } catch (_) {
-      state.classNames = [];
-    }
-    return state.classNames;
-  }
+    const token = getUserToken();
+    if (!origin || !token) return;
 
-  // 从教师的行政职务中匹配班级名
-  function matchClassNames(adminDuties) {
-    if (!adminDuties) return [];
-    const duties = adminDuties.split(/[,，、\/\s]+/).filter(Boolean);
-    const matched = [];
-    for (const cls of state.classNames) {
-      for (const duty of duties) {
-        if (cls.includes(duty) || duty.includes(cls)) {
-          matched.push(cls);
-          break;
-        }
-      }
+    state.loadingDuties = true;
+    try {
+      const detailRes = await messages.sendToBackground({
+        type: 'FETCH_TEACHER_DETAIL',
+        payload: { origin, token, id: teacher.id },
+      });
+      if (!detailRes || !detailRes.ok) throw new Error(detailRes?.error || '获取教师详情失败');
+
+      const detail = tenantHelpers.extractDetailData(detailRes.res);
+      const semesterId = tenantHelpers.extractSemesterId(detail);
+
+      // 用 semesterId 拉班级树，将 classId 翻译成班级名
+      const treeRes = await messages.sendToBackground({
+        type: 'FETCH_SCHOOL_DEPT_TREE',
+        payload: { origin, token, semesterId },
+      });
+      const idNameMap = treeRes && treeRes.ok ? tenantHelpers.buildDeptIdNameMap(treeRes.res) : {};
+
+      teacher.detailDuties = tenantHelpers.extractTeachDuties(detail, idNameMap);
+    } catch (err) {
+      console.warn('[内部开发工具箱] 加载教学职务失败:', err);
+      teacher.detailDuties = [];
+    } finally {
+      state.loadingDuties = false;
+      // 仅当该教师仍处于选中态时刷新职务区
+      if (state.selectedTeacher?.id === teacher.id) renderTeacherDuties();
     }
-    // 如果没有匹配到，直接用行政职务作为班级名搜索
-    if (!matched.length) {
-      matched.push(...duties);
-    }
-    return [...new Set(matched)];
   }
 
   async function loadStudents(reset = false) {
-    if (!state.selectedTenant || !state.selectedTeacher) return;
+    if (!state.selectedTenant || !state.selectedTeacher || !state.selectedUser) return;
     if (state.loadingStudents) return;
 
     const origin = getTenantOrigin();
     if (!origin) return;
+    const token = getUserToken();
 
     state.loadingStudents = true;
 
@@ -736,54 +890,24 @@
     }
 
     try {
-      // 确保已加载班级树
-      await ensureClassNames();
-
-      // 从行政职务匹配班级名
-      const classNames = matchClassNames(state.selectedTeacher.adminDuties);
-
-      // 如果有多个班级，逐个查询并合并；否则查询全部
-      let allRecords = [];
-      let total = 0;
-
-      if (classNames.length) {
-        // 按班级分别查询
-        for (const cls of classNames) {
-          const res = await messages.sendToBackground({
-            type: 'FETCH_STUDENTS',
-            payload: {
-              origin,
-              current: state.studentPage.current,
-              size: state.studentPage.size,
-              className: cls,
-            },
-          });
-          if (res && res.ok) {
-            const page = tenantHelpers.extractPageData(res.res);
-            const records = (page.records || []).map(tenantHelpers.normalizeStudent);
-            allRecords = allRecords.concat(records);
-            total += page.total || 0;
-          }
-        }
-      } else {
-        // 无行政职务，查询全部学生
-        const res = await messages.sendToBackground({
-          type: 'FETCH_STUDENTS',
-          payload: {
-            origin,
-            current: state.studentPage.current,
-            size: state.studentPage.size,
-          },
-        });
-        if (res && res.ok) {
-          const page = tenantHelpers.extractPageData(res.res);
-          allRecords = (page.records || []).map(tenantHelpers.normalizeStudent);
-          total = page.total || 0;
-        }
+      const res = await messages.sendToBackground({
+        type: 'FETCH_STUDENTS',
+        payload: {
+          origin,
+          token,
+          current: state.studentPage.current,
+          size: state.studentPage.size,
+          name: state.studentNameKeyword,
+          code: state.studentCodeKeyword,
+        },
+      });
+      if (res && res.ok) {
+        const page = tenantHelpers.extractPageData(res.res);
+        state.studentPage.records = (page.records || []).map(tenantHelpers.normalizeStudent);
+        state.studentPage.total = page.total || 0;
+      } else if (res && !res.ok) {
+        throw new Error(res.error || '加载学生列表失败');
       }
-
-      state.studentPage.total = total;
-      state.studentPage.records = allRecords;
       renderStudents();
     } catch (err) {
       if (reset) {
@@ -819,8 +943,8 @@
       const row = document.createElement('div');
       row.className = 'student-item fade-in';
 
-      const statusClass = String(s.status) === '1' || s.status === 1 ? 'status-on' : 'status-off';
-      const statusText = s.statusText || s.status || '';
+      const statusClass = s.statusOn === true ? 'status-on' : 'status-off';
+      const statusText = s.statusText || '';
 
       row.innerHTML =
         `<div class="student-item-info">` +
@@ -1025,8 +1149,47 @@
 
     $('userList').addEventListener('click', onLoginClick);
 
+    // 教师姓名/账号筛选（防抖 300ms）
+    const teacherNameSearch = $('teacherNameSearch');
+    teacherNameSearch?.addEventListener('input', debounce(() => {
+      state.teacherNameKeyword = teacherNameSearch.value.trim();
+      loadTeachers(true);
+    }, 300));
+    const teacherAccountSearch = $('teacherAccountSearch');
+    teacherAccountSearch?.addEventListener('input', debounce(() => {
+      state.teacherAccountKeyword = teacherAccountSearch.value.trim();
+      loadTeachers(true);
+    }, 300));
+
     // 教师刷新按钮
-    $('teacherRefreshBtn')?.addEventListener('click', () => loadTeachers(true));
+    $('teacherRefreshBtn')?.addEventListener('click', () => {
+      if (!state.selectedUser) {
+        setStatus('请先在用户列表中选中用户', 'err');
+        return;
+      }
+      loadTeachers(true);
+    });
+
+    // 学生姓名/学号筛选（防抖 300ms）
+    const studentNameSearch = $('studentNameSearch');
+    studentNameSearch?.addEventListener('input', debounce(() => {
+      state.studentNameKeyword = studentNameSearch.value.trim();
+      loadStudents(true);
+    }, 300));
+    const studentCodeSearch = $('studentCodeSearch');
+    studentCodeSearch?.addEventListener('input', debounce(() => {
+      state.studentCodeKeyword = studentCodeSearch.value.trim();
+      loadStudents(true);
+    }, 300));
+
+    // 学生刷新按钮
+    $('studentRefreshBtn')?.addEventListener('click', () => {
+      if (!state.selectedTeacher) {
+        setStatus('请先选中教师', 'err');
+        return;
+      }
+      loadStudents(true);
+    });
 
     $('recent').addEventListener('click', onRecentClick);
   }
@@ -1056,8 +1219,16 @@
       $('userSearch').value = first.userName || '';
 
       await loadUsers(true);
-      // 也加载教师列表
-      await loadTeachers(true);
+
+      // 在用户列表中找到最近登录的对应用户并自动选中（高亮 + 解析会话 + 加载教师列表）
+      const targetId = String(first.id);
+      const idx = state.userPage.records.findIndex(
+        (item) => String(tenantHelpers.normalizeUser(item).id) === targetId,
+      );
+      if (idx < 0) return; // 不在当前页，保持仅填充搜索
+      const u = tenantHelpers.normalizeUser(state.userPage.records[idx]);
+      const row = $('userList')?.children[idx];
+      await onUserSelect(u, row);
     } catch (err) {
       console.error('自动选中最近登录失败:', err);
     }
