@@ -50,7 +50,7 @@ npm run build   # 打包 content.js / popup.js / background.js 并输出到 dist
     virtualLogin: '/api/user/virtualLogin',
   },
   cookieKeys: ['SESSION_ID'],                    // WAF Cookie 名称（按实际情况）
-  enabledFeatures: ['adminPanel', 'quickLogin'], // 启用的功能：adminPanel（账号&Token）/ quickLogin（快捷登录）
+  enabledFeatures: ['adminPanel', 'quickLogin'], // 功能：adminPanel / quickLogin / otherLogin / appLogin
   hosts: ['my-backend.example.com'],             // 域名列表（支持 *.domain 通配符）
 }
 ```
@@ -66,6 +66,8 @@ npm run build   # 打包 content.js / popup.js / background.js 并输出到 dist
 修改项目配置的 `enabledFeatures` 数组：
 - 移除 `'adminPanel'` → 隐藏「后台账号 & Token」卡片
 - 移除 `'quickLogin'` → 隐藏「一键快捷登录」卡片
+- `'otherLogin'` → 高职校 / 知雀登录（当前归属顶部「高校」项目）
+- `'appLogin'` → APP 登录
 
 ## 开发
 

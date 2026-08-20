@@ -1088,6 +1088,44 @@
     .student-item-badge.status-on  { background: var(--success-bg); color: var(--success); }
     .student-item-badge.status-off { background: var(--error-bg); color: var(--error); }
 
+    .teacher-lookup-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(150px, .9fr);
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .teacher-lookup-toolbar .env-switcher { height: 36px; }
+    .teacher-lookup-toolbar .field-input { height: 36px; }
+    .teacher-lookup-result-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 10px;
+      color: var(--text-3);
+      font-size: 10.5px;
+    }
+    .teacher-lookup-result-count {
+      flex-shrink: 0;
+      color: var(--sage-600);
+      font-weight: 600;
+    }
+    .lookup-student-item { cursor: pointer; }
+    .lookup-student-item.selected {
+      background: var(--sage-100);
+      border-left: 3px solid var(--sage-400);
+      padding-left: 10px;
+    }
+    .lookup-teacher-item { cursor: default; align-items: flex-start; }
+    .lookup-teacher-item:hover { background: transparent; }
+    .lookup-teacher-duties {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 5px;
+    }
+    .lookup-teacher-item .list-item-actions { padding-top: 1px; }
+
     .hidden { display: none !important; }
 
     /* ────────────────────────────────────────
@@ -1139,10 +1177,6 @@
     <button class="tab-btn" data-tab="quick">
       <span class="tab-icon">⚡</span>
       一键登录
-    </button>
-    <button class="tab-btn" data-tab="other">
-      <span class="tab-icon">🌐</span>
-      其它
     </button>
     <button class="tab-btn" data-tab="app">
       <span class="tab-icon">📱</span>
@@ -1318,6 +1352,46 @@
 
             <div class="divider"></div>
 
+            <!-- ═══ 按学生 / 班级查询关联教师 ═══ -->
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+              <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);">关联教师</div>
+              <button class="btn btn-ghost" id="teacherLookupRefreshBtn" style="padding:4px 8px;font-size:11px;min-height:auto;">刷新</button>
+            </div>
+            <div class="teacher-lookup-toolbar">
+              <div class="env-switcher">
+                <button class="env-btn active" id="lookupByStudentBtn" type="button">按学生</button>
+                <button class="env-btn" id="lookupByClassBtn" type="button">按班级</button>
+              </div>
+              <select class="field-input" id="teacherLookupSemesterSelect" disabled>
+                <option value="">选择学期</option>
+              </select>
+            </div>
+            <div class="list-empty" id="teacherLookupEmpty">选中用户后可查询关联教师</div>
+            <div class="hidden" id="teacherLookupContent">
+              <div id="lookupStudentPanel">
+                <div class="teacher-search-row">
+                  <input class="field-input" id="lookupStudentNameSearch" type="text" autocomplete="off" placeholder="学生姓名">
+                  <input class="field-input" id="lookupStudentCodeSearch" type="text" autocomplete="off" placeholder="学号">
+                </div>
+                <div class="list hidden" id="lookupStudentList"></div>
+                <div class="list-empty hidden" id="lookupStudentEmpty">未找到学生</div>
+                <div class="pager hidden" id="lookupStudentPager"></div>
+              </div>
+              <div class="hidden" id="lookupClassPanel">
+                <select class="field-input" id="lookupClassSelect">
+                  <option value="">选择班级</option>
+                </select>
+              </div>
+              <div class="teacher-lookup-result-head hidden" id="lookupTeacherResultHead">
+                <span id="lookupTeacherResultTitle"></span>
+                <span class="teacher-lookup-result-count" id="lookupTeacherResultCount"></span>
+              </div>
+              <div class="list hidden" id="lookupTeacherList"></div>
+              <div class="list-empty hidden" id="lookupTeacherEmpty">请选择学生或班级</div>
+            </div>
+
+            <div class="divider"></div>
+
             <!-- ═══ 选中用户（教师列表 + 学生列表） ═══ -->
             <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
               <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);">教师列表</div>
@@ -1365,7 +1439,7 @@
 
     </div><!-- /panel-quick -->
 
-    <!-- ── PANEL C : Other (知雀) ── -->
+    <!-- ── PANEL C : 高校（高职校 / 知雀） ── -->
     <div class="panel" id="panel-other">
 
       <div class="section-block expanded" id="otherLoginSection">

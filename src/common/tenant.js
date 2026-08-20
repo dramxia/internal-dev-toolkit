@@ -115,6 +115,10 @@
     return '';
   }
 
+  function firstListValue(value) {
+    return Array.isArray(value) ? value[0] : value;
+  }
+
   // 状态映射：0 = 在线（正常），1 = 离线（停用）
   // 教师状态映射：0 = 在线，1 = 离线
   function statusInfo(value) {
@@ -148,11 +152,25 @@
 
   function normalizeStudent(value = {}) {
     const st = studentStatusInfo(value.status);
+    const nestedClass = value.clazz && typeof value.clazz === 'object'
+      ? value.clazz
+      : (value.class && typeof value.class === 'object'
+          ? value.class
+          : (value.schoolDept && typeof value.schoolDept === 'object' ? value.schoolDept : null));
     return {
       id: pickFirstString(value.id, value.studentId, value.userId),
       name: pickFirstString(value.name, value.studentName, value.realName, value.username, value.userName),
       code: pickFirstString(value.code, value.studentCode, value.studentNo, value.account, value.userAccount),
-      className: pickFirstString(value.className, value.classNames, value.deptName, value.classId),
+      classId: pickFirstString(
+        value.classId, value.clazzId, value.deptId, value.schoolDeptId,
+        firstListValue(value.classIds), firstListValue(value.clazzIds), firstListValue(value.deptIds),
+        nestedClass?.id, nestedClass?.classId, nestedClass?.clazzId, nestedClass?.deptId,
+      ),
+      className: pickFirstString(
+        value.className, firstListValue(value.classNames), value.clazzName, value.deptName,
+        firstListValue(value.clazzNames), firstListValue(value.deptNames),
+        nestedClass?.name, nestedClass?.className, nestedClass?.clazzName, nestedClass?.deptName,
+      ),
       status: st.status,
       statusText: st.statusText,
       statusOn: st.on,
@@ -206,6 +224,39 @@
     return body;
   }
 
+  function buildSemesterPageBody({ current = 1, size = 999 } = {}) {
+    return {
+      current: Number(current) || 1,
+      size: Number(size) || 999,
+    };
+  }
+
+  function normalizeSemester(value = {}) {
+    const id = pickFirstString(value.id, value.semesterId);
+    const year = pickFirstString(value.year, value.schoolYear);
+    const type = pickFirstString(value.type, value.semesterType);
+    const isCurrent = String(value.isCurrent ?? '') === '1';
+    const parts = [year, type ? `学期${type}` : ''].filter(Boolean);
+    return {
+      id,
+      year,
+      type,
+      startDate: pickFirstString(value.startDate),
+      endDate: pickFirstString(value.endDate),
+      isCurrent,
+      label: `${parts.join(' · ') || id}${isCurrent ? ' · 当前' : ''}`,
+      raw: value,
+    };
+  }
+
+  function resolveSemesterId(semesters = [], preferredId = '') {
+    const preferred = String(preferredId || '');
+    if (preferred && semesters.some((semester) => String(semester?.id || '') === preferred)) {
+      return preferred;
+    }
+    return pickFirstString(semesters[0]?.id);
+  }
+
   // 教师详情：/client/teacher/detail
   function buildTeacherDetailBody({ id }) {
     if (!id) throw new Error('id 不能为空');
@@ -214,6 +265,13 @@
 
   // 年级/学段/班级树：/client/schoolDept/tree（semesterId 为空时不传）
   function buildSchoolDeptTreeBody({ semesterId = '' } = {}) {
+    const body = {};
+    appendIfFilled(body, 'semesterId', semesterId);
+    return body;
+  }
+
+  // 班级教师关系：/client/schoolManageTeacher/listByClazz
+  function buildClazzTeacherListBody({ semesterId = '' } = {}) {
     const body = {};
     appendIfFilled(body, 'semesterId', semesterId);
     return body;
@@ -245,6 +303,146 @@
     };
     walk(roots, '');
     return map;
+  }
+
+  // 将 schoolDept/tree 的班级叶子扁平化，保留完整路径以区分不同年级的同名班级。
+  function extractClassOptions(treeData) {
+    const payload = treeData?.data ?? treeData?.result ?? treeData;
+    const roots = Array.isArray(payload) ? payload : (Array.isArray(payload?.children) ? payload.children : []);
+    const classes = [];
+
+    const walk = (nodes, parentPath = []) => {
+      if (!Array.isArray(nodes)) return;
+      for (const node of nodes) {
+        if (!node || typeof node !== 'object') continue;
+        const id = pickFirstString(node.id, node.deptId);
+        const name = pickFirstString(node.deptName, node.name);
+        const path = name ? [...parentPath, name] : parentPath;
+        const children = Array.isArray(node.children) ? node.children : [];
+        const isClass = String(node.subDeptType ?? node.deptType ?? '') === '3';
+        if (isClass && id) {
+          classes.push({
+            id,
+            name,
+            label: path.join(' / '),
+            path,
+            parentId: pickFirstString(node.parentId),
+          });
+        }
+        if (children.length) walk(children, path);
+      }
+    };
+
+    walk(roots);
+    return classes;
+  }
+
+  function normalizeClassText(value) {
+    return String(value || '').trim().toLowerCase().replace(/[\s/\\·._-]+/g, '');
+  }
+
+  // 学生接口优先用 classId/clazzId 定位；只有班级名称能唯一命中时才回落名称匹配。
+  function findStudentClass(student, classOptions = []) {
+    if (!student || !Array.isArray(classOptions) || !classOptions.length) return null;
+    const raw = student.raw && typeof student.raw === 'object' ? student.raw : student;
+    const nestedClass = raw.clazz && typeof raw.clazz === 'object'
+      ? raw.clazz
+      : (raw.class && typeof raw.class === 'object'
+          ? raw.class
+          : (raw.schoolDept && typeof raw.schoolDept === 'object' ? raw.schoolDept : null));
+    const classId = pickFirstString(
+      student.classId, raw.classId, raw.clazzId, raw.deptId, raw.schoolDeptId,
+      firstListValue(raw.classIds), firstListValue(raw.clazzIds), firstListValue(raw.deptIds),
+      nestedClass?.id, nestedClass?.classId, nestedClass?.clazzId, nestedClass?.deptId,
+    );
+    if (classId) {
+      const byId = classOptions.find((item) => String(item.id) === classId);
+      if (byId) return byId;
+    }
+
+    const className = normalizeClassText(pickFirstString(
+      student.className, raw.className, firstListValue(raw.classNames), raw.clazzName, raw.deptName,
+      firstListValue(raw.clazzNames), firstListValue(raw.deptNames),
+      nestedClass?.name, nestedClass?.className, nestedClass?.clazzName, nestedClass?.deptName,
+    ));
+    if (!className) return null;
+
+    const matches = classOptions.filter((item) => {
+      const path = Array.isArray(item.path) ? item.path : [];
+      const aliases = [
+        item.label,
+        item.name,
+        path.join(''),
+        path.slice(1).join(''),
+        path.slice(-2).join(''),
+      ].map(normalizeClassText).filter(Boolean);
+      return aliases.includes(className);
+    });
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  // listByClazz → deptId -> 教师列表。同一教师兼任多个角色/科目时合并为一条。
+  function buildClassTeacherMap(response) {
+    const payload = response?.data ?? response?.result ?? response;
+    const rows = Array.isArray(payload) ? payload : [];
+    const result = {};
+
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const deptId = pickFirstString(row.deptId, row.classId, row.clazzId);
+      if (!deptId) continue;
+      const teachers = new Map();
+      const assignments = Array.isArray(row.clazzTeacherRespList) ? row.clazzTeacherRespList : [];
+
+      for (const assignment of assignments) {
+        if (!assignment || typeof assignment !== 'object') continue;
+        const teachTypeName = pickFirstString(assignment.teachTypeName);
+        const subjectName = pickFirstString(assignment.subjectName);
+        const duty = teachTypeName && subjectName
+          ? `${teachTypeName} · ${subjectName}`
+          : (teachTypeName || subjectName);
+        const users = Array.isArray(assignment.tmbUserList) ? assignment.tmbUserList : [];
+
+        for (const user of users) {
+          if (!user || typeof user !== 'object') continue;
+          const tmbId = pickFirstString(user.tmbId, user.id);
+          const userId = pickFirstString(user.userId);
+          const key = tmbId || userId;
+          if (!key) continue;
+          let teacher = teachers.get(key);
+          if (!teacher) {
+            teacher = {
+              id: key,
+              tmbId,
+              userId,
+              name: pickFirstString(user.userName, user.name, user.teacherName, user.realName),
+              account: pickFirstString(user.phone, user.mobile, user.account, user.email),
+              phone: pickFirstString(user.phone, user.mobile),
+              duties: [],
+              raw: user,
+            };
+            teachers.set(key, teacher);
+          }
+          if (duty && !teacher.duties.includes(duty)) teacher.duties.push(duty);
+        }
+      }
+
+      result[deptId] = [...teachers.values()];
+    }
+    return result;
+  }
+
+  function extractClazzTeacherSemesterId(response) {
+    const payload = response?.data ?? response?.result ?? response;
+    if (!Array.isArray(payload)) return '';
+    for (const row of payload) {
+      const assignments = Array.isArray(row?.clazzTeacherRespList) ? row.clazzTeacherRespList : [];
+      for (const assignment of assignments) {
+        const semesterId = pickFirstString(assignment?.semesterId);
+        if (semesterId) return semesterId;
+      }
+    }
+    return '';
   }
 
   // 从教师详情中提取教学职务（科目 · 班级），用班级树把 deptId 映射成班级全名
@@ -287,10 +485,19 @@
   // 从教师详情中提取 semesterId（供 schoolDept/tree 使用）
   function extractSemesterId(detail) {
     if (!detail || typeof detail !== 'object') return '';
-    return pickFirstString(
+    const direct = pickFirstString(
       detail.semesterId, detail.semester?.id, detail.currentSemesterId,
       detail.schoolSemesterId, detail.termId,
     );
+    if (direct) return direct;
+    const subjectDetails = Array.isArray(detail.schoolSubjectTeachersDetail)
+      ? detail.schoolSubjectTeachersDetail
+      : [];
+    for (const item of subjectDetails) {
+      const semesterId = pickFirstString(item?.semesterId, item?.semester?.id, item?.termId);
+      if (semesterId) return semesterId;
+    }
+    return '';
   }
 
   namespace.tenant = {
@@ -311,10 +518,18 @@
     normalizeStudent,
     buildTeacherPageBody,
     buildStudentPageBody,
+    buildSemesterPageBody,
+    normalizeSemester,
+    resolveSemesterId,
     buildTeacherDetailBody,
     buildSchoolDeptTreeBody,
+    buildClazzTeacherListBody,
     extractDetailData,
     buildDeptIdNameMap,
+    extractClassOptions,
+    findStudentClass,
+    buildClassTeacherMap,
+    extractClazzTeacherSemesterId,
     extractTeachDuties,
     extractSemesterId,
     pickFirstString,

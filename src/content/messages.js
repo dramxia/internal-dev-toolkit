@@ -29,7 +29,17 @@
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
+          const rawMessage = chrome.runtime.lastError.message || '后台消息发送失败';
+          const portClosed = /message port closed|receiving end does not exist|could not establish connection/i.test(rawMessage);
+          const type = message?.type ? `（${message.type}）` : '';
+          reject(new Error(portClosed
+            ? `后台脚本未响应${type}，请在扩展管理页重新加载“内部开发工具箱”后重试`
+            : rawMessage));
+          return;
+        }
+        if (response === undefined) {
+          const type = message?.type ? `（${message.type}）` : '';
+          reject(new Error(`后台未返回结果${type}，请重新加载扩展后重试`));
           return;
         }
         resolve(response);

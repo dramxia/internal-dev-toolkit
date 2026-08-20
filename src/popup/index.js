@@ -284,7 +284,6 @@
     const panels = {
       admin: $('panel-admin'),
       quick: $('panel-quick'),
-      other: $('panel-other'),
       app: $('panel-app'),
     };
     tabs.forEach((btn) => {
@@ -325,7 +324,8 @@
     const featureTabs = [
       { tab: 'admin', feature: 'adminPanel', panel: 'panel-admin' },
       { tab: 'quick', feature: 'quickLogin', panel: 'panel-quick' },
-      { tab: 'other', feature: 'otherLogin', panel: 'panel-other' },
+      // 高校是顶部项目，不再对应内层 tab；仍通过 feature 激活原功能面板。
+      { tab: null, feature: 'otherLogin', panel: 'panel-other' },
       { tab: 'app', feature: 'appLogin', panel: 'panel-app' },
     ];
     const allTabs = document.querySelectorAll('.tab-btn');
@@ -358,7 +358,10 @@
     }
     // 恢复正常显示（从空项目切回时）；tab-rail 显隐由可见 tab 数量决定
     if (panelsEl) panelsEl.style.display = '';
-    if (tabRail) tabRail.style.display = visibleTabs.length <= 1 ? 'none' : '';
+    if (tabRail) {
+      tabRail.style.display = visibleTabs.length <= 1 ? 'none' : '';
+      tabRail.style.gridTemplateColumns = `repeat(${Math.max(visibleTabs.length, 1)}, minmax(0, 1fr))`;
+    }
     const emptyState = $('projectEmptyState');
     if (emptyState) emptyState.remove();
 
@@ -367,7 +370,9 @@
     if (firstAvailable) {
       allTabs.forEach((t) => t.classList.remove('active'));
       document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
-      const firstTabBtn = document.querySelector(`.tab-btn[data-tab="${firstAvailable.tab}"]`);
+      const firstTabBtn = firstAvailable.tab
+        ? document.querySelector(`.tab-btn[data-tab="${firstAvailable.tab}"]`)
+        : null;
       const firstPanel = $(firstAvailable.panel);
       if (firstTabBtn) firstTabBtn.classList.add('active');
       if (firstPanel) firstPanel.classList.add('active');
@@ -382,7 +387,7 @@
     if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
       await ns.quickLoginUi.init();
     }
-    if (ns.otherLoginUi) {
+    if (ns.otherLoginUi && enabledFeatures.includes('otherLogin')) {
       await ns.otherLoginUi.init();
     }
     if (ns.appLoginUi && enabledFeatures.includes('appLogin')) {

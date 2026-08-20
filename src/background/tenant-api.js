@@ -179,6 +179,16 @@
     });
   }
 
+  // 学期列表：/client/semester/page
+  async function fetchSemesterPage({ origin, token, current = 1, size = 999 }) {
+    const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
+    const body = helpers?.buildSemesterPageBody({ current, size }) || { current, size };
+    return fetchClientJson(origin, '/huayun-ai/client/semester/page', body, {
+      referer: `${origin}/v2/tenant/teamManagement/administration`,
+      token,
+    });
+  }
+
   // 教师详情：/client/teacher/detail
   async function fetchTeacherDetail({ origin, token, id }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
@@ -199,8 +209,19 @@
     });
   }
 
+  // 班级对应教师：/client/schoolManageTeacher/listByClazz
+  async function fetchClassTeachers({ origin, token, semesterId = '' }) {
+    const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
+    const body = helpers?.buildClazzTeacherListBody({ semesterId }) || {};
+    return fetchClientJson(origin, '/huayun-ai/client/schoolManageTeacher/listByClazz', body, {
+      referer: `${origin}/v2/tenant/teamManagement/administration`,
+      token,
+    });
+  }
+
   ns.tenantApi = {
     fetchTenantPage, fetchDeptList, fetchUserPage, quickLogin,
-    fetchTeacherPage, fetchStudentPage, fetchTeacherDetail, fetchSchoolDeptTree,
+    fetchTeacherPage, fetchStudentPage, fetchSemesterPage,
+    fetchTeacherDetail, fetchSchoolDeptTree, fetchClassTeachers,
   };
 })();

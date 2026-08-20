@@ -131,6 +131,18 @@
       return true;
     }
 
+    if (msg.type === 'FETCH_SEMESTERS') {
+      if (typeof ns.tenantApi?.fetchSemesterPage !== 'function') {
+        sendResponse({ ok: false, error: '学期列表接口模块未加载，请重新加载扩展' });
+        return false;
+      }
+      Promise.resolve()
+        .then(() => ns.tenantApi.fetchSemesterPage(msg.payload))
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'FETCH_TEACHER_DETAIL' && ns.tenantApi) {
       ns.tenantApi
         .fetchTeacherDetail(msg.payload)
@@ -142,6 +154,18 @@
     if (msg.type === 'FETCH_SCHOOL_DEPT_TREE' && ns.tenantApi) {
       ns.tenantApi
         .fetchSchoolDeptTree(msg.payload)
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'FETCH_CLASS_TEACHERS') {
+      if (typeof ns.tenantApi?.fetchClassTeachers !== 'function') {
+        sendResponse({ ok: false, error: '班级教师接口模块未加载，请重新加载扩展' });
+        return false;
+      }
+      Promise.resolve()
+        .then(() => ns.tenantApi.fetchClassTeachers(msg.payload))
         .then((res) => sendResponse({ ok: true, res }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;

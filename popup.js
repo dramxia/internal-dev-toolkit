@@ -18,8 +18,18 @@ const PROJECTS = [
       virtualLogin: '/huayun-ai/admin/tenant/user/virtualLogin',
     },
     cookieKeys: ['HWWAFSESID', 'HWWAFSESTIME'],
-    enabledFeatures: ['adminPanel', 'quickLogin', 'otherLogin'],
+    enabledFeatures: ['adminPanel', 'quickLogin'],
     hosts: ['gpt-admin-pre.hwzxs.com', '*.hwzxs.com'],
+  },
+  {
+    id: 'higher-education',
+    name: '高校',
+    baseUrl: '',
+    authPath: '',
+    tenantApiPaths: {},
+    cookieKeys: [],
+    enabledFeatures: ['otherLogin'],
+    hosts: [],
   },
   {
     id: 'app',
@@ -558,6 +568,10 @@ if (typeof module !== 'undefined' && module.exports) {
     return '';
   }
 
+  function firstListValue(value) {
+    return Array.isArray(value) ? value[0] : value;
+  }
+
   // 状态映射：0 = 在线（正常），1 = 离线（停用）
   // 教师状态映射：0 = 在线，1 = 离线
   function statusInfo(value) {
@@ -591,11 +605,25 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function normalizeStudent(value = {}) {
     const st = studentStatusInfo(value.status);
+    const nestedClass = value.clazz && typeof value.clazz === 'object'
+      ? value.clazz
+      : (value.class && typeof value.class === 'object'
+          ? value.class
+          : (value.schoolDept && typeof value.schoolDept === 'object' ? value.schoolDept : null));
     return {
       id: pickFirstString(value.id, value.studentId, value.userId),
       name: pickFirstString(value.name, value.studentName, value.realName, value.username, value.userName),
       code: pickFirstString(value.code, value.studentCode, value.studentNo, value.account, value.userAccount),
-      className: pickFirstString(value.className, value.classNames, value.deptName, value.classId),
+      classId: pickFirstString(
+        value.classId, value.clazzId, value.deptId, value.schoolDeptId,
+        firstListValue(value.classIds), firstListValue(value.clazzIds), firstListValue(value.deptIds),
+        nestedClass?.id, nestedClass?.classId, nestedClass?.clazzId, nestedClass?.deptId,
+      ),
+      className: pickFirstString(
+        value.className, firstListValue(value.classNames), value.clazzName, value.deptName,
+        firstListValue(value.clazzNames), firstListValue(value.deptNames),
+        nestedClass?.name, nestedClass?.className, nestedClass?.clazzName, nestedClass?.deptName,
+      ),
       status: st.status,
       statusText: st.statusText,
       statusOn: st.on,
@@ -649,6 +677,39 @@ if (typeof module !== 'undefined' && module.exports) {
     return body;
   }
 
+  function buildSemesterPageBody({ current = 1, size = 999 } = {}) {
+    return {
+      current: Number(current) || 1,
+      size: Number(size) || 999,
+    };
+  }
+
+  function normalizeSemester(value = {}) {
+    const id = pickFirstString(value.id, value.semesterId);
+    const year = pickFirstString(value.year, value.schoolYear);
+    const type = pickFirstString(value.type, value.semesterType);
+    const isCurrent = String(value.isCurrent ?? '') === '1';
+    const parts = [year, type ? `学期${type}` : ''].filter(Boolean);
+    return {
+      id,
+      year,
+      type,
+      startDate: pickFirstString(value.startDate),
+      endDate: pickFirstString(value.endDate),
+      isCurrent,
+      label: `${parts.join(' · ') || id}${isCurrent ? ' · 当前' : ''}`,
+      raw: value,
+    };
+  }
+
+  function resolveSemesterId(semesters = [], preferredId = '') {
+    const preferred = String(preferredId || '');
+    if (preferred && semesters.some((semester) => String(semester?.id || '') === preferred)) {
+      return preferred;
+    }
+    return pickFirstString(semesters[0]?.id);
+  }
+
   // 教师详情：/client/teacher/detail
   function buildTeacherDetailBody({ id }) {
     if (!id) throw new Error('id 不能为空');
@@ -657,6 +718,13 @@ if (typeof module !== 'undefined' && module.exports) {
 
   // 年级/学段/班级树：/client/schoolDept/tree（semesterId 为空时不传）
   function buildSchoolDeptTreeBody({ semesterId = '' } = {}) {
+    const body = {};
+    appendIfFilled(body, 'semesterId', semesterId);
+    return body;
+  }
+
+  // 班级教师关系：/client/schoolManageTeacher/listByClazz
+  function buildClazzTeacherListBody({ semesterId = '' } = {}) {
     const body = {};
     appendIfFilled(body, 'semesterId', semesterId);
     return body;
@@ -688,6 +756,146 @@ if (typeof module !== 'undefined' && module.exports) {
     };
     walk(roots, '');
     return map;
+  }
+
+  // 将 schoolDept/tree 的班级叶子扁平化，保留完整路径以区分不同年级的同名班级。
+  function extractClassOptions(treeData) {
+    const payload = treeData?.data ?? treeData?.result ?? treeData;
+    const roots = Array.isArray(payload) ? payload : (Array.isArray(payload?.children) ? payload.children : []);
+    const classes = [];
+
+    const walk = (nodes, parentPath = []) => {
+      if (!Array.isArray(nodes)) return;
+      for (const node of nodes) {
+        if (!node || typeof node !== 'object') continue;
+        const id = pickFirstString(node.id, node.deptId);
+        const name = pickFirstString(node.deptName, node.name);
+        const path = name ? [...parentPath, name] : parentPath;
+        const children = Array.isArray(node.children) ? node.children : [];
+        const isClass = String(node.subDeptType ?? node.deptType ?? '') === '3';
+        if (isClass && id) {
+          classes.push({
+            id,
+            name,
+            label: path.join(' / '),
+            path,
+            parentId: pickFirstString(node.parentId),
+          });
+        }
+        if (children.length) walk(children, path);
+      }
+    };
+
+    walk(roots);
+    return classes;
+  }
+
+  function normalizeClassText(value) {
+    return String(value || '').trim().toLowerCase().replace(/[\s/\\·._-]+/g, '');
+  }
+
+  // 学生接口优先用 classId/clazzId 定位；只有班级名称能唯一命中时才回落名称匹配。
+  function findStudentClass(student, classOptions = []) {
+    if (!student || !Array.isArray(classOptions) || !classOptions.length) return null;
+    const raw = student.raw && typeof student.raw === 'object' ? student.raw : student;
+    const nestedClass = raw.clazz && typeof raw.clazz === 'object'
+      ? raw.clazz
+      : (raw.class && typeof raw.class === 'object'
+          ? raw.class
+          : (raw.schoolDept && typeof raw.schoolDept === 'object' ? raw.schoolDept : null));
+    const classId = pickFirstString(
+      student.classId, raw.classId, raw.clazzId, raw.deptId, raw.schoolDeptId,
+      firstListValue(raw.classIds), firstListValue(raw.clazzIds), firstListValue(raw.deptIds),
+      nestedClass?.id, nestedClass?.classId, nestedClass?.clazzId, nestedClass?.deptId,
+    );
+    if (classId) {
+      const byId = classOptions.find((item) => String(item.id) === classId);
+      if (byId) return byId;
+    }
+
+    const className = normalizeClassText(pickFirstString(
+      student.className, raw.className, firstListValue(raw.classNames), raw.clazzName, raw.deptName,
+      firstListValue(raw.clazzNames), firstListValue(raw.deptNames),
+      nestedClass?.name, nestedClass?.className, nestedClass?.clazzName, nestedClass?.deptName,
+    ));
+    if (!className) return null;
+
+    const matches = classOptions.filter((item) => {
+      const path = Array.isArray(item.path) ? item.path : [];
+      const aliases = [
+        item.label,
+        item.name,
+        path.join(''),
+        path.slice(1).join(''),
+        path.slice(-2).join(''),
+      ].map(normalizeClassText).filter(Boolean);
+      return aliases.includes(className);
+    });
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  // listByClazz → deptId -> 教师列表。同一教师兼任多个角色/科目时合并为一条。
+  function buildClassTeacherMap(response) {
+    const payload = response?.data ?? response?.result ?? response;
+    const rows = Array.isArray(payload) ? payload : [];
+    const result = {};
+
+    for (const row of rows) {
+      if (!row || typeof row !== 'object') continue;
+      const deptId = pickFirstString(row.deptId, row.classId, row.clazzId);
+      if (!deptId) continue;
+      const teachers = new Map();
+      const assignments = Array.isArray(row.clazzTeacherRespList) ? row.clazzTeacherRespList : [];
+
+      for (const assignment of assignments) {
+        if (!assignment || typeof assignment !== 'object') continue;
+        const teachTypeName = pickFirstString(assignment.teachTypeName);
+        const subjectName = pickFirstString(assignment.subjectName);
+        const duty = teachTypeName && subjectName
+          ? `${teachTypeName} · ${subjectName}`
+          : (teachTypeName || subjectName);
+        const users = Array.isArray(assignment.tmbUserList) ? assignment.tmbUserList : [];
+
+        for (const user of users) {
+          if (!user || typeof user !== 'object') continue;
+          const tmbId = pickFirstString(user.tmbId, user.id);
+          const userId = pickFirstString(user.userId);
+          const key = tmbId || userId;
+          if (!key) continue;
+          let teacher = teachers.get(key);
+          if (!teacher) {
+            teacher = {
+              id: key,
+              tmbId,
+              userId,
+              name: pickFirstString(user.userName, user.name, user.teacherName, user.realName),
+              account: pickFirstString(user.phone, user.mobile, user.account, user.email),
+              phone: pickFirstString(user.phone, user.mobile),
+              duties: [],
+              raw: user,
+            };
+            teachers.set(key, teacher);
+          }
+          if (duty && !teacher.duties.includes(duty)) teacher.duties.push(duty);
+        }
+      }
+
+      result[deptId] = [...teachers.values()];
+    }
+    return result;
+  }
+
+  function extractClazzTeacherSemesterId(response) {
+    const payload = response?.data ?? response?.result ?? response;
+    if (!Array.isArray(payload)) return '';
+    for (const row of payload) {
+      const assignments = Array.isArray(row?.clazzTeacherRespList) ? row.clazzTeacherRespList : [];
+      for (const assignment of assignments) {
+        const semesterId = pickFirstString(assignment?.semesterId);
+        if (semesterId) return semesterId;
+      }
+    }
+    return '';
   }
 
   // 从教师详情中提取教学职务（科目 · 班级），用班级树把 deptId 映射成班级全名
@@ -730,10 +938,19 @@ if (typeof module !== 'undefined' && module.exports) {
   // 从教师详情中提取 semesterId（供 schoolDept/tree 使用）
   function extractSemesterId(detail) {
     if (!detail || typeof detail !== 'object') return '';
-    return pickFirstString(
+    const direct = pickFirstString(
       detail.semesterId, detail.semester?.id, detail.currentSemesterId,
       detail.schoolSemesterId, detail.termId,
     );
+    if (direct) return direct;
+    const subjectDetails = Array.isArray(detail.schoolSubjectTeachersDetail)
+      ? detail.schoolSubjectTeachersDetail
+      : [];
+    for (const item of subjectDetails) {
+      const semesterId = pickFirstString(item?.semesterId, item?.semester?.id, item?.termId);
+      if (semesterId) return semesterId;
+    }
+    return '';
   }
 
   namespace.tenant = {
@@ -754,10 +971,18 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeStudent,
     buildTeacherPageBody,
     buildStudentPageBody,
+    buildSemesterPageBody,
+    normalizeSemester,
+    resolveSemesterId,
     buildTeacherDetailBody,
     buildSchoolDeptTreeBody,
+    buildClazzTeacherListBody,
     extractDetailData,
     buildDeptIdNameMap,
+    extractClassOptions,
+    findStudentClass,
+    buildClassTeacherMap,
+    extractClazzTeacherSemesterId,
     extractTeachDuties,
     extractSemesterId,
     pickFirstString,
@@ -801,7 +1026,17 @@ if (typeof module !== 'undefined' && module.exports) {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage(message, (response) => {
         if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
+          const rawMessage = chrome.runtime.lastError.message || '后台消息发送失败';
+          const portClosed = /message port closed|receiving end does not exist|could not establish connection/i.test(rawMessage);
+          const type = message?.type ? `（${message.type}）` : '';
+          reject(new Error(portClosed
+            ? `后台脚本未响应${type}，请在扩展管理页重新加载“内部开发工具箱”后重试`
+            : rawMessage));
+          return;
+        }
+        if (response === undefined) {
+          const type = message?.type ? `（${message.type}）` : '';
+          reject(new Error(`后台未返回结果${type}，请重新加载扩展后重试`));
           return;
         }
         resolve(response);
@@ -941,6 +1176,25 @@ if (typeof module !== 'undefined' && module.exports) {
     userList: 'userList',
     userEmpty: 'userEmpty',
     pager: 'userPager',
+    teacherLookupRefreshBtn: 'teacherLookupRefreshBtn',
+    teacherLookupSemesterSelect: 'teacherLookupSemesterSelect',
+    teacherLookupEmpty: 'teacherLookupEmpty',
+    teacherLookupContent: 'teacherLookupContent',
+    lookupByStudentBtn: 'lookupByStudentBtn',
+    lookupByClassBtn: 'lookupByClassBtn',
+    lookupStudentPanel: 'lookupStudentPanel',
+    lookupStudentNameSearch: 'lookupStudentNameSearch',
+    lookupStudentCodeSearch: 'lookupStudentCodeSearch',
+    lookupStudentList: 'lookupStudentList',
+    lookupStudentEmpty: 'lookupStudentEmpty',
+    lookupStudentPager: 'lookupStudentPager',
+    lookupClassPanel: 'lookupClassPanel',
+    lookupClassSelect: 'lookupClassSelect',
+    lookupTeacherResultHead: 'lookupTeacherResultHead',
+    lookupTeacherResultTitle: 'lookupTeacherResultTitle',
+    lookupTeacherResultCount: 'lookupTeacherResultCount',
+    lookupTeacherList: 'lookupTeacherList',
+    lookupTeacherEmpty: 'lookupTeacherEmpty',
     teacherList: 'teacherList',
     teacherEmpty: 'teacherEmpty',
     teacherPager: 'teacherPager',
@@ -985,6 +1239,23 @@ if (typeof module !== 'undefined' && module.exports) {
     // 选中用户会话（virtualLogin 解析出的 origin + token）
     selectedUser: null,
     loadingSession: false,
+    // 按学生 / 班级查询关联教师
+    teacherLookupMode: 'student',
+    teacherLookupSemesterId: '',
+    teacherLookupSemesters: [],
+    teacherLookupClasses: [],
+    classTeacherMap: {},
+    teacherLookupReady: false,
+    teacherLookupLoading: false,
+    teacherLookupError: '',
+    teacherLookupRequestId: 0,
+    lookupStudentPage: { current: 1, size: 10, total: 0, records: [] },
+    lookupStudentNameKeyword: '',
+    lookupStudentCodeKeyword: '',
+    loadingLookupStudents: false,
+    lookupStudentRequestId: 0,
+    selectedLookupStudent: null,
+    selectedLookupClassId: '',
     // 教师列表
     teacherPage: { current: 1, size: 10, total: 0, records: [] },
     loadingTeachers: false,
@@ -1160,6 +1431,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (teacherAccountInput) teacherAccountInput.value = '';
     resetTeacherUI();
     resetStudentUI();
+    resetTeacherLookup();
 
     await loadUsers(true);
   }
@@ -1471,6 +1743,7 @@ if (typeof module !== 'undefined' && module.exports) {
       row?.classList.remove('active');
       resetTeacherUI();
       resetStudentUI();
+      resetTeacherLookup();
       return;
     }
 
@@ -1511,6 +1784,7 @@ if (typeof module !== 'undefined' && module.exports) {
       state.teacherPage = { current: 1, size: 10, total: 0, records: [] };
       state.studentPage = { current: 1, size: 10, total: 0, records: [] };
       resetStudentUI();
+      resetTeacherLookup();
 
       // 默认用选中用户的姓名填充教师姓名筛选
       state.teacherNameKeyword = user.userName || '';
@@ -1528,6 +1802,7 @@ if (typeof module !== 'undefined' && module.exports) {
       if (defaultTeacher) {
         await onTeacherSelect(defaultTeacher);
       }
+      await loadTeacherLookupData();
     } catch (err) {
       setStatus(err.message, 'err');
     } finally {
@@ -1542,6 +1817,390 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function getUserToken() {
     return state.selectedUser?.token || '';
+  }
+
+  // ── 按学生 / 班级查询关联教师 ──
+
+  function resetTeacherLookup() {
+    state.teacherLookupRequestId += 1;
+    state.lookupStudentRequestId += 1;
+    state.teacherLookupMode = 'student';
+    state.teacherLookupSemesterId = '';
+    state.teacherLookupSemesters = [];
+    state.teacherLookupClasses = [];
+    state.classTeacherMap = {};
+    state.teacherLookupReady = false;
+    state.teacherLookupLoading = false;
+    state.teacherLookupError = '';
+    state.lookupStudentPage = { current: 1, size: 10, total: 0, records: [] };
+    state.lookupStudentNameKeyword = '';
+    state.lookupStudentCodeKeyword = '';
+    state.loadingLookupStudents = false;
+    state.selectedLookupStudent = null;
+    state.selectedLookupClassId = '';
+
+    const semesterSelect = $('teacherLookupSemesterSelect');
+    if (semesterSelect) {
+      semesterSelect.innerHTML = '<option value="">选择学期</option>';
+      semesterSelect.disabled = true;
+    }
+    const nameInput = $('lookupStudentNameSearch');
+    if (nameInput) nameInput.value = '';
+    const codeInput = $('lookupStudentCodeSearch');
+    if (codeInput) codeInput.value = '';
+    const studentList = $('lookupStudentList');
+    if (studentList) { studentList.innerHTML = ''; studentList.classList.add('hidden'); }
+    const studentPager = $('lookupStudentPager');
+    if (studentPager) { studentPager.innerHTML = ''; studentPager.classList.add('hidden'); }
+    const classSelect = $('lookupClassSelect');
+    if (classSelect) classSelect.innerHTML = '<option value="">选择班级</option>';
+    clearLookupTeacherResult('请选择学生或班级');
+    renderTeacherLookupShell();
+  }
+
+  function renderTeacherLookupShell() {
+    const empty = $('teacherLookupEmpty');
+    const content = $('teacherLookupContent');
+    if (!empty || !content) return;
+
+    $('lookupByStudentBtn')?.classList.toggle('active', state.teacherLookupMode === 'student');
+    $('lookupByClassBtn')?.classList.toggle('active', state.teacherLookupMode === 'class');
+    $('lookupStudentPanel')?.classList.toggle('hidden', state.teacherLookupMode !== 'student');
+    $('lookupClassPanel')?.classList.toggle('hidden', state.teacherLookupMode !== 'class');
+    const semesterSelect = $('teacherLookupSemesterSelect');
+    if (semesterSelect) {
+      semesterSelect.disabled = !state.selectedUser || state.teacherLookupLoading || !state.teacherLookupSemesters.length;
+    }
+
+    if (!state.selectedUser) {
+      empty.textContent = '选中用户后可查询关联教师';
+      empty.classList.remove('hidden');
+      content.classList.add('hidden');
+      return;
+    }
+    if (state.teacherLookupLoading) {
+      empty.textContent = '正在加载班级与教师关系...';
+      empty.classList.remove('hidden');
+      content.classList.add('hidden');
+      return;
+    }
+    if (state.teacherLookupError) {
+      empty.textContent = state.teacherLookupError;
+      empty.classList.remove('hidden');
+      content.classList.add('hidden');
+      return;
+    }
+    if (!state.teacherLookupReady) {
+      empty.textContent = '等待加载班级与教师关系';
+      empty.classList.remove('hidden');
+      content.classList.add('hidden');
+      return;
+    }
+
+    empty.classList.add('hidden');
+    content.classList.remove('hidden');
+  }
+
+  function renderLookupClassOptions() {
+    const select = $('lookupClassSelect');
+    if (!select) return;
+    const selectedId = state.selectedLookupClassId;
+    select.innerHTML = '<option value="">选择班级</option>';
+    for (const cls of state.teacherLookupClasses) {
+      const option = document.createElement('option');
+      option.value = cls.id;
+      option.textContent = cls.label || cls.name || cls.id;
+      select.appendChild(option);
+    }
+    select.value = state.teacherLookupClasses.some((item) => item.id === selectedId) ? selectedId : '';
+  }
+
+  function renderTeacherLookupSemesterOptions() {
+    const select = $('teacherLookupSemesterSelect');
+    if (!select) return;
+    select.innerHTML = '<option value="">选择学期</option>';
+    for (const semester of state.teacherLookupSemesters) {
+      const option = document.createElement('option');
+      option.value = semester.id;
+      option.textContent = semester.label || semester.id;
+      select.appendChild(option);
+    }
+    select.value = state.teacherLookupSemesterId;
+    select.disabled = !state.selectedUser || state.teacherLookupLoading || !state.teacherLookupSemesters.length;
+  }
+
+  async function loadTeacherLookupData({ reloadSemesters = false } = {}) {
+    if (!state.selectedUser || state.teacherLookupLoading) return;
+    const origin = getTenantOrigin();
+    const token = getUserToken();
+    if (!origin || !token) return;
+
+    const requestId = ++state.teacherLookupRequestId;
+    state.teacherLookupLoading = true;
+    state.teacherLookupError = '';
+    state.teacherLookupReady = false;
+    state.selectedLookupStudent = null;
+    state.selectedLookupClassId = '';
+    renderTeacherLookupShell();
+
+    try {
+      if (reloadSemesters || !state.teacherLookupSemesters.length) {
+        const semesterRes = await messages.sendToBackground({
+          type: 'FETCH_SEMESTERS',
+          payload: { origin, token, current: 1, size: 999 },
+        });
+        if (requestId !== state.teacherLookupRequestId) return;
+        if (!semesterRes || !semesterRes.ok) throw new Error(semesterRes?.error || '加载学期列表失败');
+
+        const semesterPage = tenantHelpers.extractPageData(semesterRes.res);
+        const semesters = (semesterPage.records || [])
+          .map(tenantHelpers.normalizeSemester)
+          .filter((semester) => semester.id);
+        if (!semesters.length) throw new Error('暂无学期数据');
+
+        const previousSemesterId = state.teacherLookupSemesterId;
+        state.teacherLookupSemesters = semesters;
+        state.teacherLookupSemesterId = tenantHelpers.resolveSemesterId(semesters, previousSemesterId);
+        renderTeacherLookupSemesterOptions();
+      }
+
+      const semesterId = state.teacherLookupSemesterId || state.teacherLookupSemesters[0]?.id || '';
+      if (!semesterId) throw new Error('请选择学期');
+      const [treeRes, teacherRes] = await Promise.all([
+        messages.sendToBackground({
+          type: 'FETCH_SCHOOL_DEPT_TREE',
+          payload: { origin, token, semesterId },
+        }),
+        messages.sendToBackground({
+          type: 'FETCH_CLASS_TEACHERS',
+          payload: { origin, token, semesterId },
+        }),
+      ]);
+      if (requestId !== state.teacherLookupRequestId) return;
+      if (!treeRes || !treeRes.ok) throw new Error(treeRes?.error || '加载班级树失败');
+      if (!teacherRes || !teacherRes.ok) throw new Error(teacherRes?.error || '加载班级教师关系失败');
+
+      state.teacherLookupClasses = tenantHelpers.extractClassOptions(treeRes.res);
+      state.classTeacherMap = tenantHelpers.buildClassTeacherMap(teacherRes.res);
+      if (!state.teacherLookupClasses.length) throw new Error('当前学期暂无班级数据');
+
+      state.teacherLookupReady = true;
+      renderTeacherLookupSemesterOptions();
+      renderLookupClassOptions();
+      renderTeacherLookupShell();
+      clearLookupTeacherResult('请选择学生或班级');
+      if (state.teacherLookupMode === 'student') await loadLookupStudents(true);
+    } catch (err) {
+      if (requestId !== state.teacherLookupRequestId) return;
+      state.teacherLookupError = err.message;
+      renderTeacherLookupShell();
+      setStatus(err.message, 'err');
+    } finally {
+      if (requestId !== state.teacherLookupRequestId) return;
+      state.teacherLookupLoading = false;
+      renderTeacherLookupShell();
+    }
+  }
+
+  function switchTeacherLookupMode(mode) {
+    state.teacherLookupMode = mode === 'class' ? 'class' : 'student';
+    state.selectedLookupStudent = null;
+    state.selectedLookupClassId = '';
+    const classSelect = $('lookupClassSelect');
+    if (classSelect) classSelect.value = '';
+    clearLookupTeacherResult('请选择学生或班级');
+    renderTeacherLookupShell();
+    if (state.teacherLookupMode === 'student' && state.teacherLookupReady && !state.lookupStudentPage.records.length) {
+      loadLookupStudents(true);
+    } else if (state.teacherLookupMode === 'student') {
+      renderLookupStudents();
+    }
+  }
+
+  async function loadLookupStudents(reset = false) {
+    if (!state.selectedUser || !state.teacherLookupReady) return;
+    const origin = getTenantOrigin();
+    const token = getUserToken();
+    if (!origin || !token) return;
+
+    const requestId = ++state.lookupStudentRequestId;
+    state.loadingLookupStudents = true;
+    if (reset) {
+      state.lookupStudentPage.current = 1;
+      state.lookupStudentPage.records = [];
+      state.selectedLookupStudent = null;
+      state.selectedLookupClassId = '';
+      clearLookupTeacherResult('请选择学生或班级');
+      const list = $('lookupStudentList');
+      const empty = $('lookupStudentEmpty');
+      if (list) { list.innerHTML = ''; list.classList.add('hidden'); }
+      if (empty) { empty.textContent = '加载中...'; empty.classList.remove('hidden'); }
+    }
+
+    try {
+      const res = await messages.sendToBackground({
+        type: 'FETCH_STUDENTS',
+        payload: {
+          origin,
+          token,
+          current: state.lookupStudentPage.current,
+          size: state.lookupStudentPage.size,
+          name: state.lookupStudentNameKeyword,
+          code: state.lookupStudentCodeKeyword,
+        },
+      });
+      if (requestId !== state.lookupStudentRequestId) return;
+      if (!res || !res.ok) throw new Error(res?.error || '加载学生列表失败');
+      const page = tenantHelpers.extractPageData(res.res);
+      state.lookupStudentPage.records = (page.records || []).map(tenantHelpers.normalizeStudent);
+      state.lookupStudentPage.total = page.total || 0;
+      renderLookupStudents();
+    } catch (err) {
+      if (requestId !== state.lookupStudentRequestId) return;
+      const empty = $('lookupStudentEmpty');
+      if (empty) { empty.textContent = err.message; empty.classList.remove('hidden'); }
+      setStatus(err.message, 'err');
+    } finally {
+      if (requestId !== state.lookupStudentRequestId) return;
+      state.loadingLookupStudents = false;
+    }
+  }
+
+  function renderLookupStudents() {
+    const list = $('lookupStudentList');
+    const empty = $('lookupStudentEmpty');
+    const pager = $('lookupStudentPager');
+    if (!list || !empty || !pager) return;
+    list.innerHTML = '';
+
+    const records = state.lookupStudentPage.records;
+    if (!records.length) {
+      list.classList.add('hidden');
+      empty.textContent = '未找到学生';
+      empty.classList.remove('hidden');
+      pager.classList.add('hidden');
+      return;
+    }
+
+    empty.classList.add('hidden');
+    list.classList.remove('hidden');
+    for (const student of records) {
+      const matchedClass = tenantHelpers.findStudentClass(student, state.teacherLookupClasses);
+      const row = document.createElement('div');
+      row.className = 'student-item lookup-student-item fade-in' +
+        (state.selectedLookupStudent?.id === student.id ? ' selected' : '');
+      const classText = matchedClass?.label || student.className || '班级未识别';
+      row.innerHTML =
+        `<div class="student-item-info">` +
+        `<div class="student-item-name">${escapeHtml(student.name || '(未命名)')}</div>` +
+        `<div class="student-item-meta">` +
+        (student.code ? `<span>学号: ${escapeHtml(student.code)}</span>` : '') +
+        `<span>${escapeHtml(classText)}</span>` +
+        `</div>` +
+        `</div>`;
+      row.addEventListener('click', () => selectLookupStudent(student));
+      list.appendChild(row);
+    }
+    buildPagerUI(pager, state.lookupStudentPage, state.lookupStudentPage.total, goToLookupStudentPage);
+  }
+
+  function goToLookupStudentPage(page) {
+    const pages = Math.max(1, Math.ceil(state.lookupStudentPage.total / state.lookupStudentPage.size));
+    const target = Math.min(Math.max(1, page), pages);
+    if (target === state.lookupStudentPage.current && state.lookupStudentPage.records.length) return;
+    state.lookupStudentPage.current = target;
+    loadLookupStudents(false);
+  }
+
+  function selectLookupStudent(student) {
+    state.selectedLookupStudent = student;
+    const matchedClass = tenantHelpers.findStudentClass(student, state.teacherLookupClasses);
+    state.selectedLookupClassId = matchedClass?.id || '';
+    renderLookupStudents();
+    if (!matchedClass) {
+      clearLookupTeacherResult(`${student.name || '该学生'}的班级无法唯一识别`);
+      return;
+    }
+    renderLookupTeachers(matchedClass.id);
+  }
+
+  function selectLookupClass(classId) {
+    state.selectedLookupStudent = null;
+    state.selectedLookupClassId = String(classId || '');
+    if (!state.selectedLookupClassId) {
+      clearLookupTeacherResult('请选择班级');
+      return;
+    }
+    renderLookupTeachers(state.selectedLookupClassId);
+  }
+
+  function clearLookupTeacherResult(message) {
+    const head = $('lookupTeacherResultHead');
+    const title = $('lookupTeacherResultTitle');
+    const count = $('lookupTeacherResultCount');
+    const list = $('lookupTeacherList');
+    const empty = $('lookupTeacherEmpty');
+    if (head) head.classList.add('hidden');
+    if (title) title.textContent = '';
+    if (count) count.textContent = '';
+    if (list) { list.innerHTML = ''; list.classList.add('hidden'); }
+    if (empty) { empty.textContent = message || '请选择学生或班级'; empty.classList.remove('hidden'); }
+  }
+
+  function renderLookupTeachers(classId) {
+    const cls = state.teacherLookupClasses.find((item) => item.id === String(classId));
+    if (!cls) {
+      clearLookupTeacherResult('未找到对应班级');
+      return;
+    }
+
+    const teachers = state.classTeacherMap[String(classId)] || [];
+    const head = $('lookupTeacherResultHead');
+    const title = $('lookupTeacherResultTitle');
+    const count = $('lookupTeacherResultCount');
+    const list = $('lookupTeacherList');
+    const empty = $('lookupTeacherEmpty');
+    if (!head || !title || !count || !list || !empty) return;
+
+    const prefix = state.selectedLookupStudent?.name ? `${state.selectedLookupStudent.name} · ` : '';
+    title.textContent = `${prefix}${cls.label || cls.name}`;
+    count.textContent = `${teachers.length} 位教师`;
+    head.classList.remove('hidden');
+    list.innerHTML = '';
+
+    if (!teachers.length) {
+      list.classList.add('hidden');
+      empty.textContent = '该班级暂无关联教师';
+      empty.classList.remove('hidden');
+      return;
+    }
+
+    empty.classList.add('hidden');
+    list.classList.remove('hidden');
+    for (const teacher of teachers) {
+      const row = document.createElement('div');
+      row.className = 'list-item lookup-teacher-item fade-in';
+      const dataAttrs =
+        `data-id="${escapeHtml(teacher.id)}" ` +
+        `data-user-name="${escapeHtml(teacher.name || '')}" ` +
+        `data-user-id="${escapeHtml(teacher.userId || '')}"`;
+      const duties = teacher.duties?.length
+        ? `<div class="lookup-teacher-duties">${teacher.duties.map((duty) => `<span class="teacher-badge teach">${escapeHtml(duty)}</span>`).join('')}</div>`
+        : '';
+      row.innerHTML =
+        `<div class="list-item-content">` +
+        `<div class="list-item-title">${escapeHtml(teacher.name || '(未命名)')}</div>` +
+        `<div class="list-item-meta">${escapeHtml(teacher.account || teacher.userId || '')}</div>` +
+        duties +
+        `</div>` +
+        `<div class="list-item-actions">` +
+        `<button class="action-btn primary" data-action="open" ${dataAttrs} title="一键登录">${icons.open}</button>` +
+        `<button class="action-btn" data-action="copy" ${dataAttrs} title="复制 token query">${icons.copy}</button>` +
+        `<button class="action-btn" data-action="student" ${dataAttrs} title="跳转学生评价">${icons.student}</button>` +
+        `<button class="action-btn" data-action="teacher" ${dataAttrs} title="跳转教师评价">${icons.teacher}</button>` +
+        `</div>`;
+      list.appendChild(row);
+    }
   }
 
   function resetTeacherUI() {
@@ -2064,6 +2723,36 @@ if (typeof module !== 'undefined' && module.exports) {
     }, 300));
 
     $('userList').addEventListener('click', onLoginClick);
+
+    // 关联教师：按学生 / 按班级切换及学期数据刷新
+    $('lookupByStudentBtn')?.addEventListener('click', () => switchTeacherLookupMode('student'));
+    $('lookupByClassBtn')?.addEventListener('click', () => switchTeacherLookupMode('class'));
+    $('teacherLookupRefreshBtn')?.addEventListener('click', () => {
+      if (!state.selectedUser) {
+        setStatus('请先在用户列表中选中用户', 'err');
+        return;
+      }
+      loadTeacherLookupData({ reloadSemesters: true });
+    });
+    $('teacherLookupSemesterSelect')?.addEventListener('change', (event) => {
+      const semesterId = event.target.value;
+      if (!semesterId || semesterId === state.teacherLookupSemesterId) return;
+      state.teacherLookupSemesterId = semesterId;
+      loadTeacherLookupData();
+    });
+    $('lookupClassSelect')?.addEventListener('change', (event) => selectLookupClass(event.target.value));
+    $('lookupTeacherList')?.addEventListener('click', onLoginClick);
+
+    const lookupStudentNameSearch = $('lookupStudentNameSearch');
+    lookupStudentNameSearch?.addEventListener('input', debounce(() => {
+      state.lookupStudentNameKeyword = lookupStudentNameSearch.value.trim();
+      loadLookupStudents(true);
+    }, 300));
+    const lookupStudentCodeSearch = $('lookupStudentCodeSearch');
+    lookupStudentCodeSearch?.addEventListener('input', debounce(() => {
+      state.lookupStudentCodeKeyword = lookupStudentCodeSearch.value.trim();
+      loadLookupStudents(true);
+    }, 300));
 
     // 教师姓名/账号筛选（防抖 300ms）
     const teacherNameSearch = $('teacherNameSearch');
@@ -3702,7 +4391,6 @@ if (typeof module !== 'undefined' && module.exports) {
     const panels = {
       admin: $('panel-admin'),
       quick: $('panel-quick'),
-      other: $('panel-other'),
       app: $('panel-app'),
     };
     tabs.forEach((btn) => {
@@ -3743,7 +4431,8 @@ if (typeof module !== 'undefined' && module.exports) {
     const featureTabs = [
       { tab: 'admin', feature: 'adminPanel', panel: 'panel-admin' },
       { tab: 'quick', feature: 'quickLogin', panel: 'panel-quick' },
-      { tab: 'other', feature: 'otherLogin', panel: 'panel-other' },
+      // 高校是顶部项目，不再对应内层 tab；仍通过 feature 激活原功能面板。
+      { tab: null, feature: 'otherLogin', panel: 'panel-other' },
       { tab: 'app', feature: 'appLogin', panel: 'panel-app' },
     ];
     const allTabs = document.querySelectorAll('.tab-btn');
@@ -3776,7 +4465,10 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     // 恢复正常显示（从空项目切回时）；tab-rail 显隐由可见 tab 数量决定
     if (panelsEl) panelsEl.style.display = '';
-    if (tabRail) tabRail.style.display = visibleTabs.length <= 1 ? 'none' : '';
+    if (tabRail) {
+      tabRail.style.display = visibleTabs.length <= 1 ? 'none' : '';
+      tabRail.style.gridTemplateColumns = `repeat(${Math.max(visibleTabs.length, 1)}, minmax(0, 1fr))`;
+    }
     const emptyState = $('projectEmptyState');
     if (emptyState) emptyState.remove();
 
@@ -3785,7 +4477,9 @@ if (typeof module !== 'undefined' && module.exports) {
     if (firstAvailable) {
       allTabs.forEach((t) => t.classList.remove('active'));
       document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
-      const firstTabBtn = document.querySelector(`.tab-btn[data-tab="${firstAvailable.tab}"]`);
+      const firstTabBtn = firstAvailable.tab
+        ? document.querySelector(`.tab-btn[data-tab="${firstAvailable.tab}"]`)
+        : null;
       const firstPanel = $(firstAvailable.panel);
       if (firstTabBtn) firstTabBtn.classList.add('active');
       if (firstPanel) firstPanel.classList.add('active');
@@ -3800,7 +4494,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
       await ns.quickLoginUi.init();
     }
-    if (ns.otherLoginUi) {
+    if (ns.otherLoginUi && enabledFeatures.includes('otherLogin')) {
       await ns.otherLoginUi.init();
     }
     if (ns.appLoginUi && enabledFeatures.includes('appLogin')) {
