@@ -12,6 +12,7 @@ const PROJECTS = [
       tenantPage: '/huayun-ai/admin/tenant/page',
       deptList: '/huayun-ai/admin/dept/list',
       userPage: '/huayun-ai/admin/tenant/user/page',
+      accountPage: '/huayun-ai/admin/tenant/user/account/page',
       virtualLogin: '/huayun-ai/admin/tenant/user/virtualLogin',
     },
     cookieKeys: ['HWWAFSESID', 'HWWAFSESTIME'],

@@ -15,6 +15,7 @@ const PROJECTS = [
       tenantPage: '/huayun-ai/admin/tenant/page',
       deptList: '/huayun-ai/admin/dept/list',
       userPage: '/huayun-ai/admin/tenant/user/page',
+      accountPage: '/huayun-ai/admin/tenant/user/account/page',
       virtualLogin: '/huayun-ai/admin/tenant/user/virtualLogin',
     },
     cookieKeys: ['HWWAFSESID', 'HWWAFSESTIME'],
@@ -475,6 +476,31 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
+  // /admin/tenant/user/account/page 的记录。这里的 id 是 virtualLogin
+  // 接受的租户用户主键；tmbId/userId 仅作为关系字段保留，绝不互相替代。
+  function normalizeAccount(value = {}) {
+    const rawType = value.type ?? value.accountType ?? '';
+    const type = rawType === '' || rawType == null ? '' : String(rawType);
+    return {
+      id: pickFirstString(value.id),
+      loginId: pickFirstString(value.id),
+      tmbId: pickFirstString(value.tmbId),
+      userId: pickFirstString(value.userId),
+      username: pickFirstString(value.username, value.userName, value.name),
+      account: pickFirstString(value.account, value.phone, value.mobile),
+      tenantId: pickFirstString(value.tenantId),
+      tenantName: pickFirstString(value.tenantName),
+      domain: pickFirstString(value.domain, value.tenantDomain),
+      phone: pickFirstString(value.phone, value.mobile),
+      industry: value.industry ?? '',
+      accountType: value.accountType == null ? '' : String(value.accountType),
+      type,
+      status: value.status == null ? '' : String(value.status),
+      statusText: statusInfo(value.status).statusText,
+      raw: value,
+    };
+  }
+
   function normalizeTenant(value = {}) {
     return {
       tenantId: String(value.tenantId ?? value.id ?? ''),
@@ -516,6 +542,34 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
+  // 后台账号分页：accountType 是请求筛选字段（0=常规账号，1=学生账号，4=校外账号）。
+  // 只发送当前选中的一个文本条件，避免后台将多个条件按 AND 组合造成误筛。
+  function buildAccountPageBody({
+    current = 1,
+    size = 10,
+    username = '',
+    account = '',
+    tenantName = '',
+    accountType,
+    status,
+  } = {}) {
+    const body = {
+      current: Number(current) || 1,
+      size: Number(size) || 10,
+    };
+    appendIfFilled(body, 'username', username);
+    appendIfFilled(body, 'account', account);
+    appendIfFilled(body, 'tenantName', tenantName);
+    // accountType=0 是有效筛选值，不能使用 truthy 判断。
+    if (accountType !== undefined && accountType !== null && String(accountType) !== '') {
+      body.accountType = Number(accountType);
+    }
+    if (status !== undefined && status !== null && String(status) !== '') {
+      body.status = Number(status);
+    }
+    return body;
+  }
+
   function buildDeptListBody({ tenantId }) {
     if (!tenantId) throw new Error('tenantId 不能为空');
     return { tenantId: String(tenantId) };
@@ -531,11 +585,14 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!response || typeof response !== 'object') return { records: [], total: 0 };
     const payload = response.data ?? response.result ?? response;
     if (!payload || typeof payload !== 'object') return { records: [], total: 0 };
+    const totalValue = Number(payload.total);
     return {
       records: Array.isArray(payload.records) ? payload.records : Array.isArray(payload.list) ? payload.list : [],
-      total: typeof payload.total === 'number' ? payload.total : (Array.isArray(payload.records) ? payload.records.length : 0),
-      current: payload.current ?? 1,
-      size: payload.size ?? 10,
+      total: Number.isFinite(totalValue) && totalValue >= 0
+        ? totalValue
+        : (Array.isArray(payload.records) ? payload.records.length : 0),
+      current: Number(payload.current) || 1,
+      size: Number(payload.size) || 10,
     };
   }
 
@@ -594,8 +651,12 @@ if (typeof module !== 'undefined' && module.exports) {
     const st = statusInfo(value.status);
     return {
       id: pickFirstString(value.id, value.teacherId, value.userId, nestedUser?.userId, nestedUser?.id),
+      tmbId: pickFirstString(value.tmbId),
+      userId: pickFirstString(value.userId, nestedUser?.userId),
+      tenantId: pickFirstString(value.tenantId),
       name: pickFirstString(value.name, value.teacherName, value.realName, nestedUser?.name, nestedUser?.username, value.username, value.userName, value.nickName),
       account: pickFirstString(value.account, value.phone, value.mobile, value.userAccount, value.loginAccount, nestedUser?.phone, nestedUser?.mobile, nestedUser?.account),
+      phone: pickFirstString(value.phone, value.mobile, nestedUser?.phone, nestedUser?.mobile),
       status: st.status,
       statusText: st.statusText,
       statusOn: st.on,
@@ -612,8 +673,10 @@ if (typeof module !== 'undefined' && module.exports) {
           : (value.schoolDept && typeof value.schoolDept === 'object' ? value.schoolDept : null));
     return {
       id: pickFirstString(value.id, value.studentId, value.userId),
+      tenantId: pickFirstString(value.tenantId),
       name: pickFirstString(value.name, value.studentName, value.realName, value.username, value.userName),
       code: pickFirstString(value.code, value.studentCode, value.studentNo, value.account, value.userAccount),
+      account: pickFirstString(value.account, value.userAccount),
       classId: pickFirstString(
         value.classId, value.clazzId, value.deptId, value.schoolDeptId,
         firstListValue(value.classIds), firstListValue(value.clazzIds), firstListValue(value.deptIds),
@@ -666,14 +729,19 @@ if (typeof module !== 'undefined' && module.exports) {
     return body;
   }
 
-  function buildStudentPageBody({ current = 1, size = 10, name = '', code = '', className = '' }) {
+  function buildStudentPageBody({ current = 1, size = 10, name = '', code = '', account = '', className = '', clazzId = '', clazzIds = [] }) {
     const body = {
       current: Number(current) || 1,
       size: Number(size) || 10,
     };
     appendIfFilled(body, 'name', name);
     appendIfFilled(body, 'code', code);
+    appendIfFilled(body, 'account', account);
     appendIfFilled(body, 'className', className);
+    appendIfFilled(body, 'clazzId', clazzId);
+    if (Array.isArray(clazzIds) && clazzIds.length) {
+      body.clazzIds = clazzIds.map((id) => String(id)).filter(Boolean);
+    }
     return body;
   }
 
@@ -742,7 +810,10 @@ if (typeof module !== 'undefined' && module.exports) {
     const map = {};
     if (!treeData) return map;
     const payload = treeData.data ?? treeData.result ?? treeData;
-    const roots = Array.isArray(payload) ? payload : (Array.isArray(payload?.children) ? payload.children : []);
+    const roots = Array.isArray(payload) ? payload
+      : (Array.isArray(payload?.children) ? payload.children
+        : (Array.isArray(payload?.treeList) ? payload.treeList
+          : (Array.isArray(payload?.records) ? payload.records : [])));
     const walk = (nodes, prefix) => {
       if (!Array.isArray(nodes)) return;
       for (const node of nodes) {
@@ -761,18 +832,23 @@ if (typeof module !== 'undefined' && module.exports) {
   // 将 schoolDept/tree 的班级叶子扁平化，保留完整路径以区分不同年级的同名班级。
   function extractClassOptions(treeData) {
     const payload = treeData?.data ?? treeData?.result ?? treeData;
-    const roots = Array.isArray(payload) ? payload : (Array.isArray(payload?.children) ? payload.children : []);
+    const roots = Array.isArray(payload) ? payload
+      : (Array.isArray(payload?.children) ? payload.children
+        : (Array.isArray(payload?.treeList) ? payload.treeList
+          : (Array.isArray(payload?.records) ? payload.records : [])));
     const classes = [];
 
-    const walk = (nodes, parentPath = []) => {
+    const walk = (nodes, parentPath = [], parentIds = []) => {
       if (!Array.isArray(nodes)) return;
       for (const node of nodes) {
         if (!node || typeof node !== 'object') continue;
         const id = pickFirstString(node.id, node.deptId);
         const name = pickFirstString(node.deptName, node.name);
         const path = name ? [...parentPath, name] : parentPath;
+        const ids = id ? [...parentIds, id] : parentIds;
         const children = Array.isArray(node.children) ? node.children : [];
-        const isClass = String(node.subDeptType ?? node.deptType ?? '') === '3';
+        const typeText = String(node.subDeptType ?? node.deptType ?? node.type ?? '').toLowerCase();
+        const isClass = typeText === '3' || typeText === 'class' || node.isClass === true;
         if (isClass && id) {
           classes.push({
             id,
@@ -780,9 +856,10 @@ if (typeof module !== 'undefined' && module.exports) {
             label: path.join(' / '),
             path,
             parentId: pickFirstString(node.parentId),
+            ancestorIds: ids.slice(0, -1),
           });
         }
-        if (children.length) walk(children, path);
+        if (children.length) walk(children, path, ids);
       }
     };
 
@@ -792,6 +869,31 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function normalizeClassText(value) {
     return String(value || '').trim().toLowerCase().replace(/[\s/\\·._-]+/g, '');
+  }
+
+  // 将后台 account/page 学生记录与 AI client/student/page 记录做严格匹配。
+  // 返回全部候选，不替调用方擅自选择同名/同账号记录。
+  function matchStudentCandidates(account, students = []) {
+    const a = account && typeof account === 'object' ? account : {};
+    const accountTenant = normalizeClassText(a.tenantId);
+    const username = normalizeClassText(a.username);
+    const loginAccount = normalizeClassText(a.account);
+    const source = Array.isArray(students) ? students : [];
+    const tenantScoped = accountTenant
+      ? source.filter((student) => {
+          const tenantId = normalizeClassText(student?.tenantId);
+          return tenantId === accountTenant;
+        })
+      : source;
+    const byName = username
+      ? tenantScoped.filter((student) => normalizeClassText(student?.name) === username)
+      : [];
+    const byAccount = loginAccount
+      ? tenantScoped.filter((student) => [student?.code, student?.account].some((value) => normalizeClassText(value) === loginAccount))
+      : [];
+    if (byAccount.length) return { matches: byAccount, matchedBy: 'account' };
+    if (byName.length) return { matches: byName, matchedBy: 'username' };
+    return { matches: [], matchedBy: '' };
   }
 
   // 学生接口优先用 classId/clazzId 定位；只有班级名称能唯一命中时才回落名称匹配。
@@ -837,7 +939,9 @@ if (typeof module !== 'undefined' && module.exports) {
   // listByClazz → deptId -> 教师列表。同一教师兼任多个角色/科目时合并为一条。
   function buildClassTeacherMap(response) {
     const payload = response?.data ?? response?.result ?? response;
-    const rows = Array.isArray(payload) ? payload : [];
+    const rows = Array.isArray(payload) ? payload
+      : (Array.isArray(payload?.records) ? payload.records
+        : (Array.isArray(payload?.list) ? payload.list : []));
     const result = {};
 
     for (const row of rows) {
@@ -887,8 +991,10 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function extractClazzTeacherSemesterId(response) {
     const payload = response?.data ?? response?.result ?? response;
-    if (!Array.isArray(payload)) return '';
-    for (const row of payload) {
+    const rows = Array.isArray(payload) ? payload
+      : (Array.isArray(payload?.records) ? payload.records : []);
+    if (!rows.length) return '';
+    for (const row of rows) {
       const assignments = Array.isArray(row?.clazzTeacherRespList) ? row.clazzTeacherRespList : [];
       for (const assignment of assignments) {
         const semesterId = pickFirstString(assignment?.semesterId);
@@ -953,13 +1059,41 @@ if (typeof module !== 'undefined' && module.exports) {
     return '';
   }
 
+  // 从教师详情中提取其教学班级 id，用于按班级查询相关学生。
+  function extractTeacherClassIds(detail) {
+    if (!detail || typeof detail !== 'object') return [];
+    const ids = new Set();
+    const collect = (value) => {
+      if (value == null) return;
+      if (Array.isArray(value)) {
+        value.forEach(collect);
+        return;
+      }
+      if (typeof value === 'object') {
+        ['deptIds', 'deptId', 'classIds', 'classId', 'clazzIds', 'clazzId', 'schoolDeptIds', 'schoolDeptId', 'classList', 'clazzList'].forEach((key) => collect(value[key]));
+        for (const listKey of ['classList', 'clazzList']) {
+          if (!Array.isArray(value[listKey])) continue;
+          value[listKey].forEach((item) => {
+            if (item && typeof item === 'object') collect(item.id ?? item.classId ?? item.clazzId ?? item.deptId);
+          });
+        }
+        return;
+      }
+      String(value).split(/[,，、\s]+/).map((item) => item.trim()).filter(Boolean).forEach((item) => ids.add(item));
+    };
+    ['schoolSubjectTeachersDetail', 'schoolManageTeachersDetail', 'subjectTeachers', 'manageTeachers', 'teacherClassList', 'clazzList'].forEach((key) => collect(detail[key]));
+    return [...ids];
+  }
+
   namespace.tenant = {
     DEFAULT_DEPT_SOURCE,
     normalizeTenant,
     normalizeUser,
+    normalizeAccount,
     normalizeDept,
     buildTenantPageBody,
     buildUserPageBody,
+    buildAccountPageBody,
     buildDeptListBody,
     buildQuickLoginBody,
     extractPageData,
@@ -981,10 +1115,12 @@ if (typeof module !== 'undefined' && module.exports) {
     buildDeptIdNameMap,
     extractClassOptions,
     findStudentClass,
+    matchStudentCandidates,
     buildClassTeacherMap,
     extractClazzTeacherSemesterId,
     extractTeachDuties,
     extractSemesterId,
+    extractTeacherClassIds,
     pickFirstString,
     appendIfFilled,
     parseVirtualLoginUrl,
@@ -2097,6 +2233,23 @@ if (typeof module !== 'undefined' && module.exports) {
     return token;
   }
 
+  function redact(value) {
+    return String(value || '')
+      .replace(/("(?:token|accessToken|authorization|jwt)"\s*:\s*")[^"]*(")/gi, '$1<redacted>$2')
+      .replace(/(Bearer\s+)[^\s&"']+/gi, '$1<redacted>')
+      .replace(/((?:token|accessToken|authorization|jwt)[=:\s]+)[^\s&"']+/gi, '$1<redacted>');
+  }
+
+  function isBusinessSuccess(json) {
+    if (!json || typeof json !== 'object') return false;
+    // 部分接口会同时返回 HTTP 200 / code=200 与 success=false；显式失败优先，
+    // 避免把 token 失效或参数错误当成可用数据继续流转。
+    if (json.success === false || json.success === 0 || json.success === '0' || json.success === 'false') return false;
+    const code = Number(json.code);
+    return json.success === true || json.success === 1 || json.success === '1' || json.success === 'true' ||
+      code === 0 || (Number.isFinite(code) && code >= 200 && code < 400);
+  }
+
   async function fetchAdminJson(path, body, { referer } = {}) {
     const token = await getToken();
     if (!token) throw new Error('未获取 admin token，请先登录');
@@ -2119,7 +2272,7 @@ if (typeof module !== 'undefined' && module.exports) {
       headers.Cookie = cookieHeader;
     }
 
-    console.log('[内部开发工具箱] 请求:', path, 'token:', token.slice(0, 8) + '...', 'cookie:', cookieHeader ? '有' : '无');
+    console.log('[内部开发工具箱] 后台请求:', path, 'cookie:', cookieHeader ? '有' : '无');
 
     const url = `${baseUrl}${path}`;
     const res = await fetch(url, {
@@ -2132,7 +2285,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!res.ok) {
       let extra = '';
       try { extra = await res.text(); } catch (_) {}
-      throw new Error(`HTTP ${res.status}: ${res.statusText}${extra ? ' | ' + extra.slice(0, 200) : ''}`);
+      throw new Error(`HTTP ${res.status}: ${res.statusText}${extra ? ' | ' + redact(extra).slice(0, 200) : ''}`);
     }
 
     const text = await res.text();
@@ -2140,14 +2293,14 @@ if (typeof module !== 'undefined' && module.exports) {
     try { json = text ? JSON.parse(text) : {}; }
     catch (_) {
       // 非 JSON 响应：通常是被 WAF 拦截（挑战页 / 登录页 HTML）
-      throw new Error(`非 JSON 响应（疑似被 WAF 拦截，请先在浏览器打开 ${baseUrl} 完成登录）: ${text.slice(0, 120)}`);
+      throw new Error(`非 JSON 响应（疑似被 WAF 拦截，请先在浏览器打开 ${baseUrl} 完成登录）`);
     }
 
     // 业务层错误：HTTP 200 但 code != 200 / success === false（如 token 失效）
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
-    const bizOk = json && (json.success === true || json.code === 200 || json.code === 0);
+    const bizOk = isBusinessSuccess(json);
     if (!bizOk) {
-      const msg = helpers?.extractErrorMessage?.(json) || `code=${json?.code ?? '?'} success=${json?.success ?? '?'}`;
+      const msg = redact(helpers?.extractErrorMessage?.(json) || `code=${json?.code ?? '?'} success=${json?.success ?? '?'}`);
       throw new Error(`接口返回失败: ${msg}`);
     }
     return json;
@@ -2174,25 +2327,32 @@ if (typeof module !== 'undefined' && module.exports) {
     return fetchAdminJson(paths.userPage, body, { referer: `${baseUrl}/tenant/user?tenantId=${opts.tenantId}&industry=${opts.industry || 1}` });
   }
 
+  async function fetchAccountPage(opts = {}) {
+    const paths = commonNs.currentProject.getTenantApiPaths();
+    const baseUrl = commonNs.currentProject.getBaseUrl();
+    const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
+    const body = helpers?.buildAccountPageBody(opts) || opts;
+    return fetchAdminJson(paths.accountPage || paths.accountUserPage || '/huayun-ai/admin/tenant/user/account/page', body, {
+      referer: `${baseUrl}/account?rBK=12`,
+    });
+  }
+
   async function quickLogin(opts) {
     const paths = commonNs.currentProject.getTenantApiPaths();
     const baseUrl = commonNs.currentProject.getBaseUrl();
     const body = (ns.tenant || globalThis.InternalDevToolkit?.tenant)?.buildQuickLoginBody({ id: opts.id }) || { id: opts.id };
-    console.log('[内部开发工具箱] virtualLogin 请求:', body);
     const res = await fetchAdminJson(paths.virtualLogin, body, { referer: `${baseUrl}/tenant/user?tenantId=${opts.tenantId || ''}&industry=${opts.industry || 1}` });
-    console.log('[内部开发工具箱] virtualLogin 响应:', JSON.stringify(res));
+    console.log('[内部开发工具箱] virtualLogin 完成:', Boolean(res?.data));
     return res;
   }
 
   // ── Client 端 API（教师/学生/班级） ──
   // 这些接口走用户态域名（如 https://uuu.huayungpt.com），而非 admin 域名。
-  // 鉴权优先使用 options.token（选中用户的 token，由 virtualLogin 解析而来）；
-  // 未提供时回落到 admin token。
+  // Client API 只接受 virtualLogin 返回的 AI 平台 token，绝不回落后台 token。
 
-  async function fetchClientJson(origin, path, body, { referer, token: userToken } = {}) {
-    let token = userToken ? String(userToken).replace(/^Bearer\s+/i, '').trim() : '';
-    if (!token) token = await getToken();
-    if (!token) throw new Error('未获取 token，请先选中用户或登录');
+  async function fetchClientJson(origin, path, body, { referer, aiToken } = {}) {
+    const token = aiToken ? String(aiToken).replace(/^Bearer\s+/i, '').trim() : '';
+    if (!token) throw new Error('未获取 AI 平台 token，请先选中账号');
     const cleanOrigin = String(origin || '').replace(/\/+$/, '');
     if (!cleanOrigin) throw new Error('缺少目标域名');
 
@@ -2225,87 +2385,89 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!res.ok) {
       let extra = '';
       try { extra = await res.text(); } catch (_) {}
-      throw new Error(`HTTP ${res.status}: ${res.statusText}${extra ? ' | ' + extra.slice(0, 200) : ''}`);
+      throw new Error(`HTTP ${res.status}: ${res.statusText}${extra ? ' | ' + redact(extra).slice(0, 200) : ''}`);
     }
 
     const text = await res.text();
     let json;
     try { json = text ? JSON.parse(text) : {}; }
     catch (_) {
-      throw new Error(`非 JSON 响应: ${text.slice(0, 120)}`);
+      throw new Error('非 JSON 响应（请检查 AI 平台会话或 WAF Cookie）');
     }
 
-    const bizOk = json && (json.success === true || json.code === 200 || json.code === 0);
+    const bizOk = isBusinessSuccess(json);
     if (!bizOk) {
       const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
-      const msg = helpers?.extractErrorMessage?.(json) || `code=${json?.code ?? '?'} success=${json?.success ?? '?'}`;
+      const msg = redact(helpers?.extractErrorMessage?.(json) || `code=${json?.code ?? '?'} success=${json?.success ?? '?'}`);
       throw new Error(`接口返回失败: ${msg}`);
     }
     return json;
   }
 
   // 教师列表：/client/teacher/page
-  async function fetchTeacherPage({ origin, token, current = 1, size = 10, name = '', account = '', phone = '' }) {
+  async function fetchTeacherPage({ origin, aiToken, current = 1, size = 10, name = '', account = '', phone = '' }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
     const body = helpers?.buildTeacherPageBody({ current, size, name, account, phone }) || { current, size };
     return fetchClientJson(origin, '/huayun-ai/client/teacher/page', body, {
       referer: `${origin}/v2/tenant/teamManagement/teacher`,
-      token,
+      aiToken,
     });
   }
 
   // 学生列表：/client/student/page
-  async function fetchStudentPage({ origin, token, current = 1, size = 10, name = '', code = '', className = '' }) {
+  async function fetchStudentPage({ origin, aiToken, current = 1, size = 10, name = '', code = '', account = '', className = '', clazzId = '', clazzIds = [] }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
-    const body = helpers?.buildStudentPageBody({ current, size, name, code, className }) || { current, size };
+    const body = helpers?.buildStudentPageBody({ current, size, name, code, account, className, clazzId, clazzIds }) || { current, size };
     return fetchClientJson(origin, '/huayun-ai/client/student/page', body, {
       referer: `${origin}/v2/tenant/teamManagement/student`,
-      token,
+      aiToken,
     });
   }
 
   // 学期列表：/client/semester/page
-  async function fetchSemesterPage({ origin, token, current = 1, size = 999 }) {
+  async function fetchSemesterPage({ origin, aiToken, current = 1, size = 999 }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
     const body = helpers?.buildSemesterPageBody({ current, size }) || { current, size };
     return fetchClientJson(origin, '/huayun-ai/client/semester/page', body, {
       referer: `${origin}/v2/tenant/teamManagement/administration`,
-      token,
+      aiToken,
     });
   }
 
   // 教师详情：/client/teacher/detail
-  async function fetchTeacherDetail({ origin, token, id }) {
+  async function fetchTeacherDetail({ origin, aiToken, id }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
     const body = helpers?.buildTeacherDetailBody({ id }) || { id: String(id) };
     return fetchClientJson(origin, '/huayun-ai/client/teacher/detail', body, {
       referer: `${origin}/v2/tenant/teamManagement/teacher`,
-      token,
+      aiToken,
     });
   }
 
   // 年级/学段/班级树：/client/schoolDept/tree（semesterId 为空时不传）
-  async function fetchSchoolDeptTree({ origin, token, semesterId = '' }) {
+  async function fetchSchoolDeptTree({ origin, aiToken, semesterId = '' }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
     const body = helpers?.buildSchoolDeptTreeBody({ semesterId }) || {};
     return fetchClientJson(origin, '/huayun-ai/client/schoolDept/tree', body, {
       referer: `${origin}/v2/tenant/teamManagement/teacher`,
-      token,
+      aiToken,
     });
   }
 
   // 班级对应教师：/client/schoolManageTeacher/listByClazz
-  async function fetchClassTeachers({ origin, token, semesterId = '' }) {
+  async function fetchClassTeachers({ origin, aiToken, semesterId = '' }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
     const body = helpers?.buildClazzTeacherListBody({ semesterId }) || {};
     return fetchClientJson(origin, '/huayun-ai/client/schoolManageTeacher/listByClazz', body, {
       referer: `${origin}/v2/tenant/teamManagement/administration`,
-      token,
+      aiToken,
     });
   }
 
   ns.tenantApi = {
-    fetchTenantPage, fetchDeptList, fetchUserPage, quickLogin,
+    fetchTenantPage, fetchDeptList, fetchUserPage, fetchAccountPage,
+    fetchAccountUserPage: fetchAccountPage,
+    quickLogin,
     fetchTeacherPage, fetchStudentPage, fetchSemesterPage,
     fetchTeacherDetail, fetchSchoolDeptTree, fetchClassTeachers,
   };
@@ -2323,35 +2485,88 @@ if (typeof module !== 'undefined' && module.exports) {
   const RECENT_KEY_PREFIX = 'quickLoginRecent';
   const MAX_RECENT = 10;
 
+  function normalizeEnv(env) {
+    return env === 'local' || env === 'dev' ? 'local' : 'online';
+  }
+
+  function normalizePort(env, localPort) {
+    if (normalizeEnv(env) !== 'local') return '';
+    const raw = String(localPort || '').trim();
+    if (!/^\d+$/.test(raw)) return '8088';
+    const n = Number.parseInt(raw, 10);
+    return Number.isInteger(n) && n >= 1 && n <= 65535 ? String(n) : '8088';
+  }
+
+  // 最近记录只保存可重新定位用户所需的元数据；兼容清理旧版本可能落盘的 token/url。
+  function normalizeRecentRecord(record = {}) {
+    const metadata = {};
+    Object.entries(record || {}).forEach(([key, value]) => {
+      // 兼容清理旧版本可能保存的各种凭据、URL、响应或会话字段，避免只依赖固定字段名。
+      if (/(token|authorization|jwt|password|secret|url|origin|session)/i.test(key)) return;
+      metadata[key] = value;
+    });
+    const normalized = {
+      ...metadata,
+      env: normalizeEnv(metadata.env),
+      localPort: normalizePort(metadata.env, metadata.localPort),
+      role: metadata.role === 'student' ? 'student' : 'teacher',
+    };
+    return normalized;
+  }
+
   async function getStorageKey() {
     const projectId = await commonNs.currentProject.getCurrentProjectId();
     return `${RECENT_KEY_PREFIX}:${projectId}`;
   }
 
-  async function quickLogin({ tenantId, id, tenantName = '', userName = '', domain = '', industry = '', env = 'online', localPort = '' }) {
+  function extractVirtualLoginUrl(response) {
+    if (typeof response === 'string') return response;
+    const value = response?.data;
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object') {
+      for (const key of ['url', 'loginUrl', 'redirectUrl']) {
+        if (typeof value[key] === 'string') return value[key];
+      }
+    }
+    const result = response?.result;
+    if (typeof result === 'string') return result;
+    if (result && typeof result === 'object') {
+      for (const key of ['url', 'loginUrl', 'redirectUrl']) {
+        if (typeof result[key] === 'string') return result[key];
+      }
+    }
+    for (const key of ['url', 'loginUrl', 'redirectUrl']) {
+      if (typeof response?.[key] === 'string') return response[key];
+    }
+    return '';
+  }
+
+  async function quickLogin({ tenantId, id, tenantName = '', userName = '', domain = '', industry = '', env = 'online', localPort = '', role = 'teacher' }) {
     if (!id) throw new Error('缺少 id');
     if (!tenantId) throw new Error('缺少 tenantId');
     if (!ns.tenantApi) throw new Error('tenantApi 模块未加载');
 
     const res = await ns.tenantApi.quickLogin({ tenantId, id, industry });
-    const url = res?.data;
+    const url = extractVirtualLoginUrl(res);
     if (!url || typeof url !== 'string') {
       throw new Error('virtualLogin 未返回有效 URL');
     }
 
+    const normalizedEnv = normalizeEnv(env);
+    const normalizedPort = normalizePort(normalizedEnv, localPort);
     const projectId = await commonNs.currentProject.getCurrentProjectId();
-    await recordRecent({ tenantId, tenantName, id, userName, domain, industry, env, localPort, projectId });
+    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId });
     return { ok: true, url, tenantId, id };
   }
 
-  // 仅获取选中用户的会话（virtualLogin → 解析 origin + 用户 token），不记录最近登录
+  // 仅获取选中用户的会话（virtualLogin → 解析 origin + AI token），不记录最近登录
   async function resolveUserSession({ tenantId, id, industry }) {
     if (!id) throw new Error('缺少 id');
     if (!tenantId) throw new Error('缺少 tenantId');
     if (!ns.tenantApi) throw new Error('tenantApi 模块未加载');
 
     const res = await ns.tenantApi.quickLogin({ tenantId, id, industry });
-    const url = res?.data;
+    const url = extractVirtualLoginUrl(res);
     if (!url || typeof url !== 'string') {
       throw new Error('virtualLogin 未返回有效 URL');
     }
@@ -2360,13 +2575,22 @@ if (typeof module !== 'undefined' && module.exports) {
       ? helpers.parseVirtualLoginUrl(url)
       : { url, origin: '', token: '' };
     if (!parsed.origin || !parsed.token) {
-      throw new Error('未能从登录链接中解析 origin/token');
+      throw new Error('未能从登录链接中解析 AI 平台 origin/token');
     }
-    return { url, origin: parsed.origin, token: parsed.token };
+    return { url, origin: parsed.origin, aiToken: parsed.token };
   }
 
   async function openLoginUrl(url) {
     if (!url) throw new Error('缺少 URL');
+    let parsed;
+    try {
+      parsed = new URL(String(url));
+    } catch (_) {
+      throw new Error('登录地址无效');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('仅允许打开 HTTP(S) 登录地址');
+    }
     return new Promise((resolve, reject) => {
       chrome.tabs.create({ url, active: true }, (tab) => {
         if (chrome.runtime?.lastError) {
@@ -2382,13 +2606,14 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!item) return;
     const key = await getStorageKey();
     const records = await getRecent();
+    const normalizedItem = normalizeRecentRecord(item);
     const next = [
-      { ...item, at: Date.now() },
+      { ...normalizedItem, at: Date.now() },
       ...records.filter((r) => {
         // 同一租户+用户，但环境不同（线上 vs 本地，或本地不同端口），视为不同记录
-        const sameUser = r.tenantId === item.tenantId && r.id === item.id;
+        const sameUser = String(r.tenantId) === String(normalizedItem.tenantId) && String(r.id) === String(normalizedItem.id) && (r.role || 'teacher') === normalizedItem.role;
         if (!sameUser) return true;
-        const sameEnv = r.env === item.env && r.localPort === item.localPort;
+        const sameEnv = normalizeEnv(r.env) === normalizedItem.env && normalizePort(r.env, r.localPort) === normalizedItem.localPort;
         return !sameEnv;
       }),
     ].slice(0, MAX_RECENT);
@@ -2405,15 +2630,27 @@ if (typeof module !== 'undefined' && module.exports) {
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (items) => {
         const records = Array.isArray(items[key]) ? items[key] : [];
-        resolve(records);
+        const cleaned = records.map(normalizeRecentRecord).slice(0, MAX_RECENT);
+        // 旧版本可能已保存 token；读取时立即覆盖为不含凭据的元数据记录。
+        if (JSON.stringify(cleaned) !== JSON.stringify(records)) {
+          chrome.storage.local.set({ [key]: cleaned }, () => {});
+        }
+        resolve(cleaned);
       });
     });
   }
 
-  async function deleteRecent({ tenantId, id }) {
+  async function deleteRecent({ tenantId, id, env = 'online', localPort = '', role = '' } = {}) {
     const key = await getStorageKey();
     const records = await getRecent();
-    const filtered = records.filter((r) => !(r.tenantId === tenantId && r.id === id));
+    const normalizedEnv = normalizeEnv(env);
+    const normalizedPort = normalizePort(normalizedEnv, localPort);
+    const filtered = records.filter((r) => {
+      const sameIdentity = String(r.tenantId) === String(tenantId) && String(r.id) === String(id);
+      const sameTarget = normalizeEnv(r.env) === normalizedEnv && normalizePort(r.env, r.localPort) === normalizedPort;
+      const sameRole = !role || !r.role || r.role === role;
+      return !(sameIdentity && sameTarget && sameRole);
+    });
     return new Promise((resolve, reject) => {
       chrome.storage.local.set({ [key]: filtered }, () => {
         if (chrome.runtime?.lastError) reject(new Error(chrome.runtime.lastError.message));
@@ -4172,6 +4409,14 @@ if (typeof module !== 'undefined' && module.exports) {
     if (msg.type === 'FETCH_USERS' && ns.tenantApi) {
       ns.tenantApi
         .fetchUserPage(msg.payload)
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if ((msg.type === 'FETCH_ACCOUNT_USERS' || msg.type === 'FETCH_ACCOUNT_PAGE') && ns.tenantApi) {
+      ns.tenantApi
+        .fetchAccountPage(msg.payload)
         .then((res) => sendResponse({ ok: true, res }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;

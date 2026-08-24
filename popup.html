@@ -1110,6 +1110,80 @@
       color: var(--sage-600);
       font-weight: 600;
     }
+    /* 快捷登录双向查询布局 */
+    .quick-target-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .quick-target-label,
+    .quick-subhead {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .55px;
+      color: var(--text-3);
+    }
+    .quick-api-note {
+      margin-top: 5px;
+      color: var(--text-3);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+    .quick-mode-switcher {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin: 10px 0 12px;
+    }
+    .quick-mode-switcher .env-btn { border: 1px solid var(--border); }
+    .quick-mode-panel { animation: fadeIn .18s ease; }
+    .quick-flow-step {
+      display: grid;
+      grid-template-columns: 22px minmax(0, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .quick-step-number {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: var(--sage-100);
+      color: var(--sage-700);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .quick-subhead-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .btn.compact { min-height: auto; padding: 4px 8px; font-size: 11px; }
+    .quick-session-note {
+      min-height: 15px;
+      margin: 5px 0 7px;
+      color: var(--text-3);
+      font-size: 10.5px;
+      line-height: 1.45;
+    }
+    .relation-disabled { opacity: .72; }
+    .relation-disabled .action-btn { cursor: not-allowed; }
+    .recent-role-badge {
+      display: inline-block;
+      margin: 0 4px;
+      padding: 1px 5px;
+      border-radius: 999px;
+      background: var(--sage-100);
+      color: var(--sage-700);
+      font-size: 9px;
+      font-weight: 700;
+    }
     .lookup-student-item { cursor: pointer; }
     .lookup-student-item.selected {
       background: var(--sage-100);
@@ -1232,7 +1306,7 @@
         <div class="section-header">
           <div class="section-header-left">
             <div class="section-icon mint">🔏</div>
-            <span class="section-header-title">Access Token</span>
+            <span class="section-header-title">后台账号 Token</span>
           </div>
           <!-- no toggle needed here, always open -->
         </div>
@@ -1240,18 +1314,18 @@
 
           <div class="token-shell" id="tokenWrap">
             <div class="token-shell-bar">
-              <span class="token-shell-bar-label">JWT / Token</span>
+              <span class="token-shell-bar-label">后台 JWT / Token</span>
               <span class="token-shell-bar-dot"></span>
             </div>
             <div class="token-box empty" id="tokenValue" contenteditable="true" role="textbox" aria-multiline="true"
-              data-placeholder="尚未获取 · 请先登录，或点击此处粘贴 Token"></div>
+              data-placeholder="尚未获取 · 请先登录，或点击此处粘贴后台 Token"></div>
             <div class="token-meta"    id="tokenUpdated"></div>
           </div>
 
-          <button class="btn btn-ghost btn-full" id="copyTokenBtn" disabled>复制 Token</button>
+          <button class="btn btn-ghost btn-full" id="copyTokenBtn" disabled>复制后台 Token</button>
 
           <div class="callout">
-            💡 API 登录通过后台服务跨域请求接口，token 仅保存在插件存储中供快捷登录使用
+            💡 API 登录获取的是后台 admin token，仅用于后台接口；一键登录会另行获取 AI 平台 token，二者不会混用
           </div>
 
         </div>
@@ -1300,7 +1374,7 @@
             <span class="section-header-title">一键快捷登录</span>
           </div>
           <div class="section-header-right">
-            <span class="badge" id="envBadge">DEV</span>
+            <span class="badge warning" id="envBadge">AI平台 · 线上</span>
             <div class="chevron">▼</div>
           </div>
         </div>
@@ -1322,6 +1396,15 @@
                 placeholder="默认 8088">
             </div>
 
+            <div class="quick-target-row"><span class="quick-target-label">目标环境</span><span class="badge warning" id="targetEnvBadge">AI平台 · 线上</span></div>
+            <div class="quick-api-note">后台/API 来源：gpt-admin-pre.hwzxs.com · AI token 仅在当前会话内使用 · 开发环境只切换打开目标</div>
+
+            <div class="quick-mode-switcher">
+              <button class="env-btn active" id="modeTeacherBtn" type="button">教师查学生</button>
+              <button class="env-btn" id="modeStudentBtn" type="button">学生查教师</button>
+            </div>
+
+            <div id="teacherModePanel" class="quick-mode-panel">
             <div class="divider"></div>
 
             <label class="field-label">选择租户</label>
@@ -1349,46 +1432,6 @@
             <div class="list hidden" id="userList"></div>
             <div class="list-empty hidden" id="userEmpty">未找到用户</div>
             <div class="pager hidden" id="userPager"></div>
-
-            <div class="divider"></div>
-
-            <!-- ═══ 按学生 / 班级查询关联教师 ═══ -->
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
-              <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);">关联教师</div>
-              <button class="btn btn-ghost" id="teacherLookupRefreshBtn" style="padding:4px 8px;font-size:11px;min-height:auto;">刷新</button>
-            </div>
-            <div class="teacher-lookup-toolbar">
-              <div class="env-switcher">
-                <button class="env-btn active" id="lookupByStudentBtn" type="button">按学生</button>
-                <button class="env-btn" id="lookupByClassBtn" type="button">按班级</button>
-              </div>
-              <select class="field-input" id="teacherLookupSemesterSelect" disabled>
-                <option value="">选择学期</option>
-              </select>
-            </div>
-            <div class="list-empty" id="teacherLookupEmpty">选中用户后可查询关联教师</div>
-            <div class="hidden" id="teacherLookupContent">
-              <div id="lookupStudentPanel">
-                <div class="teacher-search-row">
-                  <input class="field-input" id="lookupStudentNameSearch" type="text" autocomplete="off" placeholder="学生姓名">
-                  <input class="field-input" id="lookupStudentCodeSearch" type="text" autocomplete="off" placeholder="学号">
-                </div>
-                <div class="list hidden" id="lookupStudentList"></div>
-                <div class="list-empty hidden" id="lookupStudentEmpty">未找到学生</div>
-                <div class="pager hidden" id="lookupStudentPager"></div>
-              </div>
-              <div class="hidden" id="lookupClassPanel">
-                <select class="field-input" id="lookupClassSelect">
-                  <option value="">选择班级</option>
-                </select>
-              </div>
-              <div class="teacher-lookup-result-head hidden" id="lookupTeacherResultHead">
-                <span id="lookupTeacherResultTitle"></span>
-                <span class="teacher-lookup-result-count" id="lookupTeacherResultCount"></span>
-              </div>
-              <div class="list hidden" id="lookupTeacherList"></div>
-              <div class="list-empty hidden" id="lookupTeacherEmpty">请选择学生或班级</div>
-            </div>
 
             <div class="divider"></div>
 
@@ -1425,6 +1468,51 @@
               <div class="list-empty" id="studentEmpty">选择教师后加载学生列表</div>
               <div class="pager hidden" id="studentPager"></div>
             </div>
+
+            </div><!-- /teacherModePanel -->
+
+            <div id="studentModePanel" class="quick-mode-panel hidden">
+              <div class="quick-flow-step">
+                <span class="quick-step-number">1</span>
+                <div>
+                  <div class="quick-subhead">搜索学生账号</div>
+                  <div class="teacher-search-row">
+                    <select class="field-input" id="accountSearchField">
+                      <option value="username">姓名</option>
+                      <option value="account">账号</option>
+                      <option value="tenantName">租户</option>
+                    </select>
+                    <input class="field-input" id="accountSearch" type="text" autocomplete="off" placeholder="输入学生姓名">
+                  </div>
+                  <div class="list hidden" id="accountList"></div>
+                  <div class="list-empty" id="accountEmpty">请输入学生姓名、账号或租户</div>
+                  <div class="pager hidden" id="accountPager"></div>
+                </div>
+              </div>
+              <div class="quick-flow-step hidden" id="studentRelationPanel">
+                <span class="quick-step-number">2</span>
+                <div>
+                  <div class="quick-subhead-row"><div class="quick-subhead">学生关联教师</div><button class="btn btn-ghost compact" id="studentRelationRefreshBtn" type="button">刷新</button></div>
+                  <div class="teacher-lookup-toolbar">
+                    <div class="env-switcher">
+                      <button class="env-btn active" id="lookupByStudentBtn" type="button">按学生</button>
+                      <button class="env-btn" id="lookupByClassBtn" type="button">按班级</button>
+                    </div>
+                    <select class="field-input" id="teacherLookupSemesterSelect" disabled><option value="">选择学期</option></select>
+                  </div>
+                  <div class="quick-session-note" id="studentSessionNote"></div>
+                  <div id="lookupStudentPanel">
+                    <div class="list hidden" id="lookupStudentList"></div>
+                    <div class="list-empty hidden" id="lookupStudentEmpty">正在匹配 AI 学生</div>
+                    <div class="pager hidden" id="lookupStudentPager"></div>
+                  </div>
+                  <div class="hidden" id="lookupClassPanel"><select class="field-input" id="lookupClassSelect"><option value="">选择班级</option></select></div>
+                  <div class="teacher-lookup-result-head hidden" id="lookupTeacherResultHead"><span id="lookupTeacherResultTitle"></span><span class="teacher-lookup-result-count" id="lookupTeacherResultCount"></span></div>
+                  <div class="list hidden" id="lookupTeacherList"></div>
+                  <div class="list-empty hidden" id="lookupTeacherEmpty">请选择学生或班级</div>
+                </div>
+              </div>
+            </div><!-- /studentModePanel -->
 
             <div class="divider"></div>
 

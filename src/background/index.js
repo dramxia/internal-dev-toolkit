@@ -98,6 +98,14 @@
       return true;
     }
 
+    if ((msg.type === 'FETCH_ACCOUNT_USERS' || msg.type === 'FETCH_ACCOUNT_PAGE') && ns.tenantApi) {
+      ns.tenantApi
+        .fetchAccountPage(msg.payload)
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'QUICK_LOGIN' && ns.quickLogin) {
       ns.quickLogin
         .quickLogin(msg.payload)

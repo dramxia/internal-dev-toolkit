@@ -24,7 +24,7 @@
       Referer: referer,
     };
 
-    console.log('[内部开发工具箱 CS] 请求:', path, 'body:', body, 'token:', token.slice(0, 8) + '...');
+    console.log('[内部开发工具箱 CS] 请求:', path, 'body:', body);
 
     const res = await fetch(`${BASE_URL}${path}`, {
       method: 'POST',

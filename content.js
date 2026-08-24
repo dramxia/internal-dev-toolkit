@@ -15,6 +15,7 @@ const PROJECTS = [
       tenantPage: '/huayun-ai/admin/tenant/page',
       deptList: '/huayun-ai/admin/dept/list',
       userPage: '/huayun-ai/admin/tenant/user/page',
+      accountPage: '/huayun-ai/admin/tenant/user/account/page',
       virtualLogin: '/huayun-ai/admin/tenant/user/virtualLogin',
     },
     cookieKeys: ['HWWAFSESID', 'HWWAFSESTIME'],
@@ -370,6 +371,31 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
+  // /admin/tenant/user/account/page 的记录。这里的 id 是 virtualLogin
+  // 接受的租户用户主键；tmbId/userId 仅作为关系字段保留，绝不互相替代。
+  function normalizeAccount(value = {}) {
+    const rawType = value.type ?? value.accountType ?? '';
+    const type = rawType === '' || rawType == null ? '' : String(rawType);
+    return {
+      id: pickFirstString(value.id),
+      loginId: pickFirstString(value.id),
+      tmbId: pickFirstString(value.tmbId),
+      userId: pickFirstString(value.userId),
+      username: pickFirstString(value.username, value.userName, value.name),
+      account: pickFirstString(value.account, value.phone, value.mobile),
+      tenantId: pickFirstString(value.tenantId),
+      tenantName: pickFirstString(value.tenantName),
+      domain: pickFirstString(value.domain, value.tenantDomain),
+      phone: pickFirstString(value.phone, value.mobile),
+      industry: value.industry ?? '',
+      accountType: value.accountType == null ? '' : String(value.accountType),
+      type,
+      status: value.status == null ? '' : String(value.status),
+      statusText: statusInfo(value.status).statusText,
+      raw: value,
+    };
+  }
+
   function normalizeTenant(value = {}) {
     return {
       tenantId: String(value.tenantId ?? value.id ?? ''),
@@ -411,6 +437,34 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
+  // 后台账号分页：accountType 是请求筛选字段（0=常规账号，1=学生账号，4=校外账号）。
+  // 只发送当前选中的一个文本条件，避免后台将多个条件按 AND 组合造成误筛。
+  function buildAccountPageBody({
+    current = 1,
+    size = 10,
+    username = '',
+    account = '',
+    tenantName = '',
+    accountType,
+    status,
+  } = {}) {
+    const body = {
+      current: Number(current) || 1,
+      size: Number(size) || 10,
+    };
+    appendIfFilled(body, 'username', username);
+    appendIfFilled(body, 'account', account);
+    appendIfFilled(body, 'tenantName', tenantName);
+    // accountType=0 是有效筛选值，不能使用 truthy 判断。
+    if (accountType !== undefined && accountType !== null && String(accountType) !== '') {
+      body.accountType = Number(accountType);
+    }
+    if (status !== undefined && status !== null && String(status) !== '') {
+      body.status = Number(status);
+    }
+    return body;
+  }
+
   function buildDeptListBody({ tenantId }) {
     if (!tenantId) throw new Error('tenantId 不能为空');
     return { tenantId: String(tenantId) };
@@ -426,11 +480,14 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!response || typeof response !== 'object') return { records: [], total: 0 };
     const payload = response.data ?? response.result ?? response;
     if (!payload || typeof payload !== 'object') return { records: [], total: 0 };
+    const totalValue = Number(payload.total);
     return {
       records: Array.isArray(payload.records) ? payload.records : Array.isArray(payload.list) ? payload.list : [],
-      total: typeof payload.total === 'number' ? payload.total : (Array.isArray(payload.records) ? payload.records.length : 0),
-      current: payload.current ?? 1,
-      size: payload.size ?? 10,
+      total: Number.isFinite(totalValue) && totalValue >= 0
+        ? totalValue
+        : (Array.isArray(payload.records) ? payload.records.length : 0),
+      current: Number(payload.current) || 1,
+      size: Number(payload.size) || 10,
     };
   }
 
@@ -489,8 +546,12 @@ if (typeof module !== 'undefined' && module.exports) {
     const st = statusInfo(value.status);
     return {
       id: pickFirstString(value.id, value.teacherId, value.userId, nestedUser?.userId, nestedUser?.id),
+      tmbId: pickFirstString(value.tmbId),
+      userId: pickFirstString(value.userId, nestedUser?.userId),
+      tenantId: pickFirstString(value.tenantId),
       name: pickFirstString(value.name, value.teacherName, value.realName, nestedUser?.name, nestedUser?.username, value.username, value.userName, value.nickName),
       account: pickFirstString(value.account, value.phone, value.mobile, value.userAccount, value.loginAccount, nestedUser?.phone, nestedUser?.mobile, nestedUser?.account),
+      phone: pickFirstString(value.phone, value.mobile, nestedUser?.phone, nestedUser?.mobile),
       status: st.status,
       statusText: st.statusText,
       statusOn: st.on,
@@ -507,8 +568,10 @@ if (typeof module !== 'undefined' && module.exports) {
           : (value.schoolDept && typeof value.schoolDept === 'object' ? value.schoolDept : null));
     return {
       id: pickFirstString(value.id, value.studentId, value.userId),
+      tenantId: pickFirstString(value.tenantId),
       name: pickFirstString(value.name, value.studentName, value.realName, value.username, value.userName),
       code: pickFirstString(value.code, value.studentCode, value.studentNo, value.account, value.userAccount),
+      account: pickFirstString(value.account, value.userAccount),
       classId: pickFirstString(
         value.classId, value.clazzId, value.deptId, value.schoolDeptId,
         firstListValue(value.classIds), firstListValue(value.clazzIds), firstListValue(value.deptIds),
@@ -561,14 +624,19 @@ if (typeof module !== 'undefined' && module.exports) {
     return body;
   }
 
-  function buildStudentPageBody({ current = 1, size = 10, name = '', code = '', className = '' }) {
+  function buildStudentPageBody({ current = 1, size = 10, name = '', code = '', account = '', className = '', clazzId = '', clazzIds = [] }) {
     const body = {
       current: Number(current) || 1,
       size: Number(size) || 10,
     };
     appendIfFilled(body, 'name', name);
     appendIfFilled(body, 'code', code);
+    appendIfFilled(body, 'account', account);
     appendIfFilled(body, 'className', className);
+    appendIfFilled(body, 'clazzId', clazzId);
+    if (Array.isArray(clazzIds) && clazzIds.length) {
+      body.clazzIds = clazzIds.map((id) => String(id)).filter(Boolean);
+    }
     return body;
   }
 
@@ -637,7 +705,10 @@ if (typeof module !== 'undefined' && module.exports) {
     const map = {};
     if (!treeData) return map;
     const payload = treeData.data ?? treeData.result ?? treeData;
-    const roots = Array.isArray(payload) ? payload : (Array.isArray(payload?.children) ? payload.children : []);
+    const roots = Array.isArray(payload) ? payload
+      : (Array.isArray(payload?.children) ? payload.children
+        : (Array.isArray(payload?.treeList) ? payload.treeList
+          : (Array.isArray(payload?.records) ? payload.records : [])));
     const walk = (nodes, prefix) => {
       if (!Array.isArray(nodes)) return;
       for (const node of nodes) {
@@ -656,18 +727,23 @@ if (typeof module !== 'undefined' && module.exports) {
   // 将 schoolDept/tree 的班级叶子扁平化，保留完整路径以区分不同年级的同名班级。
   function extractClassOptions(treeData) {
     const payload = treeData?.data ?? treeData?.result ?? treeData;
-    const roots = Array.isArray(payload) ? payload : (Array.isArray(payload?.children) ? payload.children : []);
+    const roots = Array.isArray(payload) ? payload
+      : (Array.isArray(payload?.children) ? payload.children
+        : (Array.isArray(payload?.treeList) ? payload.treeList
+          : (Array.isArray(payload?.records) ? payload.records : [])));
     const classes = [];
 
-    const walk = (nodes, parentPath = []) => {
+    const walk = (nodes, parentPath = [], parentIds = []) => {
       if (!Array.isArray(nodes)) return;
       for (const node of nodes) {
         if (!node || typeof node !== 'object') continue;
         const id = pickFirstString(node.id, node.deptId);
         const name = pickFirstString(node.deptName, node.name);
         const path = name ? [...parentPath, name] : parentPath;
+        const ids = id ? [...parentIds, id] : parentIds;
         const children = Array.isArray(node.children) ? node.children : [];
-        const isClass = String(node.subDeptType ?? node.deptType ?? '') === '3';
+        const typeText = String(node.subDeptType ?? node.deptType ?? node.type ?? '').toLowerCase();
+        const isClass = typeText === '3' || typeText === 'class' || node.isClass === true;
         if (isClass && id) {
           classes.push({
             id,
@@ -675,9 +751,10 @@ if (typeof module !== 'undefined' && module.exports) {
             label: path.join(' / '),
             path,
             parentId: pickFirstString(node.parentId),
+            ancestorIds: ids.slice(0, -1),
           });
         }
-        if (children.length) walk(children, path);
+        if (children.length) walk(children, path, ids);
       }
     };
 
@@ -687,6 +764,31 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function normalizeClassText(value) {
     return String(value || '').trim().toLowerCase().replace(/[\s/\\·._-]+/g, '');
+  }
+
+  // 将后台 account/page 学生记录与 AI client/student/page 记录做严格匹配。
+  // 返回全部候选，不替调用方擅自选择同名/同账号记录。
+  function matchStudentCandidates(account, students = []) {
+    const a = account && typeof account === 'object' ? account : {};
+    const accountTenant = normalizeClassText(a.tenantId);
+    const username = normalizeClassText(a.username);
+    const loginAccount = normalizeClassText(a.account);
+    const source = Array.isArray(students) ? students : [];
+    const tenantScoped = accountTenant
+      ? source.filter((student) => {
+          const tenantId = normalizeClassText(student?.tenantId);
+          return tenantId === accountTenant;
+        })
+      : source;
+    const byName = username
+      ? tenantScoped.filter((student) => normalizeClassText(student?.name) === username)
+      : [];
+    const byAccount = loginAccount
+      ? tenantScoped.filter((student) => [student?.code, student?.account].some((value) => normalizeClassText(value) === loginAccount))
+      : [];
+    if (byAccount.length) return { matches: byAccount, matchedBy: 'account' };
+    if (byName.length) return { matches: byName, matchedBy: 'username' };
+    return { matches: [], matchedBy: '' };
   }
 
   // 学生接口优先用 classId/clazzId 定位；只有班级名称能唯一命中时才回落名称匹配。
@@ -732,7 +834,9 @@ if (typeof module !== 'undefined' && module.exports) {
   // listByClazz → deptId -> 教师列表。同一教师兼任多个角色/科目时合并为一条。
   function buildClassTeacherMap(response) {
     const payload = response?.data ?? response?.result ?? response;
-    const rows = Array.isArray(payload) ? payload : [];
+    const rows = Array.isArray(payload) ? payload
+      : (Array.isArray(payload?.records) ? payload.records
+        : (Array.isArray(payload?.list) ? payload.list : []));
     const result = {};
 
     for (const row of rows) {
@@ -782,8 +886,10 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function extractClazzTeacherSemesterId(response) {
     const payload = response?.data ?? response?.result ?? response;
-    if (!Array.isArray(payload)) return '';
-    for (const row of payload) {
+    const rows = Array.isArray(payload) ? payload
+      : (Array.isArray(payload?.records) ? payload.records : []);
+    if (!rows.length) return '';
+    for (const row of rows) {
       const assignments = Array.isArray(row?.clazzTeacherRespList) ? row.clazzTeacherRespList : [];
       for (const assignment of assignments) {
         const semesterId = pickFirstString(assignment?.semesterId);
@@ -848,13 +954,41 @@ if (typeof module !== 'undefined' && module.exports) {
     return '';
   }
 
+  // 从教师详情中提取其教学班级 id，用于按班级查询相关学生。
+  function extractTeacherClassIds(detail) {
+    if (!detail || typeof detail !== 'object') return [];
+    const ids = new Set();
+    const collect = (value) => {
+      if (value == null) return;
+      if (Array.isArray(value)) {
+        value.forEach(collect);
+        return;
+      }
+      if (typeof value === 'object') {
+        ['deptIds', 'deptId', 'classIds', 'classId', 'clazzIds', 'clazzId', 'schoolDeptIds', 'schoolDeptId', 'classList', 'clazzList'].forEach((key) => collect(value[key]));
+        for (const listKey of ['classList', 'clazzList']) {
+          if (!Array.isArray(value[listKey])) continue;
+          value[listKey].forEach((item) => {
+            if (item && typeof item === 'object') collect(item.id ?? item.classId ?? item.clazzId ?? item.deptId);
+          });
+        }
+        return;
+      }
+      String(value).split(/[,，、\s]+/).map((item) => item.trim()).filter(Boolean).forEach((item) => ids.add(item));
+    };
+    ['schoolSubjectTeachersDetail', 'schoolManageTeachersDetail', 'subjectTeachers', 'manageTeachers', 'teacherClassList', 'clazzList'].forEach((key) => collect(detail[key]));
+    return [...ids];
+  }
+
   namespace.tenant = {
     DEFAULT_DEPT_SOURCE,
     normalizeTenant,
     normalizeUser,
+    normalizeAccount,
     normalizeDept,
     buildTenantPageBody,
     buildUserPageBody,
+    buildAccountPageBody,
     buildDeptListBody,
     buildQuickLoginBody,
     extractPageData,
@@ -876,10 +1010,12 @@ if (typeof module !== 'undefined' && module.exports) {
     buildDeptIdNameMap,
     extractClassOptions,
     findStudentClass,
+    matchStudentCandidates,
     buildClassTeacherMap,
     extractClazzTeacherSemesterId,
     extractTeachDuties,
     extractSemesterId,
+    extractTeacherClassIds,
     pickFirstString,
     appendIfFilled,
     parseVirtualLoginUrl,
@@ -2109,7 +2245,7 @@ if (typeof module !== 'undefined' && module.exports) {
       Referer: referer,
     };
 
-    console.log('[内部开发工具箱 CS] 请求:', path, 'body:', body, 'token:', token.slice(0, 8) + '...');
+    console.log('[内部开发工具箱 CS] 请求:', path, 'body:', body);
 
     const res = await fetch(`${BASE_URL}${path}`, {
       method: 'POST',

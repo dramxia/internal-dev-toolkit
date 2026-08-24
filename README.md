@@ -12,8 +12,9 @@
 - **设置持久化**：账号密码、Token 与最近登录记录通过 `chrome.storage.local` 保存（按项目命名空间隔离）
 - **消息通信**：popup ↔ content ↔ background 三方消息链路示例
 - **后台 API 登录**：通过账号密码跨域调用后台登录接口，获取 admin token 并保存到插件存储（不注入任何页面）
-- **一键快捷登录**：在已获取 admin token 的前提下，搜索租户 → 选择部门 → 搜索用户 → 一键登录到指定用户的前端会话（调用 `virtualLogin` 并在新标签页打开返回 URL）
-- **最近登录记录**：快捷登录成功后本地保存最近 10 条记录，便于再次进入
+- **一键快捷登录**：在已获取后台 admin token 的前提下，面板提供「教师查学生」与「学生查教师」两条路径；学生路径通过后台学生账号分页定位租户，再用 AI 平台学生接口匹配班级并反查常规租户用户教师。
+- **AI token 隔离**：`后台账号`只管理 admin token；`一键登录`通过 `virtualLogin` 在内存中使用 AI 平台 token，不写入存储，也不会回落使用 admin token。
+- **环境与最近登录**：线上/开发目标（开发默认 `localhost:8088`）独立显示，最近登录最多 10 条并按身份、角色和环境/端口区分；复制操作只复制 URL 的 `?token=...` query，不新增记录。
 
 ## 安装方法
 
@@ -106,7 +107,7 @@ internal-dev-toolkit/
 │   │   └── api-proxy.js         # 页面侧代理请求（备用链路）
 │   └── popup/
 │       ├── index.js             # popup 主逻辑
-│       └── quick-login-ui.js    # 快捷登录面板 UI
+│       └── quick-login-ui.js    # 双向查询快捷登录面板 UI
 ├── scripts/
 │   ├── build.js                 # 零依赖构建脚本
 │   └── gen-icons.js             # 占位图标生成
@@ -145,28 +146,31 @@ internal-dev-toolkit/
 
 ## 一键快捷登录说明
 
-在 popup 中展开「⚡ 一键登录到租户用户」面板后，按以下流程操作：
+在 popup 中展开「⚡ 一键快捷登录」面板后，先选择目标环境，再选择查询路径：
 
 1. 确保已通过「API 登录」获取到 admin token。
-2. 在「选择租户」输入框搜索并点选租户。
-3. 在「部门筛选」下拉框选择部门（可选）。
-4. 在「搜索用户」输入框输入姓名或手机号关键字。
-5. 点击用户右侧的「登录」按钮，插件会调用 `POST /huayun-ai/admin/tenant/user/virtualLogin`，并在新标签页打开返回的 URL。
-6. 登录成功后会自动保存到「最近登录」列表（最多 5 条）。
+2. 「教师查学生」：搜索租户 → 选择租户用户（教师会话入口）→ 选择 AI 教师；学生列表会按教师详情中的教学班级过滤。
+3. 「学生查教师」：在后台账号接口中按姓名、账号或租户名称搜索学生账号（固定 `accountType: 1`）→ 解析 AI 会话 → 匹配 AI 学生并选择班级 → 反查 `accountType: 0` 常规租户用户教师。
+4. 任何可登录记录均保留打开、学生评价、教师评价和复制图标；复制只调用 `virtualLogin` 解析并复制 `?token=...`，不写入最近登录。
+5. 线上和开发环境共用当前 pre API 来源；开发环境只把最终打开地址改写为 `http://localhost:<端口>`，切换环境/端口后需重新建立 AI 会话。
 
 涉及接口：
 
 - `POST /huayun-ai/admin/tenant/page` — 搜索租户分页
 - `POST /huayun-ai/admin/dept/list` — 按租户查询部门列表
 - `POST /huayun-ai/admin/tenant/user/page` — 按租户/部门/关键字查询用户分页
+- `POST /huayun-ai/admin/tenant/user/account/page` — 按姓名、账号或租户名称查询后台账号（`accountType: 1` 学生，`0` 常规）
 - `POST /huayun-ai/admin/tenant/user/virtualLogin` — 一键登录，入参 `{ id: "租户用户id" }`，返回可直接打开的 URL
+- `POST <AI origin>/huayun-ai/client/student/page` — 在学生租户会话中匹配学生
+- `POST <AI origin>/huayun-ai/client/schoolDept/tree` — 获取班级树
+- `POST <AI origin>/huayun-ai/client/schoolManageTeacher/listByClazz` — 获取班级教师关系
 
-> **安全提示**：快捷登录默认面向 pre / 测试环境，请避免在生产环境或包含敏感数据的租户上滥用。popup 顶部会根据当前域名显示 `PRE` / `PROD` / `DEV` 环境标识作为警示。
+> **安全提示**：快捷登录当前只使用 `gpt-admin-pre.hwzxs.com` 作为后台/API 来源；“开发”选项只改变最终打开目标为本机端口，并不会切换后台 API。请避免在包含敏感数据的租户上滥用。
 
 ## 存储键说明
 
 | 键 | 类型 | 说明 |
 |---|---|---|
-| `adminToken` | `{ token, updatedAt }` | admin 登录 token |
-| `adminCredentials` | `{ account, password }` | 后台登录账号密码（明文存储，仅供内部自用） |
-| `quickLoginRecent` | `Array<{ tenantId, tenantName, id, userName, domain, at }>` | 最近快捷登录记录 |
+| `adminToken:<projectId>` | `{ token, updatedAt }` | 后台 admin 登录 token |
+| `adminCredentials:<projectId>` | `{ account, password }` | 后台登录账号密码（明文存储，仅供内部自用） |
+| `quickLoginRecent:<projectId>` | `Array<{ tenantId, tenantName, id, userName, role, env, localPort, at }>` | 最近登录元数据；不保存 token、URL 或 AI 会话 |

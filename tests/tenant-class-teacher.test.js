@@ -5,6 +5,37 @@ require('../src/common/tenant.js');
 
 const tenant = globalThis.InternalDevToolkit.tenant;
 
+assert.deepStrictEqual(
+  tenant.buildAccountPageBody({ current: 2, size: 20, username: '张三', accountType: 1 }),
+  { current: 2, size: 20, username: '张三', accountType: 1 },
+);
+assert.deepStrictEqual(
+  tenant.buildAccountPageBody({ tenantName: '测试租户', accountType: 0 }),
+  { current: 1, size: 10, tenantName: '测试租户', accountType: 0 },
+);
+const normalizedAccount = tenant.normalizeAccount({
+  id: 9001,
+  tmbId: 24526,
+  userId: 20420,
+  username: '李书韵',
+  account: 'teacher001',
+  tenantId: 77,
+  tenantName: '测试租户',
+  accountType: 0,
+});
+assert.strictEqual(normalizedAccount.loginId, '9001');
+assert.strictEqual(normalizedAccount.tmbId, '24526');
+assert.strictEqual(normalizedAccount.accountType, '0');
+const matchedAccounts = tenant.matchStudentCandidates(
+  tenant.normalizeAccount({ id: 1, username: '张同学', account: 'stu001', tenantId: 77, accountType: 1 }),
+  [
+    tenant.normalizeStudent({ id: 'wrong-tenant', tenantId: 88, name: '张同学', code: 'stu001' }),
+    tenant.normalizeStudent({ id: 'right', tenantId: 77, name: '张同学', code: 'stu001' }),
+  ],
+);
+assert.strictEqual(matchedAccounts.matchedBy, 'account');
+assert.deepStrictEqual(matchedAccounts.matches.map((item) => item.id), ['right']);
+
 const treeResponse = {
   code: 200,
   data: [
@@ -99,6 +130,7 @@ assert.deepStrictEqual(classes.map((item) => item.label), [
   '小学 / 三年级 / 2班',
   '小学 / 五年级 / 1班',
 ]);
+assert.deepStrictEqual(classes[0].ancestorIds, ['2', '3']);
 
 const studentById = tenant.normalizeStudent({
   id: 's1',
@@ -142,5 +174,8 @@ assert.deepStrictEqual(tenant.buildClazzTeacherListBody(), {});
 assert.strictEqual(tenant.extractSemesterId({
   schoolSubjectTeachersDetail: [{ semesterId: 141 }],
 }), '141');
+assert.deepStrictEqual(tenant.extractTeacherClassIds({
+  schoolSubjectTeachersDetail: [{ deptIds: [2989, '2990'], classList: [{ id: '2991' }] }],
+}), ['2989', '2990', '2991']);
 
 console.log('tenant class teacher tests passed');
