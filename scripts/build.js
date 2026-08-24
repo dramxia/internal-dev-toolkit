@@ -91,23 +91,27 @@ function generateManifest() {
     manifest_version: 3,
     name: '内部开发工具箱',
     version: '0.1.0',
-    description: '公司内部开发用浏览器插件脚手架：页面增强、工具栏弹窗、设置持久化与消息通信示例',
+    minimum_chrome_version: '116',
+    description: '公司内部开发用浏览器插件脚手架：页面增强、浏览器侧边栏、设置持久化与消息通信示例',
     icons: {
       '16': 'icons/icon16.png',
       '48': 'icons/icon48.png',
       '128': 'icons/icon128.png'
     },
-    permissions: ['activeTab', 'storage', 'scripting', 'tabs', 'cookies'],
+    permissions: ['activeTab', 'storage', 'scripting', 'tabs', 'cookies', 'sidePanel'],
     host_permissions: hostPermissions,
     background: {
       service_worker: 'background.js'
     },
     action: {
-      default_popup: 'popup.html',
+      default_title: '打开内部开发工具箱',
       default_icon: {
         '16': 'icons/icon16.png',
         '48': 'icons/icon48.png'
       }
+    },
+    side_panel: {
+      default_path: 'popup.html'
     },
     devtools_page: 'devtools.html',
     content_scripts: [

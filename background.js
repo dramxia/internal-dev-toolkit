@@ -4322,6 +4322,14 @@ if (typeof module !== 'undefined' && module.exports) {
   const ns = (globalThis.InternalDevToolkitBg = globalThis.InternalDevToolkitBg || {});
   const commonNs = globalThis.InternalDevToolkit;
 
+  // Chrome 116+：点击扩展图标时直接打开浏览器原生侧边栏。
+  // side_panel.default_path 由 manifest 提供，这里只负责绑定 action 行为。
+  if (chrome.sidePanel?.setPanelBehavior) {
+    chrome.sidePanel
+      .setPanelBehavior({ openPanelOnActionClick: true })
+      .catch((err) => console.error('[内部开发工具箱] 侧边栏初始化失败:', err));
+  }
+
   // 按需向指定标签页主上下文注入 mock-hook.js（绕过页面 CSP）。
   // 前置条件：「接口 Mock 总开关」开启；hook 内部有防重复安装守卫，重复调用安全。
   // 注入成功后把当前项目规则同步给 content script → 页面主上下文。
