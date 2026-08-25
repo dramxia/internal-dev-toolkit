@@ -1434,7 +1434,7 @@ if (typeof module !== 'undefined' && module.exports) {
     'userSearch', 'userList', 'userEmpty', 'userPager',
     'teacherRefreshBtn', 'teacherNameSearch', 'teacherAccountSearch',
     'teacherList', 'teacherEmpty', 'teacherPager', 'studentSection',
-    'studentSectionTitle', 'studentRefreshBtn', 'teacherDuties',
+    'studentSectionTitle', 'studentRefreshBtn', 'teacherDuties', 'studentAppSiteUrl',
     'studentNameSearch', 'studentCodeSearch', 'studentList', 'studentEmpty', 'studentPager',
     'accountSearchField', 'accountSearch', 'accountList', 'accountEmpty', 'accountPager',
     'studentAccountStep', 'studentAccountState', 'studentAccountSummary',
@@ -1454,6 +1454,7 @@ if (typeof module !== 'undefined' && module.exports) {
   let persistenceScheduled = false;
 
   const icons = {
+    login: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>',
     open: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
     copy: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
     student: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
@@ -2126,6 +2127,127 @@ if (typeof module !== 'undefined' && module.exports) {
     ].join('\n');
   }
 
+  function normalizeAppSiteUrl(value) {
+    const input = String(value || '').trim();
+    if (!input) return '';
+    const explicitScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(input);
+    if (explicitScheme && !/^https?:\/\//i.test(input)) return '';
+    try {
+      const parsed = new URL(explicitScheme ? input : 'http://' + input);
+      if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+        return '';
+      }
+      return parsed.origin;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function buildStudentAppLoginPayload(student = {}, selectedTenant = {}, siteUrl = '') {
+    const rawSiteUrl = String(siteUrl || '').trim();
+    if (!rawSiteUrl) throw new Error('请输入 APP 站点地址');
+    const normalizedSiteUrl = normalizeAppSiteUrl(rawSiteUrl);
+    if (!normalizedSiteUrl) throw new Error('APP 站点地址无效，请输入 HTTP(S) 地址');
+    const account = String(student.account || student.code || '').trim();
+    if (!account) throw new Error('该学生缺少登录账号');
+    const tenantId = String(selectedTenant.tenantId || '').trim();
+    if (!tenantId) throw new Error('当前未选择租户');
+    return {
+      siteUrl: normalizedSiteUrl,
+      account,
+      password: String(student.password || '').trim() || DEFAULT_STUDENT_PASSWORD,
+      tenantId,
+      tenantName: String(selectedTenant.tenantName || student.tenantName || '').trim(),
+      recordHistory: true,
+    };
+  }
+
+  function formatAppLoginError(error) {
+    const message = String(error?.message || '').trim();
+    if (!message) return '登录失败';
+    return /^登录失败\s*[:：]/.test(message) ? message : '登录失败：' + message;
+  }
+
+  function validateStudentAppSiteInput(notify = false) {
+    const input = $('studentAppSiteUrl');
+    if (!input) return '';
+    const raw = input.value.trim();
+    const normalized = normalizeAppSiteUrl(raw);
+    input.setAttribute('aria-invalid', String(!normalized));
+    if (normalized) {
+      input.value = normalized;
+      return normalized;
+    }
+    if (notify) {
+      const message = raw ? 'APP 站点地址无效，请输入 HTTP(S) 地址' : '请输入 APP 站点地址';
+      setActionStatus(message, 'error');
+      setStatus(message, 'err');
+    }
+    return '';
+  }
+
+  async function loadStudentAppSiteUrl() {
+    const input = $('studentAppSiteUrl');
+    if (!input) return;
+    try {
+      const response = await messages.sendToBackground({ type: 'APP_GET_CREDENTIALS' });
+      const siteUrl = response?.ok ? normalizeAppSiteUrl(response.siteUrl) : '';
+      if (siteUrl) input.value = siteUrl;
+    } catch (_) {}
+    input.setAttribute('aria-invalid', String(!normalizeAppSiteUrl(input.value)));
+  }
+
+  async function performStudentAppLogin(student, button, row) {
+    if (state.loadingLogin || !button) return;
+    let payload;
+    try {
+      payload = buildStudentAppLoginPayload(
+        student,
+        state.teacher.selectedTenant,
+        $('studentAppSiteUrl')?.value || '',
+      );
+    } catch (error) {
+      validateStudentAppSiteInput(false);
+      setActionStatus(error.message, 'error');
+      setStatus(error.message, 'err');
+      if (/站点地址/.test(error.message)) focusControl('studentAppSiteUrl');
+      return;
+    }
+
+    const input = $('studentAppSiteUrl');
+    if (input) {
+      input.value = payload.siteUrl;
+      input.setAttribute('aria-invalid', 'false');
+    }
+    const originalHtml = button.innerHTML;
+    const originalAriaLabel = button.getAttribute('aria-label');
+    state.loadingLogin = true;
+    button.disabled = true;
+    button.classList.add('is-loading');
+    button.setAttribute('aria-busy', 'true');
+    button.setAttribute('aria-label', '登录中');
+    button.innerHTML = '<span class="spinner" aria-hidden="true"></span>';
+    row?.setAttribute('aria-busy', 'true');
+    setActionStatus('');
+    try {
+      const response = await messages.sendToBackground({ type: 'APP_LOGIN', payload });
+      if (!response?.ok) throw new Error(response?.error || '登录失败');
+    } catch (error) {
+      const message = formatAppLoginError(error);
+      setActionStatus(message, 'error');
+      setStatus(message, 'err');
+    } finally {
+      state.loadingLogin = false;
+      row?.removeAttribute('aria-busy');
+      button.disabled = false;
+      button.classList.remove('is-loading');
+      button.removeAttribute('aria-busy');
+      if (originalAriaLabel == null) button.removeAttribute('aria-label');
+      else button.setAttribute('aria-label', originalAriaLabel);
+      button.innerHTML = originalHtml;
+    }
+  }
+
   // ── 教师查学生 ──
 
   async function loadTenants() {
@@ -2735,8 +2857,16 @@ if (typeof module !== 'undefined' && module.exports) {
         (student.code ? '<span>学号: ' + escapeHtml(student.code) + '</span>' : '') +
         (student.className ? '<span>班级: ' + escapeHtml(student.className) + '</span>' : '') +
         '</div></div><div class="student-item-actions">' + status +
+        '<button class="action-btn quick-action-btn student-app-login-btn" type="button" title="一键登录 APP" aria-label="一键登录 APP"' +
+        (!(student.account || student.code) || !t.selectedTenant?.tenantId ? ' disabled aria-disabled="true"' : '') + '>' +
+        icons.login + '</button>' +
         '<button class="action-btn quick-action-btn student-copy-btn" type="button" title="复制学生登录信息" aria-label="复制学生登录信息">' +
         icons.copy + '</button></div>';
+      row.querySelector('.student-app-login-btn')?.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        performStudentAppLogin(student, event.currentTarget, row);
+      });
       row.querySelector('.student-copy-btn')?.addEventListener('click', async () => {
         const credentials = buildStudentCredentialsText(student, t.selectedTenant?.tenantName);
         const copied = await copyToClipboard(credentials);
@@ -4039,6 +4169,7 @@ if (typeof module !== 'undefined' && module.exports) {
       renderRelationClasses();
       renderStudentRelationShell();
     });
+    $('studentAppSiteUrl')?.addEventListener('change', () => validateStudentAppSiteInput(true));
     $('quickLoginBody')?.addEventListener('click', onActionClick);
     $('recentList')?.addEventListener('click', onRecentClick);
     $('recentList')?.addEventListener('input', (event) => onRecentPortInput(event, false));
@@ -4062,6 +4193,7 @@ if (typeof module !== 'undefined' && module.exports) {
     await loadPersistedState();
     renderShell();
     bindEvents();
+    await loadStudentAppSiteUrl();
     const section = $('quickLoginSection');
     state.expanded = true;
     section?.classList.add('expanded');
@@ -4085,8 +4217,10 @@ if (typeof module !== 'undefined' && module.exports) {
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       buildStudentCredentialsText,
+      buildStudentAppLoginPayload,
       createDebouncedSearch,
       createPersistedState,
+      normalizeAppSiteUrl,
       restorePersistedState,
       state,
     };

@@ -389,6 +389,10 @@
       border-color: var(--sage-400);
       box-shadow: 0 0 0 3px rgba(106,166,97,.15);
     }
+    .field-input[aria-invalid="true"] {
+      border-color: var(--error);
+      box-shadow: 0 0 0 3px rgba(220, 38, 38, .1);
+    }
 
     .pw-wrap { position: relative; }
     .pw-toggle {
@@ -771,6 +775,11 @@
       border-color: var(--sage-600);
     }
     .action-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .student-app-login-btn.is-loading:disabled {
+      opacity: 1;
+      color: var(--sage-600);
+      cursor: wait;
+    }
 
     .list-empty {
       padding: 28px 16px;
@@ -1311,6 +1320,10 @@
       display: grid;
       gap: 8px;
       margin-top: 8px;
+    }
+    .quick-app-site-field {
+      display: grid;
+      gap: 6px;
     }
     .quick-stage-body .list,
     .quick-stage-body .pager,
@@ -1887,6 +1900,11 @@
                 </div>
                 <div class="quick-stage-body">
                   <div class="teacher-duties hidden" id="teacherDuties"></div>
+                  <div class="quick-app-site-field">
+                    <label class="quick-label" for="studentAppSiteUrl">APP 站点地址</label>
+                    <input class="field-input" id="studentAppSiteUrl" type="text" autocomplete="off"
+                      placeholder="http://localhost:5173" aria-invalid="false">
+                  </div>
                   <div class="quick-field-grid equal">
                     <label class="quick-sr-only" for="studentNameSearch">学生姓名</label>
                     <input class="field-input" id="studentNameSearch" type="text" autocomplete="off" placeholder="姓名">

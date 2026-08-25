@@ -10,7 +10,11 @@ const buildScript = fs.readFileSync(path.join(root, 'scripts/build.js'), 'utf8')
 const quickUiModulePath = require.resolve('../src/popup/quick-login-ui.js');
 const namespaceBeforeFormatTest = globalThis.InternalDevToolkit;
 globalThis.InternalDevToolkit = { tenant: {}, messages: {} };
-const { buildStudentCredentialsText } = require(quickUiModulePath);
+const {
+  buildStudentAppLoginPayload,
+  buildStudentCredentialsText,
+  normalizeAppSiteUrl,
+} = require(quickUiModulePath);
 delete require.cache[quickUiModulePath];
 globalThis.InternalDevToolkit = namespaceBeforeFormatTest;
 
@@ -112,7 +116,7 @@ function tagFor(id) {
 
 [
   'localPort', 'tenantSearch', 'userSearch', 'teacherNameSearch',
-  'teacherAccountSearch', 'studentNameSearch', 'studentCodeSearch', 'accountSearch',
+  'teacherAccountSearch', 'studentAppSiteUrl', 'studentNameSearch', 'studentCodeSearch', 'accountSearch',
 ].forEach((id) => {
   const tag = tagFor(id);
   assert.match(tag, /\btype="text"/);
@@ -243,6 +247,43 @@ assert.equal(
   buildStudentCredentialsText({ code: '202506002' }, '回退租户'),
   '租户名称：回退租户\n学生账号：202506002\n学生密码：Xx@123456',
 );
+assert.equal(normalizeAppSiteUrl('localhost:5173/student/home'), 'http://localhost:5173');
+assert.equal(normalizeAppSiteUrl('https://app.example.com/path?x=1'), 'https://app.example.com');
+assert.equal(normalizeAppSiteUrl('ftp://app.example.com'), '', 'APP 站点只允许 HTTP(S)');
+assert.equal(normalizeAppSiteUrl('https://user:secret@app.example.com'), '', 'APP 站点不得包含账号信息');
+assert.deepEqual(
+  buildStudentAppLoginPayload(
+    { code: '202506002' },
+    { tenantId: 'tenant-139', tenantName: '指定租户' },
+    'localhost:5173/path',
+  ),
+  {
+    siteUrl: 'http://localhost:5173',
+    account: '202506002',
+    password: 'Xx@123456',
+    tenantId: 'tenant-139',
+    tenantName: '指定租户',
+    recordHistory: true,
+  },
+  '学生 APP 登录应使用当前选中租户并规范化站点地址',
+);
+assert.throws(
+  () => buildStudentAppLoginPayload({ code: '202506002' }, { tenantId: 'tenant-139' }, 'ftp://invalid.example.com'),
+  /APP 站点地址无效/,
+);
+assert.match(quickUi, /type: 'APP_GET_CREDENTIALS'/, '相关学生区域应读取 APP 默认站点地址');
+assert.match(
+  quickUi,
+  /student-app-login-btn[\s\S]*performStudentAppLogin\(student, event\.currentTarget, row\)/,
+  '相关学生项应提供 APP 登录图标并绑定当前学生',
+);
+assert.match(
+  quickUi,
+  /button\.classList\.add\('is-loading'\)[\s\S]*button\.innerHTML = '<span class="spinner" aria-hidden="true"><\/span>'[\s\S]*type: 'APP_LOGIN', payload/,
+  '学生 APP 登录应复用 APP_LOGIN 并展示单按钮 loading',
+);
+assert.match(popupHtml, /\.student-app-login-btn\.is-loading:disabled[\s\S]*cursor: wait;/);
+assert.match(popupHtml, /id="studentAppSiteUrl"[^>]*aria-invalid="false"/, '相关学生区域应提供可校验的 APP 站点地址');
 assert.match(quickUi, /s\.resolvingTeachers = true;\s*updateRelationBusy\(\)/);
 const relationRenderer = quickUi.match(/async function renderRelationTeachers\(classId\) \{([\s\S]*?)\n  \}\n\n  async function refreshStudentRelation/);
 assert.ok(relationRenderer, '应能提取教师账号反查流程');

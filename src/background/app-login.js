@@ -28,17 +28,18 @@
     return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
   }
 
-  // 规范化站点地址：补全协议、去掉末尾斜杠；空串保留为空（登录前校验）
+  // 规范化站点地址：补全协议、去掉末尾斜杠；空串或非 HTTP(S) 地址返回空。
   function normalizeSiteUrl(raw) {
     const input = String(raw || '').trim();
     if (!input) return '';
-    let url = input;
-    if (!/^https?:\/\//i.test(url)) {
-      url = `http://${url}`;
-    }
+    const explicitScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(input);
+    if (explicitScheme && !/^https?:\/\//i.test(input)) return '';
     try {
-      const parsed = new URL(url);
-      // 仅保留 origin，避免 path 干扰 API 拼接
+      const parsed = new URL(explicitScheme ? input : `http://${input}`);
+      if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+        return '';
+      }
+      // 仅保留 origin，避免 path 干扰 API 拼接和标签页同源校验。
       return parsed.origin.replace(/\/+$/, '');
     } catch (_) {
       return '';
@@ -648,8 +649,16 @@
   }
 
   async function loginAndInject(payload = {}) {
+    const creds = await getCredentials();
+    const finalSiteUrl = normalizeSiteUrl(payload.siteUrl || creds.siteUrl);
+    if (!finalSiteUrl) {
+      throw new Error('站点地址无效，请输入 HTTP(S) 地址');
+    }
+    // 登录前先确认存在可注入的同源页面，避免完成登录后才发现目标地址错误。
+    await findSiteTab(finalSiteUrl);
+
     const shouldRecordHistory = payload.recordHistory !== false;
-    const result = await doLogin(payload);
+    const result = await doLogin({ ...payload, siteUrl: finalSiteUrl });
     if (shouldRecordHistory) {
       // 登录和用户详情获取成功后先落历史，再注入页面并跳转。
       await recordHistory({
@@ -684,6 +693,7 @@
     deleteHistory,
     listSchools,
     doLogin,
+    findSiteTab,
     injectSiteSessionAndNavigateToRoot,
     loginAndInject,
   };

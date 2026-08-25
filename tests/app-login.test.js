@@ -11,6 +11,7 @@ let reloadCount = 0;
 let assignCount = 0;
 let assignedUrl = '';
 let executeDetails = null;
+let siteTabsAvailable = true;
 
 const loginUserInfo = {
   accessToken: 'Bearer app-session-token',
@@ -122,6 +123,10 @@ globalThis.chrome = {
   },
   tabs: {
     query(queryInfo, callback) {
+      if (!siteTabsAvailable) {
+        callback([]);
+        return;
+      }
       if (queryInfo.active) {
         callback([{ id: 7, url: 'http://localhost:5173/student/home' }]);
         return;
@@ -152,6 +157,22 @@ require(modulePath);
     'http://localhost:5173',
     '没有已保存地址时应使用本地 App 默认站点',
   );
+  assert.equal(appLogin.normalizeSiteUrl('localhost:5173/student/home'), 'http://localhost:5173');
+  assert.equal(appLogin.normalizeSiteUrl('https://app.example.com/path?x=1'), 'https://app.example.com');
+  assert.equal(appLogin.normalizeSiteUrl('ftp://app.example.com'), '', '站点地址只允许 HTTP(S)');
+  assert.equal(appLogin.normalizeSiteUrl('https://user:secret@app.example.com'), '', '站点地址不得包含账号信息');
+  await assert.rejects(
+    () => appLogin.loginAndInject({ siteUrl: 'ftp://app.example.com' }),
+    /站点地址无效，请输入 HTTP\(S\) 地址/,
+  );
+  assert.equal(requests.length, 0, '无效站点地址不得发起登录 API 请求');
+  siteTabsAvailable = false;
+  await assert.rejects(
+    () => appLogin.loginAndInject({ siteUrl: 'http://localhost:5173' }),
+    /未找到已打开的 http:\/\/localhost:5173 页面/,
+  );
+  assert.equal(requests.length, 0, '找不到同源注入页面时不得发起登录 API 请求');
+  siteTabsAvailable = true;
   assert.deepEqual(
     appLogin.extractStudentPlacement(userDetailResponse),
     { gradeName: '高一', className: '一班' },
