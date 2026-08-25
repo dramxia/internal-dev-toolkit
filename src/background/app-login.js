@@ -9,7 +9,7 @@
   const CRED_KEY = 'appLoginCredentials';
   const TOKEN_KEY = 'appLoginToken';
   const HISTORY_KEY = 'appLoginHistory';
-  const MAX_HISTORY = 20;
+  const MAX_HISTORY = 50;
   const DEFAULT_SITE_URL = 'http://localhost:5173';
   const DEFAULT_ACCOUNT = '202506002';
   const DEFAULT_PASSWORD = 'Xx@123456';
@@ -247,7 +247,15 @@
           return;
         }
         const raw = Array.isArray(items[HISTORY_KEY]) ? items[HISTORY_KEY] : [];
-        resolve(raw.map(normalizeHistoryItem).filter((r) => r.account));
+        const records = raw
+          .map(normalizeHistoryItem)
+          .filter((record) => record.account)
+          .slice(0, MAX_HISTORY);
+        if (raw.length !== records.length) {
+          chrome.storage.local.set({ [HISTORY_KEY]: records }, () => resolve(records));
+          return;
+        }
+        resolve(records);
       });
     });
   }

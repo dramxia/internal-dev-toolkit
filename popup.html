@@ -911,6 +911,20 @@
 
     .recent-item-time { font-size: 10.5px; color: var(--text-3); }
 
+    .app-history-filters {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .app-history-filters .field-input {
+      min-width: 0;
+      min-height: 36px;
+      padding: 8px 10px;
+      font-size: 11.5px;
+    }
+    .app-history-pager { margin-top: 8px; }
+
     .recent-item-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
     .recent-action-btn {
@@ -2140,16 +2154,27 @@
             </div>
 
             <div class="callout">
-              💡 选择学校并填写账号后点击「一键登录」，自动获取 APP 端 token。
-              登录依赖浏览器在站点已建立的会话（请先在浏览器打开站点完成 NextAuth 登录）。
+              💡 填写站点地址、选择学校并输入学生账号和密码后点击「一键登录」，插件会保存 APP Token 与登录历史。
+              请先打开与站点地址同源的页面；登录成功后将向该页面注入 token 和 userInfo，并跳转到站点首页。
             </div>
 
             <div class="divider"></div>
 
             <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);margin-bottom:6px;">历史记录</div>
+            <div class="app-history-filters hidden" id="appHistoryFilters">
+              <label class="quick-sr-only" for="appHistoryTenantFilter">按租户筛选历史记录</label>
+              <select class="field-input" id="appHistoryTenantFilter">
+                <option value="">全部租户</option>
+              </select>
+              <label class="quick-sr-only" for="appHistoryClassFilter">按班级筛选历史记录</label>
+              <select class="field-input" id="appHistoryClassFilter">
+                <option value="">全部班级</option>
+              </select>
+            </div>
             <div class="recent-list" id="appHistoryList">
               <div class="recent-empty">暂无历史记录</div>
             </div>
+            <div class="pager app-history-pager hidden" id="appHistoryPager" aria-label="APP 登录历史分页"></div>
 
           </div>
         </div>

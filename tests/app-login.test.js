@@ -362,8 +362,101 @@ require(modulePath);
   assert.match(popupUi, /function bindEvents\(\) \{\s*if \(eventsBound\) return;\s*eventsBound = true;/, 'App UI 重复初始化时不得叠加事件监听器');
   const historyRenderer = popupUi.match(/async function renderHistory\(\)[\s\S]*?\n  \}\n\n  async function findHistoryRecord/);
   assert.ok(historyRenderer, '应能提取 App 历史记录渲染器');
-  assert.match(historyRenderer[0], /const displayLimit = state\.historyExpanded \? 20 : 5;/, '非空历史应从 App 状态读取展开标记');
-  assert.match(historyRenderer[0], /state\.historyExpanded = !state\.historyExpanded;/, '历史展开按钮应更新 App 状态');
+  assert.match(historyRenderer[0], /paginateHistoryRecords\(filteredRecords, state\.historyPage\)/, '分页应基于租户班级筛选后的历史数据');
+  assert.match(historyRenderer[0], /state\.historyPage = page\.current;[\s\S]*renderHistoryPager\(page\)/, '渲染时应将越界页码回退到有效页');
+  assert.match(historyRenderer[0], /for \(const r of page\.records\)/, '历史列表每次只应渲染当前页记录');
+  assert.doesNotMatch(historyRenderer[0], /historyExpanded|load-more|显示更多/, 'APP 历史不应继续使用展开收起模式');
+  assert.match(historyRenderer[0], /filterHistoryRecords\(records, \{[\s\S]*tenantKey: state\.historyTenantKey,[\s\S]*className: state\.historyClassName,/, '历史列表应同时应用租户和班级筛选');
+  assert.match(popupHtml, /id="appHistoryFilters"[\s\S]*id="appHistoryTenantFilter"[\s\S]*id="appHistoryClassFilter"/, 'APP 历史区域应包含租户和班级筛选控件');
+  assert.match(popupHtml, /id="appHistoryPager"[^>]*aria-label="APP 登录历史分页"/, 'APP 历史区域应包含独立分页容器');
+  assert.match(popupHtml, /\.app-history-filters \{[\s\S]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/, '历史筛选应保持稳定的双列布局');
+
+  const appUiModulePath = require.resolve('../src/popup/app-login-ui.js');
+  delete require.cache[appUiModulePath];
+  const {
+    buildHistoryFilterOptions,
+    filterHistoryRecords,
+    historyTenantKey,
+    paginateHistoryRecords,
+  } = require(appUiModulePath);
+  const filterRecords = [
+    { account: 'a-1', tenantId: 'tenant-a', tenantName: '租户 A', className: '一班' },
+    { account: 'a-2', tenantId: 'tenant-a', tenantName: '租户 A', className: '二班' },
+    { account: 'b-1', tenantId: 'tenant-b', tenantName: '租户 B', className: '一班' },
+    { account: 'b-3', tenantId: 'tenant-b', tenantName: '租户 B', className: '三班' },
+  ];
+  assert.equal(historyTenantKey(filterRecords[0]), 'id:tenant-a');
+  assert.deepEqual(buildHistoryFilterOptions(filterRecords), {
+    tenants: [
+      { value: 'id:tenant-a', label: '租户 A' },
+      { value: 'id:tenant-b', label: '租户 B' },
+    ],
+    classes: [
+      { value: '一班', label: '一班' },
+      { value: '二班', label: '二班' },
+      { value: '三班', label: '三班' },
+    ],
+  }, '租户与班级选项应从历史记录综合去重生成');
+  assert.deepEqual(
+    buildHistoryFilterOptions(filterRecords, 'id:tenant-b').classes,
+    [
+      { value: '一班', label: '一班' },
+      { value: '三班', label: '三班' },
+    ],
+    '选择租户后班级选项应只保留该租户历史中出现过的班级',
+  );
+  assert.deepEqual(
+    filterHistoryRecords(filterRecords, { tenantKey: 'id:tenant-b', className: '一班' }).map((item) => item.account),
+    ['b-1'],
+    '租户和班级应按交集组合筛选历史记录',
+  );
+  const paginationRecords = Array.from({ length: 12 }, (_, index) => ({ account: `page-${index + 1}` }));
+  const secondPage = paginateHistoryRecords(paginationRecords, 2);
+  assert.deepEqual(secondPage, {
+    records: paginationRecords.slice(5, 10),
+    current: 2,
+    pageSize: 5,
+    total: 12,
+    totalPages: 3,
+  }, 'APP 历史默认应每页显示 5 条');
+  const overflowPage = paginateHistoryRecords(paginationRecords, 99);
+  assert.equal(overflowPage.current, 3, '删除记录或筛选后页码越界时应回退到最后一页');
+  assert.deepEqual(overflowPage.records, paginationRecords.slice(10), '越界回退后应返回最后一页记录');
+  assert.deepEqual(
+    paginateHistoryRecords(
+      filterHistoryRecords(filterRecords, { tenantKey: 'id:tenant-b' }),
+      2,
+      1,
+    ).records.map((item) => item.account),
+    ['b-3'],
+    '分页切片必须应用在筛选结果之后',
+  );
+  assert.match(popupUi, /controls\?\.classList\.toggle\('hidden', !hasRecords\)[\s\S]*tenantSelect\.disabled = true[\s\S]*classSelect\.disabled = true/, '无历史数据时应隐藏并禁用筛选控件');
+  assert.match(popupUi, /historyTenantFilter'[\s\S]*state\.historyClassName = '';[\s\S]*state\.historyPage = 1;/, '切换租户时应清空班级并回到第 1 页');
+
+  storage.appLoginHistory = Array.from({ length: 55 }, (_, index) => ({
+    siteUrl: 'http://localhost:5173',
+    account: `cached-${index}`,
+    password: 'password',
+    tenantId: 'tenant-limit',
+    tenantName: '缓存上限租户',
+    className: '一班',
+    at: index,
+  }));
+  const trimmedHistory = await appLogin.getHistory();
+  assert.equal(trimmedHistory.length, 50, '读取旧缓存时 APP 历史最多返回 50 条');
+  assert.equal(storage.appLoginHistory.length, 50, '超过 50 条的旧缓存应裁剪并回写');
+  await appLogin.recordHistory({
+    siteUrl: 'http://localhost:5173',
+    account: 'cached-newest',
+    password: 'password',
+    tenantId: 'tenant-limit',
+    tenantName: '缓存上限租户',
+    className: '一班',
+  });
+  const cappedHistory = await appLogin.getHistory();
+  assert.equal(cappedHistory.length, 50, '新增历史后缓存仍不得超过 50 条');
+  assert.equal(cappedHistory[0].account, 'cached-newest', '最新历史记录应保持置顶');
   assert.match(popupUi, /const APP_ERROR_AUTO_HIDE_MS = 3200;/, 'App 错误提示应短时自动关闭');
 
   console.log('app login injection tests passed');

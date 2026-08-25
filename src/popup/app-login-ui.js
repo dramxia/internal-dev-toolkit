@@ -19,6 +19,10 @@
     tokenUpdated: 'appTokenUpdated',
     copyTokenBtn: 'appCopyTokenBtn',
     userMeta: 'appUserMeta',
+    historyFilters: 'appHistoryFilters',
+    historyTenantFilter: 'appHistoryTenantFilter',
+    historyClassFilter: 'appHistoryClassFilter',
+    historyPager: 'appHistoryPager',
     history: 'appHistoryList',
   };
 
@@ -32,7 +36,9 @@
     selectedSchool: null,
     schoolsLoaded: false,
     loading: false,
-    historyExpanded: false,
+    historyPage: 1,
+    historyTenantKey: '',
+    historyClassName: '',
     listOpen: false,
   };
 
@@ -61,6 +67,7 @@
   }
 
   const APP_ERROR_AUTO_HIDE_MS = 3200;
+  const HISTORY_PAGE_SIZE = 5;
 
   function setStatus(text, kind) {
     ns.ui.toast(text, kind, {
@@ -365,7 +372,10 @@
       });
       if (!res || !res.ok) throw new Error(res?.error || '登录失败');
       await renderToken();
-      if (refreshHistory) await renderHistory();
+      if (refreshHistory) {
+        if (shouldRecordHistory) state.historyPage = 1;
+        await renderHistory();
+      }
     } catch (err) {
       await renderToken();
       setStatus(formatLoginError(err), 'err');
@@ -375,6 +385,149 @@
   }
 
   // ── 历史记录 ──
+  function historyTenantKey(record = {}) {
+    const tenantId = String(record.tenantId || '').trim();
+    if (tenantId) return `id:${tenantId}`;
+    const tenantName = String(record.tenantName || '').trim();
+    return tenantName ? `name:${tenantName}` : '';
+  }
+
+  function buildHistoryFilterOptions(records = [], tenantKey = '') {
+    const tenants = new Map();
+    const classes = new Set();
+    for (const record of Array.isArray(records) ? records : []) {
+      const key = historyTenantKey(record);
+      if (key && !tenants.has(key)) {
+        tenants.set(key, String(record.tenantName || record.tenantId || '').trim());
+      }
+      if (!tenantKey || key === tenantKey) {
+        const className = String(record.className || '').trim();
+        if (className) classes.add(className);
+      }
+    }
+    return {
+      tenants: [...tenants].map(([value, label]) => ({ value, label })),
+      classes: [...classes].map((value) => ({ value, label: value })),
+    };
+  }
+
+  function filterHistoryRecords(records = [], filters = {}) {
+    const tenantKey = String(filters.tenantKey || '');
+    const className = String(filters.className || '').trim();
+    return (Array.isArray(records) ? records : []).filter((record) => {
+      if (tenantKey && historyTenantKey(record) !== tenantKey) return false;
+      if (className && String(record.className || '').trim() !== className) return false;
+      return true;
+    });
+  }
+
+  function paginateHistoryRecords(records = [], page = 1, pageSize = HISTORY_PAGE_SIZE) {
+    const source = Array.isArray(records) ? records : [];
+    const size = Number.isInteger(pageSize) && pageSize > 0 ? pageSize : HISTORY_PAGE_SIZE;
+    const total = source.length;
+    const totalPages = Math.ceil(total / size);
+    const requestedPage = Number.isInteger(page) ? page : Number.parseInt(page, 10);
+    const current = totalPages
+      ? Math.min(Math.max(Number.isFinite(requestedPage) ? requestedPage : 1, 1), totalPages)
+      : 1;
+    const start = (current - 1) * size;
+    return {
+      records: source.slice(start, start + size),
+      current,
+      pageSize: size,
+      total,
+      totalPages,
+    };
+  }
+
+  function renderHistoryPager(page) {
+    const pager = $('historyPager');
+    if (!pager) return;
+    pager.innerHTML = '';
+    if (!page || page.totalPages <= 1) {
+      pager.classList.add('hidden');
+      return;
+    }
+    pager.classList.remove('hidden');
+    const addButton = (label, targetPage, disabled, active, ariaLabel) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pager-btn' + (active ? ' active' : '');
+      button.textContent = label;
+      button.disabled = disabled;
+      button.setAttribute('aria-label', ariaLabel);
+      if (active) button.setAttribute('aria-current', 'page');
+      if (!disabled && !active) {
+        button.addEventListener('click', () => {
+          state.historyPage = targetPage;
+          renderHistory();
+        });
+      }
+      pager.appendChild(button);
+    };
+
+    addButton('‹', page.current - 1, page.current <= 1, false, '上一页');
+    const start = Math.max(1, Math.min(page.current - 2, page.totalPages - 4));
+    const end = Math.min(page.totalPages, start + 4);
+    for (let pageNumber = start; pageNumber <= end; pageNumber += 1) {
+      addButton(String(pageNumber), pageNumber, false, pageNumber === page.current, `第 ${pageNumber} 页`);
+    }
+    addButton('›', page.current + 1, page.current >= page.totalPages, false, '下一页');
+    const info = document.createElement('span');
+    info.className = 'pager-info';
+    info.textContent = `共 ${page.total} 条`;
+    pager.appendChild(info);
+  }
+
+  function setHistoryFilterOptions(select, allLabel, options, selectedValue) {
+    if (!select) return;
+    select.innerHTML = '';
+    const allOption = document.createElement('option');
+    allOption.value = '';
+    allOption.textContent = allLabel;
+    select.appendChild(allOption);
+    for (const item of options) {
+      const option = document.createElement('option');
+      option.value = item.value;
+      option.textContent = item.label;
+      select.appendChild(option);
+    }
+    select.value = selectedValue;
+  }
+
+  function renderHistoryFilters(records) {
+    const controls = $('historyFilters');
+    const tenantSelect = $('historyTenantFilter');
+    const classSelect = $('historyClassFilter');
+    const hasRecords = Array.isArray(records) && records.length > 0;
+    controls?.classList.toggle('hidden', !hasRecords);
+    if (!hasRecords) {
+      state.historyPage = 1;
+      state.historyTenantKey = '';
+      state.historyClassName = '';
+      setHistoryFilterOptions(tenantSelect, '全部租户', [], '');
+      setHistoryFilterOptions(classSelect, '全部班级', [], '');
+      if (tenantSelect) tenantSelect.disabled = true;
+      if (classSelect) classSelect.disabled = true;
+      return;
+    }
+
+    const allOptions = buildHistoryFilterOptions(records);
+    if (state.historyTenantKey && !allOptions.tenants.some((item) => item.value === state.historyTenantKey)) {
+      state.historyTenantKey = '';
+      state.historyPage = 1;
+    }
+    const scopedOptions = buildHistoryFilterOptions(records, state.historyTenantKey);
+    if (state.historyClassName && !scopedOptions.classes.some((item) => item.value === state.historyClassName)) {
+      state.historyClassName = '';
+      state.historyPage = 1;
+    }
+    setHistoryFilterOptions(tenantSelect, '全部租户', allOptions.tenants, state.historyTenantKey);
+    setHistoryFilterOptions(classSelect, '全部班级', scopedOptions.classes, state.historyClassName);
+    if (tenantSelect) tenantSelect.disabled = !allOptions.tenants.length;
+    if (classSelect) classSelect.disabled = !scopedOptions.classes.length;
+  }
+
   async function renderHistory() {
     const wrap = $('history');
     if (!wrap) return;
@@ -385,17 +538,28 @@
       if (res && res.ok && Array.isArray(res.records)) records = res.records;
     } catch (_) {}
 
+    renderHistoryFilters(records);
+    const filteredRecords = filterHistoryRecords(records, {
+      tenantKey: state.historyTenantKey,
+      className: state.historyClassName,
+    });
     wrap.innerHTML = '';
     if (!records.length) {
+      renderHistoryPager(null);
       wrap.innerHTML = '<div class="recent-empty">暂无历史记录</div>';
       return;
     }
+    if (!filteredRecords.length) {
+      renderHistoryPager(null);
+      wrap.innerHTML = '<div class="recent-empty">暂无符合筛选条件的历史记录</div>';
+      return;
+    }
 
-    const displayLimit = state.historyExpanded ? 20 : 5;
-    const displayRecords = records.slice(0, displayLimit);
-    const hasMore = records.length > displayLimit;
+    const page = paginateHistoryRecords(filteredRecords, state.historyPage);
+    state.historyPage = page.current;
+    renderHistoryPager(page);
 
-    for (const r of displayRecords) {
+    for (const r of page.records) {
       const row = document.createElement('div');
       row.className = 'recent-item fade-in';
       const time = r.at ? new Date(r.at).toLocaleString() : '';
@@ -423,19 +587,6 @@
         `<button class="recent-action-btn danger" data-action="delete" ${dataAttrs} title="删除记录">${icons.delete}</button>` +
         `</div>`;
       wrap.appendChild(row);
-    }
-
-    if (hasMore || state.historyExpanded) {
-      const expandBtn = document.createElement('button');
-      expandBtn.className = 'load-more';
-      expandBtn.textContent = state.historyExpanded
-        ? '收起'
-        : `显示更多 (${records.length - displayLimit} 条)`;
-      expandBtn.addEventListener('click', () => {
-        state.historyExpanded = !state.historyExpanded;
-        renderHistory();
-      });
-      wrap.appendChild(expandBtn);
     }
   }
 
@@ -578,6 +729,17 @@
 
     $('loginBtn')?.addEventListener('click', () => handleLogin());
     $('history')?.addEventListener('click', onHistoryClick);
+    $('historyTenantFilter')?.addEventListener('change', (event) => {
+      state.historyTenantKey = event.target.value || '';
+      state.historyClassName = '';
+      state.historyPage = 1;
+      renderHistory();
+    });
+    $('historyClassFilter')?.addEventListener('change', (event) => {
+      state.historyClassName = event.target.value || '';
+      state.historyPage = 1;
+      renderHistory();
+    });
 
     $('copyTokenBtn')?.addEventListener('click', async () => {
       try {
@@ -623,4 +785,12 @@
     renderHistory,
     loadSchools,
   };
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      buildHistoryFilterOptions,
+      filterHistoryRecords,
+      historyTenantKey,
+      paginateHistoryRecords,
+    };
+  }
 })();
