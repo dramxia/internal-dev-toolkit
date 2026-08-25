@@ -1,5 +1,5 @@
 /* 内部开发工具箱 — Background APP 端登录（学生 APP token 获取） */
-/* 站点地址由用户填写（如 http://localhost:5174），登录走该地址下的 /huayun-ai。 */
+/* 默认站点为 http://localhost:5173，登录走该地址下的 /huayun-ai。 */
 /* 鉴权依赖浏览器会话 cookie（authjs.session-token 等），APP 模块自身不持有 admin token。 */
 (() => {
   'use strict';
@@ -10,12 +10,14 @@
   const TOKEN_KEY = 'appLoginToken';
   const HISTORY_KEY = 'appLoginHistory';
   const MAX_HISTORY = 20;
+  const DEFAULT_SITE_URL = 'http://localhost:5173';
   const DEFAULT_ACCOUNT = '202506002';
   const DEFAULT_PASSWORD = 'Xx@123456';
   // educationList 中默认选中的学校名
   const DEFAULT_SCHOOL_NAME = '未来智慧学校AI平台';
   // 会话依赖的 cookie 名称：登录接口需这些 cookie 才能通过鉴权
   const SESSION_COOKIE_NAMES = [
+    'JSESSIONID',
     'HWWAFSESID',
     'HWWAFSESTIME',
     'authjs.session-token',
@@ -51,17 +53,80 @@
     };
   }
 
+  function firstDisplayName(...values) {
+    for (const value of values) {
+      if (typeof value === 'string' || typeof value === 'number') {
+        const text = String(value).trim();
+        if (text) return text;
+        continue;
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const text = String(
+        value.name ??
+        value.label ??
+        value.deptName ??
+        value.gradeName ??
+        value.className ??
+        value.clazzName ??
+        '',
+      ).trim();
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function extractStudentPlacement(userDetail) {
+    const data = userDetail?.data ?? userDetail?.result ?? userDetail;
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      return { gradeName: '', className: '' };
+    }
+    const student = data.student && typeof data.student === 'object' && !Array.isArray(data.student)
+      ? data.student
+      : {};
+    return {
+      gradeName: firstDisplayName(
+        data.gradeName,
+        student.gradeName,
+        data.gradeInfo,
+        student.gradeInfo,
+        data.grade,
+        student.grade,
+      ),
+      className: firstDisplayName(
+        data.className,
+        data.clazzName,
+        data.schoolClassName,
+        student.className,
+        student.clazzName,
+        student.schoolClassName,
+        data.classInfo,
+        data.clazz,
+        data.class,
+        student.classInfo,
+        student.clazz,
+        student.class,
+      ),
+    };
+  }
+
   function normalizeToken(value = {}) {
+    const userDetail = value.userDetail && typeof value.userDetail === 'object'
+      ? value.userDetail
+      : null;
+    const placement = extractStudentPlacement(userDetail);
     return {
       token: typeof value.token === 'string' ? value.token : '',
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
       user: value.user && typeof value.user === 'object' ? value.user : null,
+      userDetail,
+      gradeName: placement.gradeName || String(value.gradeName || '').trim(),
+      className: placement.className || String(value.className || '').trim(),
     };
   }
 
   function defaultCredentials() {
     return {
-      siteUrl: '',
+      siteUrl: DEFAULT_SITE_URL,
       account: DEFAULT_ACCOUNT,
       password: DEFAULT_PASSWORD,
     };
@@ -76,9 +141,9 @@
           return;
         }
         const stored = normalizeCreds(items[CRED_KEY] || {});
-        // 首次无存储时回填默认账号密码，便于一键登录
+        // 首次无存储或历史地址为空时回填默认值，便于一键登录
         resolve({
-          siteUrl: stored.siteUrl || '',
+          siteUrl: stored.siteUrl || DEFAULT_SITE_URL,
           account: stored.account || DEFAULT_ACCOUNT,
           password: stored.password || DEFAULT_PASSWORD,
         });
@@ -113,12 +178,13 @@
     });
   }
 
-  async function saveToken(token, user = null) {
-    const next = {
+  async function saveToken(token, user = null, userDetail = null) {
+    const next = normalizeToken({
       token: String(token || ''),
       updatedAt: Date.now(),
-      user: user && typeof user === 'object' ? user : null,
-    };
+      user,
+      userDetail,
+    });
     if (!hasChromeStorage()) return next;
     return new Promise((resolve, reject) => {
       chrome.storage.local.set({ [TOKEN_KEY]: next }, () => {
@@ -151,6 +217,10 @@
     const password = typeof item.password === 'string' ? item.password : '';
     const at = typeof item.at === 'number' ? item.at : Date.now();
     const user = item.user && typeof item.user === 'object' ? item.user : null;
+    const userDetail = item.userDetail && typeof item.userDetail === 'object'
+      ? item.userDetail
+      : null;
+    const placement = extractStudentPlacement(userDetail);
     return {
       siteUrl,
       account,
@@ -159,6 +229,9 @@
       tenantName: String(item.tenantName || ''),
       at,
       user,
+      userDetail,
+      gradeName: placement.gradeName || String(item.gradeName || '').trim(),
+      className: placement.className || String(item.className || '').trim(),
       // 展示用冗余字段，便于列表直接渲染
       username: user?.username || item.username || '',
     };
@@ -235,16 +308,20 @@
     const cleanPath = String(path || '').startsWith('/') ? path : `/${path || ''}`;
     const url = `${origin}${cleanPath}`;
     const headers = {
-      Accept: 'application/json, text/plain, */*',
+      Accept: options.accept || 'application/json, text/plain, */*',
       'Content-Type': 'application/json',
       Origin: origin,
       Referer: options.referer || `${origin}/`,
     };
 
-    // 需鉴权的接口附带 Bearer token（APP 登录流程一般无需此参数，保留以备扩展）
     if (options.token) {
       const clean = String(options.token).replace(/^Bearer\s+/i, '').trim();
-      if (clean) headers.Authorization = `Bearer ${clean}`;
+      if (clean) {
+        headers.Authorization = `Bearer ${clean}`;
+        if (options.anxunAuth) {
+          headers['anxun-auth'] = `bearer Bearer ${clean}`;
+        }
+      }
     }
 
     // 尽量附带站点会话 cookie（authjs.session-token 等），存在时注入 Cookie 头
@@ -340,6 +417,12 @@
     return String(token).replace(/^Bearer\s+/i, '').trim();
   }
 
+  function extractUserInfo(response) {
+    if (!response || typeof response !== 'object') return null;
+    const data = response.data ?? response.result ?? response;
+    return data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+  }
+
   function extractUserSummary(response) {
     const data = response?.data;
     if (!data || typeof data !== 'object') return null;
@@ -380,8 +463,34 @@
     return { siteUrl: finalSiteUrl, schools, defaultSchoolName: DEFAULT_SCHOOL_NAME };
   }
 
-  // APP 一键登录：getCaptcha → sha256(密码) → studentLogin
-  async function doLogin({ siteUrl, account, password, tenantId } = {}) {
+  async function fetchUserDetail(siteUrl, token, userInfo) {
+    const detailId = String(userInfo?.studentId ?? userInfo?.id ?? '').trim();
+    if (!detailId) {
+      throw new Error('登录接口未返回 studentId，无法获取用户详情');
+    }
+
+    const response = await postJson(
+      siteUrl,
+      '/huayun-ai/app/user/detail',
+      { id: detailId },
+      {
+        token,
+        anxunAuth: true,
+        accept: '*/*',
+      },
+    );
+    const responseCode = response?.code;
+    if (
+      response?.success === false ||
+      (responseCode != null && Number(responseCode) !== 200)
+    ) {
+      throw new Error(extractErrorMessage(response) || '获取用户详情失败');
+    }
+    return response;
+  }
+
+  // APP 一键登录：验证码 → studentLogin → user/detail
+  async function doLogin({ siteUrl, account, password, tenantId, tenantName } = {}) {
     const creds = await getCredentials();
     const finalSiteUrl = normalizeSiteUrl(siteUrl || creds.siteUrl);
     if (!finalSiteUrl) {
@@ -397,6 +506,7 @@
     if (!finalTenantId) {
       throw new Error('请选择学校');
     }
+    const finalTenantName = String(tenantName || '').trim();
 
     // 登录前持久化当前输入，方便下次打开
     await saveCredentials({
@@ -415,6 +525,20 @@
       throw new Error('getCaptcha 未返回 ticket');
     }
     const moveLength = extractMoveLength(captcha);
+    const captchaValidation = await postJson(
+      finalSiteUrl,
+      `/huayun-ai/app/auth/getCaptcha?moveLength=${encodeURIComponent(moveLength)}&ticket=${encodeURIComponent(ticket)}`,
+      {
+        params: {
+          moveLength,
+          ticket: String(ticket),
+        },
+      },
+    );
+    if (captchaValidation && captchaValidation.success === false) {
+      throw new Error(extractErrorMessage(captchaValidation) || '验证码校验失败');
+    }
+
     const passwordHash = await encryptPassword(finalPassword);
 
     const loginRes = await postJson(finalSiteUrl, '/huayun-ai/app/auth/studentLogin', {
@@ -434,26 +558,121 @@
       throw new Error(extractErrorMessage(loginRes) || '登录接口未返回 token');
     }
 
+    const userInfo = extractUserInfo(loginRes);
+    if (!userInfo) {
+      throw new Error(extractErrorMessage(loginRes) || '登录接口未返回 userInfo');
+    }
     const user = extractUserSummary(loginRes);
-    await saveToken(token, user);
+    const userDetail = await fetchUserDetail(finalSiteUrl, token, userInfo);
+    const placement = extractStudentPlacement(userDetail);
+    await saveToken(token, userInfo, userDetail);
     return {
       token,
       user,
+      userInfo,
+      userDetail,
+      gradeName: placement.gradeName,
+      className: placement.className,
       siteUrl: finalSiteUrl,
       account: finalAccount,
       password: finalPassword,
       tenantId: finalTenantId,
-      tenantName: user?.tenantName || '',
+      tenantName: user?.tenantName || finalTenantName,
       loginRes,
       captcha,
+      captchaValidation,
     };
   }
 
+  function queryTabs(queryInfo) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.query(queryInfo, (tabs) => {
+        if (chrome.runtime?.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(Array.isArray(tabs) ? tabs : []);
+      });
+    });
+  }
+
+  function tabMatchesOrigin(tab, origin) {
+    const rawUrl = tab?.url || tab?.pendingUrl || '';
+    try {
+      return new URL(rawUrl).origin === origin;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function findSiteTab(siteUrl) {
+    const origin = normalizeSiteUrl(siteUrl);
+    if (!origin) throw new Error('站点地址无效');
+    if (typeof chrome === 'undefined' || !chrome.tabs?.query) {
+      throw new Error('当前环境不支持访问网站标签页');
+    }
+
+    const activeTabs = await queryTabs({ active: true, currentWindow: true });
+    const activeTab = activeTabs.find((tab) => tab?.id && tabMatchesOrigin(tab, origin));
+    if (activeTab) return activeTab;
+
+    const allTabs = await queryTabs({});
+    const matchingTab = allTabs.find((tab) => tab?.id && tabMatchesOrigin(tab, origin));
+    if (matchingTab) return matchingTab;
+
+    throw new Error(`未找到已打开的 ${origin} 页面`);
+  }
+
+  async function injectSiteSessionAndNavigateToRoot(siteUrl, token, userInfo) {
+    if (!chrome.scripting?.executeScript) {
+      throw new Error('当前环境不支持写入网站登录态');
+    }
+    const sessionToken = String(userInfo?.accessToken || token || '').trim();
+    if (!sessionToken) throw new Error('缺少 token');
+    if (!userInfo || typeof userInfo !== 'object' || Array.isArray(userInfo)) {
+      throw new Error('缺少 userInfo');
+    }
+
+    const tab = await findSiteTab(siteUrl);
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: 'MAIN',
+      func: (sessionToken, sessionUserInfo) => {
+        localStorage.setItem('token', sessionToken);
+        localStorage.setItem('userInfo', JSON.stringify(sessionUserInfo));
+        window.location.assign(`${window.location.origin}/`);
+      },
+      args: [sessionToken, userInfo],
+    });
+    return { tabId: tab.id };
+  }
+
+  async function loginAndInject(payload = {}) {
+    const shouldRecordHistory = payload.recordHistory !== false;
+    const result = await doLogin(payload);
+    if (shouldRecordHistory) {
+      // 登录和用户详情获取成功后先落历史，再注入页面并跳转。
+      await recordHistory({
+        siteUrl: result.siteUrl,
+        account: result.account,
+        password: result.password,
+        tenantId: result.tenantId,
+        tenantName: result.tenantName,
+        user: result.user,
+        userDetail: result.userDetail,
+      });
+    }
+    const injected = await injectSiteSessionAndNavigateToRoot(result.siteUrl, result.token, result.userInfo);
+    return { ...result, ...injected };
+  }
+
   ns.appLogin = {
+    DEFAULT_SITE_URL,
     DEFAULT_ACCOUNT,
     DEFAULT_PASSWORD,
     DEFAULT_SCHOOL_NAME,
     normalizeSiteUrl,
+    extractStudentPlacement,
     defaultCredentials,
     getCredentials,
     saveCredentials,
@@ -465,5 +684,7 @@
     deleteHistory,
     listSchools,
     doLogin,
+    injectSiteSessionAndNavigateToRoot,
+    loginAndInject,
   };
 })();

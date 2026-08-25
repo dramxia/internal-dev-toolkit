@@ -674,9 +674,11 @@ if (typeof module !== 'undefined' && module.exports) {
     return {
       id: pickFirstString(value.id, value.studentId, value.userId),
       tenantId: pickFirstString(value.tenantId),
+      tenantName: pickFirstString(value.tenantName, value.schoolName),
       name: pickFirstString(value.name, value.studentName, value.realName, value.username, value.userName),
       code: pickFirstString(value.code, value.studentCode, value.studentNo, value.account, value.userAccount),
       account: pickFirstString(value.account, value.userAccount),
+      password: pickFirstString(value.password, value.studentPassword, value.initialPassword, value.defaultPassword),
       classId: pickFirstString(
         value.classId, value.clazzId, value.deptId, value.schoolDeptId,
         firstListValue(value.classIds), firstListValue(value.clazzIds), firstListValue(value.deptIds),
@@ -1320,10 +1322,10 @@ if (typeof module !== 'undefined' && module.exports) {
 
   const TOAST_ID = 'globalToast';
   let hideTimer = 0;
-  // ok 类提示自动消失；info / err 保持到下一次调用覆盖或清空
+  // 默认仅 ok 自动消失；调用方可通过 duration 为其它类型设置关闭时间。
   const OK_AUTO_HIDE_MS = 1800;
 
-  function toast(text, kind) {
+  function toast(text, kind, options = {}) {
     const el = document.getElementById(TOAST_ID);
     if (!el) return;
     clearTimeout(hideTimer);
@@ -1340,11 +1342,15 @@ if (typeof module !== 'undefined' && module.exports) {
     if (kind === 'ok' || kind === 'err') el.classList.add(kind);
     el.classList.add('show');
 
-    if (kind === 'ok') {
+    const hasCustomDuration = options.duration != null && Number.isFinite(Number(options.duration));
+    const autoHideMs = hasCustomDuration
+      ? Math.max(0, Number(options.duration))
+      : (kind === 'ok' ? OK_AUTO_HIDE_MS : 0);
+    if (autoHideMs > 0) {
       hideTimer = setTimeout(() => {
         el.classList.remove('show', 'ok', 'err');
         el.textContent = '';
-      }, OK_AUTO_HIDE_MS);
+      }, autoHideMs);
     }
   }
 
@@ -1409,6 +1415,7 @@ if (typeof module !== 'undefined' && module.exports) {
   const DEFAULT_DEV_PORT = '8088';
   const SEARCH_DEBOUNCE = 300;
   const DEFAULT_RECENT_VISIBLE = 3;
+  const DEFAULT_STUDENT_PASSWORD = 'Xx@123456';
   const REQUIRED_QUICK_IDS = Object.freeze([
     'quickLoginSection', 'quickLoginHeader', 'envBadge', 'quickLoginBody',
     'targetEnvBadge', 'envOnlineBtn', 'envDevBtn', 'portField', 'localPort', 'quickEnvLabel',
@@ -2108,6 +2115,17 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
+  function buildStudentCredentialsText(student = {}, fallbackTenantName = '') {
+    const tenantName = String(student.tenantName || fallbackTenantName || '').trim();
+    const account = String(student.account || student.code || '').trim();
+    const password = String(student.password || '').trim() || DEFAULT_STUDENT_PASSWORD;
+    return [
+      '租户名称：' + tenantName,
+      '学生账号：' + account,
+      '学生密码：' + password,
+    ].join('\n');
+  }
+
   // ── 教师查学生 ──
 
   async function loadTenants() {
@@ -2716,7 +2734,20 @@ if (typeof module !== 'undefined' && module.exports) {
         escapeHtml(student.name || '(未命名)') + '</div><div class="student-item-meta">' +
         (student.code ? '<span>学号: ' + escapeHtml(student.code) + '</span>' : '') +
         (student.className ? '<span>班级: ' + escapeHtml(student.className) + '</span>' : '') +
-        '</div></div>' + status;
+        '</div></div><div class="student-item-actions">' + status +
+        '<button class="action-btn quick-action-btn student-copy-btn" type="button" title="复制学生登录信息" aria-label="复制学生登录信息">' +
+        icons.copy + '</button></div>';
+      row.querySelector('.student-copy-btn')?.addEventListener('click', async () => {
+        const credentials = buildStudentCredentialsText(student, t.selectedTenant?.tenantName);
+        const copied = await copyToClipboard(credentials);
+        if (!copied) {
+          setActionStatus('复制失败，请检查浏览器剪贴板权限', 'error');
+          setStatus('复制学生登录信息失败', 'err');
+          return;
+        }
+        setActionStatus('已复制学生登录信息', 'success');
+        setStatus('已复制学生登录信息', 'ok');
+      });
       list.appendChild(row);
     });
     buildPagerUI($('studentPager'), t.studentPage, (page) => {
@@ -4052,7 +4083,13 @@ if (typeof module !== 'undefined' && module.exports) {
   const quickLoginUi = { init };
   ns.quickLoginUi = quickLoginUi;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { createDebouncedSearch, createPersistedState, restorePersistedState, state };
+    module.exports = {
+      buildStudentCredentialsText,
+      createDebouncedSearch,
+      createPersistedState,
+      restorePersistedState,
+      state,
+    };
   }
 })();
 
@@ -4773,6 +4810,7 @@ if (typeof module !== 'undefined' && module.exports) {
   };
 
   let lastSavedToken = '';
+  let eventsBound = false;
 
   function $(id) {
     return document.getElementById(IDs[id] || id);
@@ -4795,8 +4833,18 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
+  const APP_ERROR_AUTO_HIDE_MS = 3200;
+
   function setStatus(text, kind) {
-    ns.ui.toast(text, kind);
+    ns.ui.toast(text, kind, {
+      duration: kind === 'err' ? APP_ERROR_AUTO_HIDE_MS : undefined,
+    });
+  }
+
+  function formatLoginError(error) {
+    const message = String(error?.message || '').trim();
+    if (!message) return '登录失败';
+    return /^登录失败\s*[:：]/.test(message) ? message : `登录失败：${message}`;
   }
 
   function getEditableText(el) {
@@ -4844,8 +4892,9 @@ if (typeof module !== 'undefined' && module.exports) {
     return form;
   }
 
-  function setButtonsLoading(active) {
+  function setButtonsLoading(active, updateButton = true) {
     state.loading = active;
+    if (!updateButton) return;
     const loginBtn = $('loginBtn');
     const labels = { login: '一键登录' };
     const loadingLabels = { login: '登录中...' };
@@ -4872,7 +4921,13 @@ if (typeof module !== 'undefined' && module.exports) {
     const tokenWrap = $('tokenWrap');
     if (!tokenEl || !tokenWrap) return;
 
-    let tokenState = { token: '', updatedAt: 0, user: null };
+    let tokenState = {
+      token: '',
+      updatedAt: 0,
+      user: null,
+      gradeName: '',
+      className: '',
+    };
     try {
       const res = await messages.sendToBackground({ type: 'APP_GET_TOKEN' });
       if (res && res.ok) {
@@ -4880,6 +4935,8 @@ if (typeof module !== 'undefined' && module.exports) {
           token: res.token || '',
           updatedAt: res.updatedAt || 0,
           user: res.user || null,
+          gradeName: res.gradeName || '',
+          className: res.className || '',
         };
       }
     } catch (_) {}
@@ -4905,13 +4962,15 @@ if (typeof module !== 'undefined' && module.exports) {
 
     const metaEl = $('userMeta');
     if (metaEl) {
-      const u = tokenState.user;
-      if (u && (u.username || u.account || u.tenantName)) {
-        const parts = [
-          u.username || u.account || '',
-          u.tenantName || '',
-          Array.isArray(u.roleNames) && u.roleNames.length ? u.roleNames.join('/') : '',
-        ].filter(Boolean);
+      const u = tokenState.user || {};
+      const parts = [
+        u.username || u.account || '',
+        u.tenantName || '',
+        tokenState.gradeName ? `年级：${tokenState.gradeName}` : '',
+        tokenState.className ? `班级：${tokenState.className}` : '',
+        Array.isArray(u.roleNames) && u.roleNames.length ? u.roleNames.join('/') : '',
+      ].filter(Boolean);
+      if (parts.length) {
         metaEl.textContent = parts.join(' · ');
         metaEl.classList.remove('hidden');
       } else {
@@ -5055,13 +5114,16 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   // ── 一键登录 ──
-  async function handleLogin(formOverride) {
+  async function handleLogin(formOverride, options = {}) {
     if (state.loading) return;
     const form = formOverride || validateForm();
     if (!form) return;
+    const updateMainButton = options.updateMainButton !== false;
+    const refreshHistory = options.refreshHistory !== false;
+    const shouldRecordHistory = options.recordHistory !== false;
 
-    setButtonsLoading(true);
-    setStatus('正在获取 token...', '');
+    setStatus('', '');
+    setButtonsLoading(true, updateMainButton);
     try {
       const res = await messages.sendToBackground({
         type: 'APP_LOGIN',
@@ -5070,18 +5132,18 @@ if (typeof module !== 'undefined' && module.exports) {
           account: form.account,
           password: form.password,
           tenantId: state.selectedSchool?.tenantId || '',
+          tenantName: state.selectedSchool?.tenantName || '',
+          recordHistory: shouldRecordHistory,
         },
       });
-      await renderToken();
       if (!res || !res.ok) throw new Error(res?.error || '登录失败');
-      const name = res.user?.username || res.user?.account || '';
-      setStatus(name ? `登录成功：${name}` : '登录成功，token 已保存', 'ok');
-      await renderHistory();
+      await renderToken();
+      if (refreshHistory) await renderHistory();
     } catch (err) {
       await renderToken();
-      setStatus(`登录失败: ${err.message}`, 'err');
+      setStatus(formatLoginError(err), 'err');
     } finally {
-      setButtonsLoading(false);
+      setButtonsLoading(false, updateMainButton);
     }
   }
 
@@ -5102,7 +5164,7 @@ if (typeof module !== 'undefined' && module.exports) {
       return;
     }
 
-    const displayLimit = historyExpanded ? 20 : 5;
+    const displayLimit = state.historyExpanded ? 20 : 5;
     const displayRecords = records.slice(0, displayLimit);
     const hasMore = records.length > displayLimit;
 
@@ -5112,17 +5174,22 @@ if (typeof module !== 'undefined' && module.exports) {
       const time = r.at ? new Date(r.at).toLocaleString() : '';
       const titleName = r.username || r.account || '(未知账号)';
       const tenant = r.tenantName || '';
+      const metaParts = [
+        r.account || '',
+        r.gradeName ? `年级：${r.gradeName}` : '',
+        r.className ? `班级：${r.className}` : '',
+        time,
+      ].filter(Boolean);
       const dataAttrs =
         `data-site-url="${escapeHtml(r.siteUrl || '')}" ` +
         `data-account="${escapeHtml(r.account || '')}" ` +
-        `data-password="${escapeHtml(r.password || '')}" ` +
         `data-tenant-id="${escapeHtml(r.tenantId || '')}" ` +
         `data-tenant-name="${escapeHtml(r.tenantName || '')}"`;
 
       row.innerHTML =
         `<div class="recent-item-info">` +
         `<div class="recent-item-text">${escapeHtml(titleName)}${tenant ? ` · ${escapeHtml(tenant)}` : ''}</div>` +
-        `<div class="recent-item-time">${escapeHtml(r.account || '')}${time ? ` · ${escapeHtml(time)}` : ''}</div>` +
+        `<div class="recent-item-time">${escapeHtml(metaParts.join(' · '))}</div>` +
         `</div>` +
         `<div class="recent-item-actions">` +
         `<button class="recent-action-btn" data-action="login" ${dataAttrs} title="一键登录">${icons.login}</button>` +
@@ -5131,14 +5198,14 @@ if (typeof module !== 'undefined' && module.exports) {
       wrap.appendChild(row);
     }
 
-    if (hasMore || historyExpanded) {
+    if (hasMore || state.historyExpanded) {
       const expandBtn = document.createElement('button');
       expandBtn.className = 'load-more';
-      expandBtn.textContent = historyExpanded
+      expandBtn.textContent = state.historyExpanded
         ? '收起'
         : `显示更多 (${records.length - displayLimit} 条)`;
       expandBtn.addEventListener('click', () => {
-        historyExpanded = !historyExpanded;
+        state.historyExpanded = !state.historyExpanded;
         renderHistory();
       });
       wrap.appendChild(expandBtn);
@@ -5166,7 +5233,6 @@ if (typeof module !== 'undefined' && module.exports) {
     const action = btn.dataset.action;
     const siteUrl = btn.dataset.siteUrl || '';
     const account = btn.dataset.account || '';
-    const password = btn.dataset.password || '';
     const tenantId = btn.dataset.tenantId || '';
     const tenantName = btn.dataset.tenantName || '';
     if (!action) return;
@@ -5186,37 +5252,63 @@ if (typeof module !== 'undefined' && module.exports) {
       return;
     }
 
+    if (action !== 'login') return;
     if (!account || !tenantId) {
       setStatus('历史记录缺少账号或学校', 'err');
       return;
     }
     if (state.loading) return;
 
-    const form = { siteUrl, account, password };
-    fillForm(form);
-    // 选中对应学校
-    state.selectedSchool = { tenantId, tenantName };
-    const search = $('schoolSearch');
-    if (search) search.value = tenantName || '';
-
-    const row = btn.closest('.recent-item');
-    const groupBtns = row ? row.querySelectorAll('.recent-action-btn') : [btn];
     const originalHtml = btn.innerHTML;
-    groupBtns.forEach((b) => { b.disabled = true; });
-    btn.innerHTML = '<span class="spinner"></span>';
+    const originalAriaLabel = btn.getAttribute('aria-label');
+    btn.disabled = true;
+    btn.classList.add('is-loading');
+    btn.setAttribute('aria-busy', 'true');
+    btn.setAttribute('aria-label', '登录中');
+    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>';
 
     try {
-      if (action === 'login') {
-        await handleLogin(form);
+      const record = await findHistoryRecord(siteUrl, account, tenantId);
+      if (!record?.password) {
+        setStatus('历史记录缺少密码，请重新填写后登录', 'err');
+        return;
       }
+
+      const form = {
+        siteUrl: record.siteUrl || siteUrl,
+        account: record.account || account,
+        password: record.password,
+      };
+      fillForm(form);
+      state.selectedSchool = {
+        tenantId: record.tenantId || tenantId,
+        tenantName: record.tenantName || tenantName,
+      };
+      const search = $('schoolSearch');
+      if (search) search.value = state.selectedSchool.tenantName || '';
+      await handleLogin(form, {
+        updateMainButton: false,
+        refreshHistory: false,
+        recordHistory: false,
+      });
     } finally {
-      groupBtns.forEach((b) => { b.disabled = false; });
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+      btn.removeAttribute('aria-busy');
+      if (originalAriaLabel == null) {
+        btn.removeAttribute('aria-label');
+      } else {
+        btn.setAttribute('aria-label', originalAriaLabel);
+      }
       btn.innerHTML = originalHtml;
     }
   }
 
   // ── 事件绑定 ──
   function bindEvents() {
+    if (eventsBound) return;
+    eventsBound = true;
+
     const pwdToggle = $('pwdToggle');
     const passwordEl = $('password');
     if (pwdToggle && passwordEl) {

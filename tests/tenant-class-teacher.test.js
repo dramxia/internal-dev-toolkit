@@ -135,10 +135,16 @@ assert.deepStrictEqual(classes[0].ancestorIds, ['2', '3']);
 const studentById = tenant.normalizeStudent({
   id: 's1',
   studentName: '张同学',
+  tenantName: '未来智慧学校',
+  account: 'student001',
+  password: 'Student@789',
   clazzId: 2989,
   clazzName: '1班',
 });
 assert.strictEqual(studentById.classId, '2989');
+assert.strictEqual(studentById.tenantName, '未来智慧学校');
+assert.strictEqual(studentById.account, 'student001');
+assert.strictEqual(studentById.password, 'Student@789');
 assert.strictEqual(tenant.findStudentClass(studentById, classes).label, '小学 / 五年级 / 1班');
 
 const studentByFullName = tenant.normalizeStudent({

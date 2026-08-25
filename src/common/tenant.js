@@ -220,9 +220,11 @@
     return {
       id: pickFirstString(value.id, value.studentId, value.userId),
       tenantId: pickFirstString(value.tenantId),
+      tenantName: pickFirstString(value.tenantName, value.schoolName),
       name: pickFirstString(value.name, value.studentName, value.realName, value.username, value.userName),
       code: pickFirstString(value.code, value.studentCode, value.studentNo, value.account, value.userAccount),
       account: pickFirstString(value.account, value.userAccount),
+      password: pickFirstString(value.password, value.studentPassword, value.initialPassword, value.defaultPassword),
       classId: pickFirstString(
         value.classId, value.clazzId, value.deptId, value.schoolDeptId,
         firstListValue(value.classIds), firstListValue(value.clazzIds), firstListValue(value.deptIds),

@@ -7,6 +7,12 @@ const popupHtml = fs.readFileSync(path.join(root, 'popup.html'), 'utf8');
 const quickUi = fs.readFileSync(path.join(root, 'src/popup/quick-login-ui.js'), 'utf8');
 const quickStateStorage = fs.readFileSync(path.join(root, 'src/common/quick-login-state.js'), 'utf8');
 const buildScript = fs.readFileSync(path.join(root, 'scripts/build.js'), 'utf8');
+const quickUiModulePath = require.resolve('../src/popup/quick-login-ui.js');
+const namespaceBeforeFormatTest = globalThis.InternalDevToolkit;
+globalThis.InternalDevToolkit = { tenant: {}, messages: {} };
+const { buildStudentCredentialsText } = require(quickUiModulePath);
+delete require.cache[quickUiModulePath];
+globalThis.InternalDevToolkit = namespaceBeforeFormatTest;
 
 const panelMatch = popupHtml.match(/<div class="panel" id="panel-quick">([\s\S]*?)<div class="panel" id="panel-other">/);
 assert.ok(panelMatch, '应能提取 #panel-quick 静态结构');
@@ -223,6 +229,20 @@ async function testImmediateInvalidationBeforeDebouncedLoad() {
 
 assert.match(quickUi, /createDebouncedSearch\(\(keyword\) => \{[\s\S]*t\.tenantRequestId \+= 1/);
 assert.match(quickUi, /renderTeacherStudentArea\(message\)[\s\S]*pager\.classList\.add\('hidden'\)/);
+assert.match(quickUi, /class="action-btn quick-action-btn student-copy-btn"/);
+assert.match(
+  quickUi,
+  /row\.querySelector\('\.student-copy-btn'\)[\s\S]*addEventListener\('click'[\s\S]*buildStudentCredentialsText\(student, t\.selectedTenant\?\.tenantName\)[\s\S]*copyToClipboard\(credentials\)/,
+  '学生复制按钮应复制当前行的登录信息',
+);
+assert.equal(
+  buildStudentCredentialsText({ tenantName: '测试租户', account: 'student001', password: 'Student@789' }),
+  '租户名称：测试租户\n学生账号：student001\n学生密码：Student@789',
+);
+assert.equal(
+  buildStudentCredentialsText({ code: '202506002' }, '回退租户'),
+  '租户名称：回退租户\n学生账号：202506002\n学生密码：Xx@123456',
+);
 assert.match(quickUi, /s\.resolvingTeachers = true;\s*updateRelationBusy\(\)/);
 const relationRenderer = quickUi.match(/async function renderRelationTeachers\(classId\) \{([\s\S]*?)\n  \}\n\n  async function refreshStudentRelation/);
 assert.ok(relationRenderer, '应能提取教师账号反查流程');

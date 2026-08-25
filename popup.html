@@ -929,6 +929,25 @@
       border-color: var(--error);
     }
     .recent-action-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .recent-action-btn.is-loading:disabled {
+      opacity: 1;
+      color: var(--sage-600);
+      cursor: wait;
+    }
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      box-sizing: border-box;
+      flex: 0 0 auto;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      animation: spinner-rotate .65s linear infinite;
+    }
+    @keyframes spinner-rotate {
+      to { transform: rotate(360deg); }
+    }
 
     .recent-empty {
       padding: 20px;
@@ -1074,6 +1093,12 @@
     }
     .student-item:last-child { border-bottom: none; }
     .student-item-info { flex: 1; min-width: 0; }
+    .student-item-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
     .student-item-name {
       font-size: 12px;
       font-weight: 500;
@@ -2068,7 +2093,7 @@
             <label class="field-label">站点地址</label>
             <div class="field">
               <input class="field-input" id="appSiteUrl" type="text" autocomplete="off"
-                placeholder="http://localhost:5174">
+                placeholder="http://localhost:5173">
             </div>
 
             <label class="field-label">学校</label>

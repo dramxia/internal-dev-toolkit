@@ -304,13 +304,13 @@
       }
       const handlers = {
         APP_LIST_SCHOOLS: (p) => ns.appLogin.listSchools(p),
-        APP_LOGIN: (p) => ns.appLogin.doLogin(p),
+        APP_LOGIN: (p) => ns.appLogin.loginAndInject(p),
         APP_GET_CREDENTIALS: () => ns.appLogin.getCredentials(),
         APP_SAVE_CREDENTIALS: (p) => ns.appLogin.saveCredentials(p || {}),
         APP_GET_TOKEN: () => ns.appLogin.getToken(),
         APP_SAVE_TOKEN: (p) => ns.appLogin.saveToken(p?.token || '', p?.user || null),
         APP_CLEAR_TOKEN: () => ns.appLogin.clearToken(),
-        APP_GET_HISTORY: () => ns.appLogin.getHistory(),
+        APP_GET_HISTORY: async () => ({ records: await ns.appLogin.getHistory() }),
         APP_DELETE_HISTORY: (p) => ns.appLogin.deleteHistory(p),
       };
       const handler = handlers[msg.type];

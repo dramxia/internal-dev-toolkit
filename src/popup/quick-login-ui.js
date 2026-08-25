@@ -8,6 +8,7 @@
   const DEFAULT_DEV_PORT = '8088';
   const SEARCH_DEBOUNCE = 300;
   const DEFAULT_RECENT_VISIBLE = 3;
+  const DEFAULT_STUDENT_PASSWORD = 'Xx@123456';
   const REQUIRED_QUICK_IDS = Object.freeze([
     'quickLoginSection', 'quickLoginHeader', 'envBadge', 'quickLoginBody',
     'targetEnvBadge', 'envOnlineBtn', 'envDevBtn', 'portField', 'localPort', 'quickEnvLabel',
@@ -707,6 +708,17 @@
     }
   }
 
+  function buildStudentCredentialsText(student = {}, fallbackTenantName = '') {
+    const tenantName = String(student.tenantName || fallbackTenantName || '').trim();
+    const account = String(student.account || student.code || '').trim();
+    const password = String(student.password || '').trim() || DEFAULT_STUDENT_PASSWORD;
+    return [
+      '租户名称：' + tenantName,
+      '学生账号：' + account,
+      '学生密码：' + password,
+    ].join('\n');
+  }
+
   // ── 教师查学生 ──
 
   async function loadTenants() {
@@ -1315,7 +1327,20 @@
         escapeHtml(student.name || '(未命名)') + '</div><div class="student-item-meta">' +
         (student.code ? '<span>学号: ' + escapeHtml(student.code) + '</span>' : '') +
         (student.className ? '<span>班级: ' + escapeHtml(student.className) + '</span>' : '') +
-        '</div></div>' + status;
+        '</div></div><div class="student-item-actions">' + status +
+        '<button class="action-btn quick-action-btn student-copy-btn" type="button" title="复制学生登录信息" aria-label="复制学生登录信息">' +
+        icons.copy + '</button></div>';
+      row.querySelector('.student-copy-btn')?.addEventListener('click', async () => {
+        const credentials = buildStudentCredentialsText(student, t.selectedTenant?.tenantName);
+        const copied = await copyToClipboard(credentials);
+        if (!copied) {
+          setActionStatus('复制失败，请检查浏览器剪贴板权限', 'error');
+          setStatus('复制学生登录信息失败', 'err');
+          return;
+        }
+        setActionStatus('已复制学生登录信息', 'success');
+        setStatus('已复制学生登录信息', 'ok');
+      });
       list.appendChild(row);
     });
     buildPagerUI($('studentPager'), t.studentPage, (page) => {
@@ -2651,6 +2676,12 @@
   const quickLoginUi = { init };
   ns.quickLoginUi = quickLoginUi;
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { createDebouncedSearch, createPersistedState, restorePersistedState, state };
+    module.exports = {
+      buildStudentCredentialsText,
+      createDebouncedSearch,
+      createPersistedState,
+      restorePersistedState,
+      state,
+    };
   }
 })();

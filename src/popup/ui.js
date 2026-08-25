@@ -6,10 +6,10 @@
 
   const TOAST_ID = 'globalToast';
   let hideTimer = 0;
-  // ok 类提示自动消失；info / err 保持到下一次调用覆盖或清空
+  // 默认仅 ok 自动消失；调用方可通过 duration 为其它类型设置关闭时间。
   const OK_AUTO_HIDE_MS = 1800;
 
-  function toast(text, kind) {
+  function toast(text, kind, options = {}) {
     const el = document.getElementById(TOAST_ID);
     if (!el) return;
     clearTimeout(hideTimer);
@@ -26,11 +26,15 @@
     if (kind === 'ok' || kind === 'err') el.classList.add(kind);
     el.classList.add('show');
 
-    if (kind === 'ok') {
+    const hasCustomDuration = options.duration != null && Number.isFinite(Number(options.duration));
+    const autoHideMs = hasCustomDuration
+      ? Math.max(0, Number(options.duration))
+      : (kind === 'ok' ? OK_AUTO_HIDE_MS : 0);
+    if (autoHideMs > 0) {
       hideTimer = setTimeout(() => {
         el.classList.remove('show', 'ok', 'err');
         el.textContent = '';
-      }, OK_AUTO_HIDE_MS);
+      }, autoHideMs);
     }
   }
 
