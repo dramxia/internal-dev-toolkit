@@ -1119,67 +1119,379 @@
       color: var(--sage-600);
       font-weight: 600;
     }
-    /* 快捷登录双向查询布局 */
+    /* 快捷登录：高频侧边栏任务工作区 */
+    .quick-section-toggle:focus-visible {
+      outline: 2px solid var(--sage-600);
+      outline-offset: -2px;
+    }
+    .quick-context {
+      display: grid;
+      gap: 8px;
+      padding: 10px 0 12px;
+    }
     .quick-target-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-bottom: 6px;
     }
     .quick-target-label,
-    .quick-subhead {
-      font-size: 10px;
+    .quick-section-title,
+    .quick-stage-title,
+    .quick-label {
+      color: var(--text-2);
       font-weight: 700;
-      letter-spacing: .55px;
-      color: var(--text-3);
     }
+    .quick-target-label,
+    .quick-label { font-size: 11px; }
+    .quick-env-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(112px, .65fr);
+      gap: 8px;
+      align-items: end;
+    }
+    .quick-env-row .field { margin: 0; }
+    .quick-env-row:has(#portField.hidden) { grid-template-columns: minmax(0, 1fr); }
+    .quick-env-row .field-label { margin-top: 0; }
     .quick-api-note {
-      margin-top: 5px;
-      color: var(--text-3);
-      font-size: 10px;
+      color: var(--text-2);
+      font-size: 10.5px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .quick-env-badge.warning { color: #8a4a05; }
+    .quick-env-badge.success { color: var(--sage-700); }
+    .quick-context .field-input::placeholder,
+    .quick-mode-panel .field-input::placeholder,
+    .quick-mode-panel .list-item-meta,
+    .quick-mode-panel .teacher-item-account,
+    .quick-mode-panel .student-item-meta,
+    .quick-recent-row .recent-item-time { color: var(--text-2); }
+    .quick-mode-panel .teacher-badge.status-on,
+    .quick-mode-panel .student-item-badge.status-on { color: var(--sage-700); }
+    .quick-mode-panel .teacher-badge.status-off,
+    .quick-mode-panel .student-item-badge.status-off { color: #b42318; }
+    .quick-recent-row .recent-env-badge.local { color: var(--sage-700); }
+    .quick-auth-notice,
+    .quick-action-status,
+    .quick-inline-status,
+    .quick-session-note {
+      font-size: 10.5px;
       line-height: 1.45;
     }
-    .quick-mode-switcher {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
-      margin: 10px 0 12px;
-    }
-    .quick-mode-switcher .env-btn { border: 1px solid var(--border); }
-    .quick-mode-panel { animation: fadeIn .18s ease; }
-    .quick-flow-step {
-      display: grid;
-      grid-template-columns: 22px minmax(0, 1fr);
-      gap: 8px;
-      margin-bottom: 12px;
-    }
-    .quick-step-number {
-      width: 20px;
-      height: 20px;
+    .quick-auth-notice {
+      min-height: 32px;
       display: flex;
       align-items: center;
-      justify-content: center;
-      border-radius: 50%;
-      background: var(--sage-100);
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--sage-50);
       color: var(--sage-700);
-      font-size: 10px;
-      font-weight: 700;
     }
+    .quick-auth-notice[data-kind="warning"] {
+      border-color: rgba(217,119,6,.32);
+      background: var(--warn-bg);
+      color: #8a4a05;
+    }
+    .quick-action-status {
+      min-height: 18px;
+      color: var(--text-2);
+    }
+    .quick-action-status:empty { visibility: hidden; }
+    .quick-action-status[data-kind="error"],
+    .quick-inline-status[data-kind="error"],
+    .quick-session-note[data-kind="error"] { color: #b42318; }
+    .quick-action-status[data-kind="success"] { color: var(--sage-700); }
+    .quick-recent-section {
+      padding: 12px 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .quick-section-heading,
+    .quick-stage-header,
     .quick-subhead-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
-      margin-bottom: 6px;
     }
-    .btn.compact { min-height: auto; padding: 4px 8px; font-size: 11px; }
+    .quick-section-title,
+    .quick-stage-title {
+      font-size: 12px;
+      letter-spacing: 0;
+    }
+    .quick-mode-switcher {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 6px;
+      margin: 12px 0 0;
+      padding: 3px;
+      border-radius: var(--radius-sm);
+      background: var(--sage-100);
+    }
+    .quick-mode-switcher .env-btn {
+      min-height: 36px;
+      border: 1px solid transparent;
+    }
+    .quick-mode-switcher .env-btn.active { border-color: var(--border); }
+    .quick-mode-panel { animation: fadeIn .18s ease; }
+    .quick-stage {
+      padding: 12px 0;
+      border-top: 1px solid var(--border);
+    }
+    .quick-mode-panel .quick-stage:first-child { border-top: 0; }
+    .quick-stage-header { min-height: 32px; }
+    .quick-stage-status {
+      min-width: 50px;
+      color: var(--text-2);
+      font-size: 10px;
+      font-weight: 600;
+      text-align: right;
+    }
+    .quick-stage.is-complete .quick-stage-status { color: var(--sage-700); }
+    .quick-stage-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px 12px;
+      align-items: center;
+      margin-top: 8px;
+      padding: 9px 10px;
+      border-left: 3px solid var(--sage-400);
+      background: var(--sage-50);
+    }
+    .quick-summary-copy { min-width: 0; }
+    .quick-summary-title,
+    .quick-summary-meta {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .quick-summary-title {
+      color: var(--text-1);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .quick-summary-meta {
+      margin-top: 2px;
+      color: var(--text-2);
+      font-size: 10.5px;
+    }
+    .quick-summary-actions {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: flex-end;
+    }
+    .quick-stage-body {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .quick-stage-body .list,
+    .quick-stage-body .pager,
+    .quick-stage-body .list-empty { margin-top: 0; }
+    .quick-label {
+      display: block;
+      margin: 0;
+    }
+    .quick-field-grid {
+      display: grid;
+      grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr);
+      gap: 8px;
+    }
+    .quick-field-grid.equal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .quick-inline-status {
+      min-height: 15px;
+      color: var(--text-2);
+    }
+    .quick-inline-status:empty { display: none; }
+    .quick-secondary-btn {
+      min-height: 32px;
+      padding: 5px 9px;
+      font-size: 11px;
+    }
+    .quick-mode-panel .list-item-meta,
+    .quick-mode-panel .student-item-meta,
+    .quick-mode-panel .teacher-item-account,
+    .quick-mode-panel .teacher-lookup-result-head > span:first-child {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .quick-mode-panel .student-item-meta,
+    .quick-mode-panel .teacher-item-header { flex-wrap: wrap; }
+    .quick-mode-panel .teacher-lookup-result-head > span:first-child { flex: 1; }
+    .quick-row-select .list-item-content,
+    .quick-row-select .list-item-title,
+    .quick-row-select .list-item-meta,
+    .quick-list-button .list-item-content,
+    .quick-list-button .list-item-title,
+    .quick-list-button .list-item-meta,
+    .quick-student-select .student-item-info,
+    .quick-student-select .student-item-name { display: block; }
+    .quick-row-select .list-item-title,
+    .quick-row-select .list-item-meta,
+    .quick-list-button .list-item-title,
+    .quick-list-button .list-item-meta { width: 100%; }
+    .quick-row-select,
+    .quick-list-button,
+    .quick-student-select {
+      min-width: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .quick-row-select {
+      flex: 1 1 150px;
+      padding: 0;
+    }
+    .quick-list-button,
+    .quick-student-select { width: 100%; }
+    .quick-list-button:focus-visible,
+    .quick-row-select:focus-visible,
+    .quick-student-select:focus-visible,
+    .quick-secondary-btn:focus-visible,
+    .quick-action-btn:focus-visible,
+    .quick-recent-action:focus-visible {
+      outline: 2px solid var(--sage-600);
+      outline-offset: 2px;
+    }
+    .quick-row-select:disabled {
+      cursor: wait;
+      opacity: .65;
+    }
+    .quick-action-row {
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .quick-action-row .list-item-actions { margin-left: auto; }
+    .quick-action-btn,
+    .quick-recent-action {
+      width: 36px;
+      height: 36px;
+      flex: 0 0 36px;
+    }
+    .quick-pager-btn {
+      min-width: 32px;
+      height: 32px;
+    }
+    .quick-recent-list { margin-top: 6px; }
+    .quick-recent-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      padding: 9px 0;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      border-radius: 0;
+      background: transparent;
+    }
+    .quick-recent-row:last-of-type { border-bottom: 0; }
+    .quick-recent-row:hover { background: var(--sage-50); }
+    .quick-recent-row .recent-item-text {
+      flex-wrap: wrap;
+      margin-bottom: 2px;
+      overflow-wrap: anywhere;
+    }
+    .quick-recent-target-controls {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      width: 100%;
+    }
+    .quick-recent-env-switcher {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(54px, 1fr));
+      gap: 3px;
+      min-width: 128px;
+      padding: 3px;
+      border-radius: var(--radius-sm);
+      background: var(--sage-100);
+    }
+    .quick-recent-env-btn {
+      min-height: 32px;
+      padding: 0 9px;
+      border: 1px solid transparent;
+      border-radius: calc(var(--radius-sm) - 2px);
+      background: transparent;
+      color: var(--text-2);
+      font: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .quick-recent-env-btn.active {
+      border-color: var(--border);
+      background: var(--panel);
+      color: var(--sage-700);
+      box-shadow: var(--shadow-sm);
+    }
+    .quick-recent-port-field {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text-2);
+      font-size: 10.5px;
+      font-weight: 600;
+    }
+    .quick-recent-port {
+      width: 72px;
+      height: 38px;
+      padding: 7px 8px;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-sm);
+      outline: 0;
+      background: var(--sage-50);
+      color: var(--text-1);
+      font: inherit;
+      font-size: 12px;
+    }
+    .quick-recent-port:focus {
+      border-color: var(--sage-400);
+      background: var(--panel);
+      box-shadow: 0 0 0 3px rgba(106,166,97,.15);
+    }
+    .quick-recent-env-btn:focus-visible,
+    .quick-recent-port:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 2px; }
+    .quick-recent-row .recent-item-actions {
+      width: 100%;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+    .quick-recent-action-primary {
+      background: var(--sage-500);
+      border-color: var(--sage-500);
+      color: #fff;
+    }
+    .quick-recent-action-primary:hover:not(:disabled) {
+      background: var(--sage-600);
+      border-color: var(--sage-600);
+      color: #fff;
+    }
     .quick-session-note {
       min-height: 15px;
-      margin: 5px 0 7px;
-      color: var(--text-3);
-      font-size: 10.5px;
-      line-height: 1.45;
+      color: var(--text-2);
+    }
+    .quick-relation-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(140px, .8fr);
+      gap: 8px;
+    }
+    .quick-relation-toolbar .env-switcher,
+    .quick-relation-toolbar .field-input { min-height: 36px; }
+    .quick-sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
     }
     .relation-disabled { opacity: .72; }
     .relation-disabled .action-btn { cursor: not-allowed; }
@@ -1209,6 +1521,14 @@
     }
     .lookup-teacher-item .list-item-actions { padding-top: 1px; }
 
+    @media (prefers-reduced-motion: reduce) {
+      .quick-mode-panel,
+      .quick-recent-row,
+      .quick-stage,
+      .quick-action-btn,
+      .quick-recent-action { animation: none; transition: none; }
+    }
+
     /* Chrome 侧边栏可由用户拖动宽度，窄宽度下保持表单可读且不横向溢出。 */
     @media (max-width: 380px) {
       .app-header { padding: 16px 14px 48px; }
@@ -1227,6 +1547,14 @@
       .section-content { padding-right: 12px; padding-left: 12px; }
       .teacher-search-row { flex-direction: column; }
       .teacher-lookup-toolbar { grid-template-columns: minmax(0, 1fr); }
+      .quick-env-row,
+      .quick-field-grid,
+      .quick-field-grid.equal,
+      .quick-relation-toolbar,
+      .quick-stage-summary { grid-template-columns: minmax(0, 1fr); }
+      .quick-stage-summary .quick-secondary-btn { justify-self: start; }
+      .quick-summary-actions { grid-column: 1; justify-content: flex-start; }
+      .quick-recent-row .recent-item-actions { justify-content: flex-start; }
     }
 
     .hidden { display: none !important; }
@@ -1397,13 +1725,13 @@
     <div class="panel" id="panel-quick">
 
       <div class="section-block expanded" id="quickLoginSection">
-        <div class="section-header" id="quickLoginHeader">
+        <div class="section-header quick-section-toggle" id="quickLoginHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="quickLoginBody">
           <div class="section-header-left">
             <div class="section-icon mint">⚡</div>
             <span class="section-header-title">一键快捷登录</span>
           </div>
           <div class="section-header-right">
-            <span class="badge warning" id="envBadge">AI平台 · 线上</span>
+            <span class="badge quick-env-badge warning" id="envBadge">AI平台 · 线上</span>
             <div class="chevron">▼</div>
           </div>
         </div>
@@ -1411,143 +1739,213 @@
         <div class="collapsible-body" id="quickLoginBody">
           <div class="section-content">
 
-            <label class="field-label">环境</label>
-            <div class="field">
-              <div class="env-switcher">
-                <button class="env-btn active" id="envOnlineBtn" type="button">线上</button>
-                <button class="env-btn" id="envDevBtn" type="button">开发</button>
+            <div class="quick-context">
+              <div class="quick-target-row">
+                <span class="quick-target-label">目标环境</span>
+                <span class="badge quick-env-badge warning" id="targetEnvBadge">AI平台 · 线上</span>
               </div>
-            </div>
-
-            <div class="field hidden" id="portField">
-              <label class="field-label" style="margin-top:4px">开发端口</label>
-              <input class="field-input" id="localPort" type="text" autocomplete="off"
-                placeholder="默认 8088">
-            </div>
-
-            <div class="quick-target-row"><span class="quick-target-label">目标环境</span><span class="badge warning" id="targetEnvBadge">AI平台 · 线上</span></div>
-            <div class="quick-api-note">后台/API 来源：gpt-admin-pre.hwzxs.com · AI token 仅在当前会话内使用 · 开发环境只切换打开目标</div>
-
-            <div class="quick-mode-switcher">
-              <button class="env-btn active" id="modeTeacherBtn" type="button">教师查学生</button>
-              <button class="env-btn" id="modeStudentBtn" type="button">学生查教师</button>
-            </div>
-
-            <div id="teacherModePanel" class="quick-mode-panel">
-            <div class="divider"></div>
-
-            <label class="field-label">选择租户</label>
-            <div class="field">
-              <input class="field-input" id="tenantSearch" type="text" autocomplete="off"
-                placeholder="搜索租户名称 / 域名 / 联系人">
-              <div class="list hidden" id="tenantList"></div>
-              <div class="list-empty hidden" id="tenantEmpty">未找到租户</div>
-            </div>
-
-            <!-- dept — kept hidden by JS, id preserved -->
-            <div class="field" style="display:none;">
-              <label class="field-label" style="margin-top:0">部门筛选</label>
-              <select class="field-input" id="deptSelect">
-                <option value="">全部部门</option>
-              </select>
-            </div>
-
-            <label class="field-label">搜索用户</label>
-            <div class="field">
-              <input class="field-input" id="userSearch" type="text" autocomplete="off"
-                placeholder="姓名 / 手机号">
-            </div>
-
-            <div class="list hidden" id="userList"></div>
-            <div class="list-empty hidden" id="userEmpty">未找到用户</div>
-            <div class="pager hidden" id="userPager"></div>
-
-            <div class="divider"></div>
-
-            <!-- ═══ 选中用户（教师列表 + 学生列表） ═══ -->
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
-              <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);">教师列表</div>
-              <button class="btn btn-ghost" id="teacherRefreshBtn" style="padding:4px 8px;font-size:11px;min-height:auto;">刷新</button>
-            </div>
-            <div class="field" style="margin-bottom:8px;">
-              <div class="teacher-search-row">
-                <input class="field-input" id="teacherNameSearch" type="text" autocomplete="off" placeholder="姓名">
-                <input class="field-input" id="teacherAccountSearch" type="text" autocomplete="off" placeholder="账号">
-              </div>
-            </div>
-            <div class="list hidden" id="teacherList"></div>
-            <div class="list-empty" id="teacherEmpty">选中用户后可加载教师列表</div>
-            <div class="pager hidden" id="teacherPager"></div>
-
-            <!-- 学生子列表：选中教师后展示 -->
-            <div class="student-section hidden" id="studentSection">
-              <div class="divider"></div>
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
-                <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);" id="studentSectionTitle">学生列表</div>
-                <button class="btn btn-ghost" id="studentRefreshBtn" style="padding:4px 8px;font-size:11px;min-height:auto;">刷新</button>
-              </div>
-              <div class="teacher-duties hidden" id="teacherDuties" style="margin-bottom:6px;"></div>
-              <div class="field" style="margin-bottom:8px;">
-                <div class="teacher-search-row">
-                  <input class="field-input" id="studentNameSearch" type="text" autocomplete="off" placeholder="姓名">
-                  <input class="field-input" id="studentCodeSearch" type="text" autocomplete="off" placeholder="学号">
+              <div class="quick-env-row">
+                <div class="field">
+                  <span class="quick-label" id="quickEnvLabel">环境</span>
+                  <div class="env-switcher" role="group" aria-labelledby="quickEnvLabel">
+                    <button class="env-btn active" id="envOnlineBtn" type="button">线上</button>
+                    <button class="env-btn" id="envDevBtn" type="button">开发</button>
+                  </div>
+                </div>
+                <div class="field hidden" id="portField">
+                  <label class="quick-label" for="localPort">开发端口</label>
+                  <input class="field-input" id="localPort" type="text" autocomplete="off" placeholder="默认 8088">
                 </div>
               </div>
-              <div class="list hidden" id="studentList"></div>
-              <div class="list-empty" id="studentEmpty">选择教师后加载学生列表</div>
-              <div class="pager hidden" id="studentPager"></div>
+              <div class="quick-api-note">后台/API 来源：gpt-admin-pre.hwzxs.com · AI token 仅在当前会话内使用 · 开发环境只切换打开目标</div>
+              <div class="quick-auth-notice" id="quickAuthNotice" data-kind="loading" role="status" aria-live="polite">正在检查后台 Token...</div>
+              <div class="quick-action-status" id="quickActionStatus" role="status" aria-live="polite"></div>
             </div>
 
-            </div><!-- /teacherModePanel -->
+            <section class="quick-recent-section" aria-labelledby="quickRecentHeading">
+              <div class="quick-section-heading">
+                <h3 class="quick-section-title" id="quickRecentHeading">最近登录</h3>
+                <span class="quick-stage-status" id="quickRecentCount">0 条</span>
+              </div>
+              <div class="recent-list quick-recent-list" id="recentList" aria-live="polite">
+                <div class="recent-empty">正在读取最近登录...</div>
+              </div>
+            </section>
 
-            <div id="studentModePanel" class="quick-mode-panel hidden">
-              <div class="quick-flow-step">
-                <span class="quick-step-number">1</span>
-                <div>
-                  <div class="quick-subhead">搜索学生账号</div>
-                  <div class="teacher-search-row">
+            <div class="quick-mode-switcher" role="tablist" aria-label="查询任务">
+              <button class="env-btn active" id="modeTeacherBtn" type="button" role="tab" aria-controls="teacherModePanel">教师查学生</button>
+              <button class="env-btn" id="modeStudentBtn" type="button" role="tab" aria-controls="studentModePanel">学生查教师</button>
+            </div>
+
+            <div id="teacherModePanel" class="quick-mode-panel" role="tabpanel" aria-labelledby="modeTeacherBtn">
+              <section class="quick-stage" id="teacherTenantStep">
+                <div class="quick-stage-header">
+                  <h3 class="quick-stage-title">选择租户</h3>
+                  <span class="quick-stage-status" id="teacherTenantState">当前</span>
+                </div>
+                <div class="quick-stage-summary hidden" id="teacherTenantSummary">
+                  <div class="quick-summary-copy">
+                    <div class="quick-summary-title" id="teacherTenantSummaryTitle"></div>
+                    <div class="quick-summary-meta" id="teacherTenantSummaryMeta"></div>
+                  </div>
+                  <button class="btn btn-ghost quick-secondary-btn" id="changeTeacherTenantBtn" type="button">更换</button>
+                </div>
+                <div class="quick-stage-body" id="teacherTenantStepBody">
+                  <label class="quick-label" for="tenantSearch">租户</label>
+                  <input class="field-input" id="tenantSearch" type="text" autocomplete="off" placeholder="搜索租户名称 / 域名 / 联系人">
+                  <div class="quick-inline-status" id="tenantSearchStatus" role="status" aria-live="polite"></div>
+                  <div class="list hidden" id="tenantList" role="list"></div>
+                  <div class="list-empty hidden" id="tenantEmpty">请输入租户条件</div>
+                  <div class="hidden" aria-hidden="true">
+                    <label for="deptSelect">部门筛选</label>
+                    <select class="field-input" id="deptSelect"><option value="">全部部门</option></select>
+                  </div>
+                </div>
+              </section>
+
+              <section class="quick-stage hidden" id="teacherUserStep">
+                <div class="quick-stage-header">
+                  <h3 class="quick-stage-title">选择账号</h3>
+                  <span class="quick-stage-status" id="teacherUserState">待选择</span>
+                </div>
+                <div class="quick-stage-summary hidden" id="teacherUserSummary">
+                  <div class="quick-summary-copy">
+                    <div class="quick-summary-title" id="teacherUserSummaryTitle"></div>
+                    <div class="quick-summary-meta" id="teacherUserSummaryMeta"></div>
+                  </div>
+                  <button class="btn btn-ghost quick-secondary-btn" id="changeTeacherUserBtn" type="button">更换</button>
+                  <div class="quick-summary-actions" id="teacherUserSummaryActions"></div>
+                </div>
+                <div class="quick-stage-body" id="teacherUserStepBody">
+                  <label class="quick-label" for="userSearch">租户用户</label>
+                  <input class="field-input" id="userSearch" type="text" autocomplete="off" placeholder="姓名 / 手机号">
+                  <div class="quick-inline-status" id="teacherSessionStatus" role="status" aria-live="polite"></div>
+                  <div class="list hidden" id="userList" role="list"></div>
+                  <div class="list-empty" id="userEmpty">先选择租户</div>
+                  <div class="pager hidden" id="userPager" aria-label="租户用户分页"></div>
+                </div>
+              </section>
+
+              <section class="quick-stage hidden" id="teacherIdentityStep">
+                <div class="quick-stage-header">
+                  <h3 class="quick-stage-title">选择 AI 教师</h3>
+                  <span class="quick-stage-status" id="teacherIdentityState">待选择</span>
+                </div>
+                <div class="quick-stage-summary hidden" id="teacherIdentitySummary">
+                  <div class="quick-summary-copy">
+                    <div class="quick-summary-title" id="teacherIdentitySummaryTitle"></div>
+                    <div class="quick-summary-meta" id="teacherIdentitySummaryMeta"></div>
+                  </div>
+                  <button class="btn btn-ghost quick-secondary-btn" id="changeTeacherIdentityBtn" type="button">更换</button>
+                </div>
+                <div class="quick-stage-body" id="teacherIdentityStepBody">
+                  <div class="quick-subhead-row">
+                    <span class="quick-label">教师筛选</span>
+                    <button class="btn btn-ghost quick-secondary-btn" id="teacherRefreshBtn" type="button">刷新</button>
+                  </div>
+                  <div class="quick-field-grid equal">
+                    <label class="quick-sr-only" for="teacherNameSearch">教师姓名</label>
+                    <input class="field-input" id="teacherNameSearch" type="text" autocomplete="off" placeholder="姓名">
+                    <label class="quick-sr-only" for="teacherAccountSearch">教师账号</label>
+                    <input class="field-input" id="teacherAccountSearch" type="text" autocomplete="off" placeholder="账号">
+                  </div>
+                  <div class="list hidden" id="teacherList" role="list"></div>
+                  <div class="list-empty" id="teacherEmpty">选择租户用户后加载教师</div>
+                  <div class="pager hidden" id="teacherPager" aria-label="AI 教师分页"></div>
+                </div>
+              </section>
+
+              <section class="quick-stage student-section hidden" id="studentSection">
+                <div class="quick-stage-header">
+                  <h3 class="quick-stage-title" id="studentSectionTitle">相关学生</h3>
+                  <button class="btn btn-ghost quick-secondary-btn" id="studentRefreshBtn" type="button">刷新</button>
+                </div>
+                <div class="quick-stage-body">
+                  <div class="teacher-duties hidden" id="teacherDuties"></div>
+                  <div class="quick-field-grid equal">
+                    <label class="quick-sr-only" for="studentNameSearch">学生姓名</label>
+                    <input class="field-input" id="studentNameSearch" type="text" autocomplete="off" placeholder="姓名">
+                    <label class="quick-sr-only" for="studentCodeSearch">学生学号</label>
+                    <input class="field-input" id="studentCodeSearch" type="text" autocomplete="off" placeholder="学号">
+                  </div>
+                  <div class="list hidden" id="studentList" role="list"></div>
+                  <div class="list-empty" id="studentEmpty">选择 AI 教师后加载相关学生</div>
+                  <div class="pager hidden" id="studentPager" aria-label="相关学生分页"></div>
+                </div>
+              </section>
+            </div>
+
+            <div id="studentModePanel" class="quick-mode-panel hidden" role="tabpanel" aria-labelledby="modeStudentBtn">
+              <section class="quick-stage" id="studentAccountStep">
+                <div class="quick-stage-header">
+                  <h3 class="quick-stage-title">搜索学生账号</h3>
+                  <span class="quick-stage-status" id="studentAccountState">当前</span>
+                </div>
+                <div class="quick-stage-summary hidden" id="studentAccountSummary">
+                  <div class="quick-summary-copy">
+                    <div class="quick-summary-title" id="studentAccountSummaryTitle"></div>
+                    <div class="quick-summary-meta" id="studentAccountSummaryMeta"></div>
+                  </div>
+                  <button class="btn btn-ghost quick-secondary-btn" id="changeStudentAccountBtn" type="button">更换</button>
+                  <div class="quick-summary-actions" id="studentAccountSummaryActions"></div>
+                </div>
+                <div class="quick-stage-body" id="studentAccountStepBody">
+                  <div class="quick-field-grid">
+                    <label class="quick-sr-only" for="accountSearchField">学生账号搜索字段</label>
                     <select class="field-input" id="accountSearchField">
                       <option value="username">姓名</option>
                       <option value="account">账号</option>
                       <option value="tenantName">租户</option>
                     </select>
+                    <label class="quick-sr-only" for="accountSearch">学生账号搜索内容</label>
                     <input class="field-input" id="accountSearch" type="text" autocomplete="off" placeholder="输入学生姓名">
                   </div>
-                  <div class="list hidden" id="accountList"></div>
+                  <div class="quick-inline-status" id="accountSessionStatus" role="status" aria-live="polite"></div>
+                  <div class="list hidden" id="accountList" role="list"></div>
                   <div class="list-empty" id="accountEmpty">请输入学生姓名、账号或租户</div>
-                  <div class="pager hidden" id="accountPager"></div>
+                  <div class="pager hidden" id="accountPager" aria-label="学生账号分页"></div>
                 </div>
-              </div>
-              <div class="quick-flow-step hidden" id="studentRelationPanel">
-                <span class="quick-step-number">2</span>
-                <div>
-                  <div class="quick-subhead-row"><div class="quick-subhead">学生关联教师</div><button class="btn btn-ghost compact" id="studentRelationRefreshBtn" type="button">刷新</button></div>
-                  <div class="teacher-lookup-toolbar">
-                    <div class="env-switcher">
+              </section>
+
+              <section class="quick-stage hidden" id="studentRelationPanel">
+                <div class="quick-stage-header">
+                  <h3 class="quick-stage-title">学生关联教师</h3>
+                  <button class="btn btn-ghost quick-secondary-btn" id="studentRelationRefreshBtn" type="button">刷新</button>
+                </div>
+                <div class="quick-stage-body">
+                  <div class="quick-relation-toolbar">
+                    <div class="env-switcher" role="group" aria-label="关联查询方式">
                       <button class="env-btn active" id="lookupByStudentBtn" type="button">按学生</button>
                       <button class="env-btn" id="lookupByClassBtn" type="button">按班级</button>
                     </div>
+                    <label class="quick-sr-only" for="teacherLookupSemesterSelect">学期</label>
                     <select class="field-input" id="teacherLookupSemesterSelect" disabled><option value="">选择学期</option></select>
                   </div>
-                  <div class="quick-session-note" id="studentSessionNote"></div>
-                  <div id="lookupStudentPanel">
-                    <div class="list hidden" id="lookupStudentList"></div>
-                    <div class="list-empty hidden" id="lookupStudentEmpty">正在匹配 AI 学生</div>
-                    <div class="pager hidden" id="lookupStudentPager"></div>
+                  <div class="quick-session-note" id="studentSessionNote" role="status" aria-live="polite"></div>
+                  <div class="quick-stage-summary hidden" id="relationSelectionSummary">
+                    <div class="quick-summary-copy">
+                      <div class="quick-summary-title" id="relationSelectionSummaryTitle"></div>
+                      <div class="quick-summary-meta" id="relationSelectionSummaryMeta"></div>
+                    </div>
+                    <button class="btn btn-ghost quick-secondary-btn" id="changeRelationSelectionBtn" type="button">更换</button>
                   </div>
-                  <div class="hidden" id="lookupClassPanel"><select class="field-input" id="lookupClassSelect"><option value="">选择班级</option></select></div>
-                  <div class="teacher-lookup-result-head hidden" id="lookupTeacherResultHead"><span id="lookupTeacherResultTitle"></span><span class="teacher-lookup-result-count" id="lookupTeacherResultCount"></span></div>
-                  <div class="list hidden" id="lookupTeacherList"></div>
+                  <div id="lookupStudentPanel">
+                    <div class="list hidden" id="lookupStudentList" role="list"></div>
+                    <div class="list-empty hidden" id="lookupStudentEmpty">正在匹配 AI 学生</div>
+                    <div class="pager hidden" id="lookupStudentPager" aria-label="匹配学生分页"></div>
+                  </div>
+                  <div class="hidden" id="lookupClassPanel">
+                    <label class="quick-sr-only" for="lookupClassSelect">班级</label>
+                    <select class="field-input" id="lookupClassSelect"><option value="">选择班级</option></select>
+                  </div>
+                  <div class="teacher-lookup-result-head hidden" id="lookupTeacherResultHead">
+                    <span id="lookupTeacherResultTitle"></span>
+                    <span class="teacher-lookup-result-count" id="lookupTeacherResultCount"></span>
+                  </div>
+                  <div class="list hidden" id="lookupTeacherList" role="list"></div>
                   <div class="list-empty hidden" id="lookupTeacherEmpty">请选择学生或班级</div>
                 </div>
-              </div>
-            </div><!-- /studentModePanel -->
-
-            <div class="divider"></div>
-
-            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);margin-bottom:6px;">最近登录</div>
-            <div class="recent-list" id="recentList">
-              <div class="recent-empty">暂无最近登录记录</div>
+              </section>
             </div>
 
           </div>

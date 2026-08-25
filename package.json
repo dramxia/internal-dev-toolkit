@@ -7,7 +7,7 @@
     "icons": "node scripts/gen-icons.js",
     "build": "node scripts/build.js",
     "check": "npm run build && node --check content.js && node --check popup.js && node --check background.js && node -e \"JSON.parse(require('fs').readFileSync('manifest.json','utf8'))\"",
-    "test": "node tests/mock-panel-toggle.test.js && node tests/mock-conflict-resolution.test.js && node tests/mock-captured-delete.test.js && node tests/tenant-class-teacher.test.js && node tests/messages.test.js && node tests/project-feature-navigation.test.js && node tests/side-panel.test.js",
+    "test": "node tests/quick-login-state.test.js && node tests/quick-login-ui.test.js && node tests/quick-login-recent.test.js && node tests/mock-panel-toggle.test.js && node tests/mock-conflict-resolution.test.js && node tests/mock-captured-delete.test.js && node tests/tenant-class-teacher.test.js && node tests/messages.test.js && node tests/project-feature-navigation.test.js && node tests/side-panel.test.js",
     "test-server": "node test-server.js"
   },
   "keywords": [

@@ -1,0 +1,9 @@
+{
+  "commands": [
+    {
+      "name": "打包",
+      "command": "p build",
+      "cwd": "${pwd}"
+    }
+  ]
+}

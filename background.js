@@ -2489,29 +2489,70 @@ if (typeof module !== 'undefined' && module.exports) {
     return env === 'local' || env === 'dev' ? 'local' : 'online';
   }
 
-  function normalizePort(env, localPort) {
-    if (normalizeEnv(env) !== 'local') return '';
-    const raw = String(localPort || '').trim();
-    if (!/^\d+$/.test(raw)) return '8088';
+  function validLocalPort(value) {
+    const raw = String(value || '').trim();
+    if (!/^\d+$/.test(raw)) return '';
     const n = Number.parseInt(raw, 10);
-    return Number.isInteger(n) && n >= 1 && n <= 65535 ? String(n) : '8088';
+    return Number.isInteger(n) && n >= 1 && n <= 65535 ? String(n) : '';
+  }
+
+  function normalizeLocalPort(value, fallback = '8088') {
+    return validLocalPort(value) || validLocalPort(fallback) || '8088';
+  }
+
+  function normalizePort(env, localPort) {
+    return normalizeEnv(env) === 'local' ? normalizeLocalPort(localPort) : validLocalPort(localPort);
+  }
+
+  function recentIdentityKey(record = {}) {
+    return [
+      String(record.tenantId || ''),
+      String(record.id || ''),
+      record.role === 'student' ? 'student' : 'teacher',
+    ].join('|');
+  }
+
+  function sameRecentIdentity(left = {}, right = {}) {
+    return recentIdentityKey(left) === recentIdentityKey(right);
   }
 
   // 最近记录只保存可重新定位用户所需的元数据；兼容清理旧版本可能落盘的 token/url。
-  function normalizeRecentRecord(record = {}) {
+  function normalizeRecentRecord(record = {}, fallbackLocalPort = '8088') {
     const metadata = {};
     Object.entries(record || {}).forEach(([key, value]) => {
       // 兼容清理旧版本可能保存的各种凭据、URL、响应或会话字段，避免只依赖固定字段名。
       if (/(token|authorization|jwt|password|secret|url|origin|session)/i.test(key)) return;
       metadata[key] = value;
     });
-    const normalized = {
+    return {
       ...metadata,
       env: normalizeEnv(metadata.env),
-      localPort: normalizePort(metadata.env, metadata.localPort),
+      // 环境切换是每条记录的 UI 状态。即使当前为线上，也保留最近一次有效本地端口。
+      localPort: normalizeLocalPort(metadata.localPort, fallbackLocalPort),
       role: metadata.role === 'student' ? 'student' : 'teacher',
     };
-    return normalized;
+  }
+
+  function compactRecentRecords(records = []) {
+    const source = Array.isArray(records) ? records : [];
+    const localPorts = new Map();
+    source.forEach((record) => {
+      const normalized = normalizeRecentRecord(record);
+      const explicitPort = validLocalPort(record?.localPort);
+      const key = recentIdentityKey(normalized);
+      if (explicitPort && !localPorts.has(key)) localPorts.set(key, explicitPort);
+    });
+
+    const seen = new Set();
+    const compacted = [];
+    source.forEach((record) => {
+      const initial = normalizeRecentRecord(record);
+      const key = recentIdentityKey(initial);
+      if (seen.has(key)) return;
+      seen.add(key);
+      compacted.push(normalizeRecentRecord(record, localPorts.get(key)));
+    });
+    return compacted.slice(0, MAX_RECENT);
   }
 
   async function getStorageKey() {
@@ -2606,16 +2647,12 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!item) return;
     const key = await getStorageKey();
     const records = await getRecent();
-    const normalizedItem = normalizeRecentRecord(item);
+    const initial = normalizeRecentRecord(item);
+    const previous = records.find((record) => sameRecentIdentity(record, initial));
+    const normalizedItem = normalizeRecentRecord(item, previous?.localPort);
     const next = [
       { ...normalizedItem, at: Date.now() },
-      ...records.filter((r) => {
-        // 同一租户+用户，但环境不同（线上 vs 本地，或本地不同端口），视为不同记录
-        const sameUser = String(r.tenantId) === String(normalizedItem.tenantId) && String(r.id) === String(normalizedItem.id) && (r.role || 'teacher') === normalizedItem.role;
-        if (!sameUser) return true;
-        const sameEnv = normalizeEnv(r.env) === normalizedItem.env && normalizePort(r.env, r.localPort) === normalizedItem.localPort;
-        return !sameEnv;
-      }),
+      ...records.filter((record) => !sameRecentIdentity(record, normalizedItem)),
     ].slice(0, MAX_RECENT);
     return new Promise((resolve, reject) => {
       chrome.storage.local.set({ [key]: next }, () => {
@@ -2630,26 +2667,24 @@ if (typeof module !== 'undefined' && module.exports) {
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (items) => {
         const records = Array.isArray(items[key]) ? items[key] : [];
-        const cleaned = records.map(normalizeRecentRecord).slice(0, MAX_RECENT);
-        // 旧版本可能已保存 token；读取时立即覆盖为不含凭据的元数据记录。
+        const cleaned = compactRecentRecords(records);
+        // 读取时清理旧凭据，并把旧版按环境/端口拆分的同一身份合并成一条。
         if (JSON.stringify(cleaned) !== JSON.stringify(records)) {
-          chrome.storage.local.set({ [key]: cleaned }, () => {});
+          chrome.storage.local.set({ [key]: cleaned }, () => resolve(cleaned));
+          return;
         }
         resolve(cleaned);
       });
     });
   }
 
-  async function deleteRecent({ tenantId, id, env = 'online', localPort = '', role = '' } = {}) {
+  async function deleteRecent({ tenantId, id, role = '' } = {}) {
     const key = await getStorageKey();
     const records = await getRecent();
-    const normalizedEnv = normalizeEnv(env);
-    const normalizedPort = normalizePort(normalizedEnv, localPort);
-    const filtered = records.filter((r) => {
-      const sameIdentity = String(r.tenantId) === String(tenantId) && String(r.id) === String(id);
-      const sameTarget = normalizeEnv(r.env) === normalizedEnv && normalizePort(r.env, r.localPort) === normalizedPort;
-      const sameRole = !role || !r.role || r.role === role;
-      return !(sameIdentity && sameTarget && sameRole);
+    const filtered = records.filter((record) => {
+      const sameIdentity = String(record.tenantId) === String(tenantId) && String(record.id) === String(id);
+      const sameRole = !role || !record.role || record.role === role;
+      return !(sameIdentity && sameRole);
     });
     return new Promise((resolve, reject) => {
       chrome.storage.local.set({ [key]: filtered }, () => {
@@ -2660,6 +2695,17 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   ns.quickLogin = { quickLogin, resolveUserSession, openLoginUrl, getRecent, deleteRecent };
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      compactRecentRecords,
+      deleteRecent,
+      getRecent,
+      normalizeRecentRecord,
+      recentIdentityKey,
+      recordRecent,
+      sameRecentIdentity,
+    };
+  }
 })();
 
 
