@@ -1791,7 +1791,8 @@ if (typeof module !== 'undefined' && module.exports) {
         t.selectedUser = Object.assign({}, t.selectedUser, {
           origin: result.origin,
           aiToken: result.aiToken,
-          env: state.env,
+          env: normalizeEnv(t.selectedUser.env || targetEnv()),
+          localPort: normalizePort(t.selectedUser.localPort || state.devPort),
         });
         t.sessionError = '';
       }).catch((error) => {
@@ -2050,6 +2051,8 @@ if (typeof module !== 'undefined' && module.exports) {
       'data-industry="' + escapeHtml(meta.industry || '') + '"',
       'data-user-name="' + escapeHtml(meta.userName || '') + '"',
       'data-role="' + escapeHtml(meta.role || 'teacher') + '"',
+      'data-env="' + escapeHtml(meta.env ? normalizeEnv(meta.env) : '') + '"',
+      'data-local-port="' + escapeHtml(meta.localPort ? normalizePort(meta.localPort) : '') + '"',
     ].join(' ');
     const unavailable = disabled || state.adminTokenAvailable === false;
     const suffix = unavailable ? ' disabled aria-disabled="true"' : '';
@@ -2409,12 +2412,22 @@ if (typeof module !== 'undefined' && module.exports) {
     list.classList.remove('hidden');
     normalized.forEach((user) => {
       const selected = t.selectedUser?.id === user.id;
+      const env = targetEnv();
+      const localPort = normalizePort(state.devPort);
+      const displayName = user.userName || '(未命名)';
+      const avatarText = Array.from(String(user.userName || user.account || '?').trim())[0] || '?';
       const row = document.createElement('div');
-      row.className = 'list-item quick-action-row fade-in' + (selected ? ' active' : '');
-      row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="' + selected + '"' + (t.loadingSession ? ' disabled' : '') + '><span class="list-item-content"><span class="list-item-title">' +
-        escapeHtml(user.userName || '(未命名)') +
+      row.className = 'list-item quick-action-row quick-tenant-user-row fade-in' + (selected ? ' active' : '');
+      row.dataset.env = env;
+      row.dataset.localPort = localPort;
+      row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="' + selected + '"' + (t.loadingSession ? ' disabled' : '') + '>' +
+        '<span class="quick-user-avatar" aria-hidden="true">' + escapeHtml(avatarText.toUpperCase()) + '</span>' +
+        '<span class="list-item-content"><span class="list-item-title">' +
+        '<span class="quick-user-name">' + escapeHtml(displayName) + '</span>' +
         (user.roleName ? '<span class="list-item-role">' + escapeHtml(user.roleName) + '</span>' : '') +
         '</span><span class="list-item-meta">' + escapeHtml(user.account || user.phone || user.userId) + '</span></span></button>' +
+        '<div class="quick-user-toolbar">' +
+        tenantUserTargetControls(t.selectedTenant, user, env, localPort) +
         actionButtons({
           id: user.id,
           tenantId: t.selectedTenant.tenantId,
@@ -2423,8 +2436,12 @@ if (typeof module !== 'undefined' && module.exports) {
           industry: t.selectedTenant.industry,
           userName: user.userName,
           role: 'teacher',
-        }, !user.id || t.loadingSession);
+          env,
+          localPort,
+        }, !user.id || t.loadingSession) +
+        '</div>';
       row.querySelector('.quick-row-select')?.addEventListener('click', () => selectTeacherUser(user, row));
+      syncTenantUserRowTarget(row, env, localPort);
       list.appendChild(row);
     });
     buildPagerUI($('userPager'), t.userPage, (page) => {
@@ -2463,7 +2480,8 @@ if (typeof module !== 'undefined' && module.exports) {
         industry: t.selectedTenant.industry,
         origin: result.origin,
         aiToken: result.aiToken,
-        env: state.env,
+        env: normalizeEnv(row?.dataset.env || targetEnv()),
+        localPort: normalizePort(row?.dataset.localPort || state.devPort),
       };
       t.sessionError = '';
       t.loadingSession = false;
@@ -2922,6 +2940,8 @@ if (typeof module !== 'undefined' && module.exports) {
         industry: t.selectedUser.industry,
         userName: t.selectedUser.userName,
         role: 'teacher',
+        env: t.selectedUser.env,
+        localPort: t.selectedUser.localPort,
       }, false);
     } else {
       $('teacherUserSummaryActions').innerHTML = '';
@@ -3795,6 +3815,64 @@ if (typeof module !== 'undefined' && module.exports) {
     );
   }
 
+  function tenantUserTargetControls(selectedTenant, user, env, localPort) {
+    const online = env === 'online';
+    const label = (selectedTenant?.tenantName || '未知租户') + ' ' + (user.userName || user.id || '') + ' 登录环境';
+    return '<div class="quick-recent-target-controls quick-user-target-controls">' +
+      '<div class="quick-recent-env-switcher quick-user-env-switcher" role="group" aria-label="' + escapeHtml(label) + '">' +
+        '<button class="quick-recent-env-btn quick-user-env-btn' + (online ? ' active' : '') + '" type="button" data-user-env="online" aria-pressed="' + online + '">线上</button>' +
+        '<button class="quick-recent-env-btn quick-user-env-btn' + (!online ? ' active' : '') + '" type="button" data-user-env="local" aria-pressed="' + (!online) + '">本地</button>' +
+      '</div>' +
+      '<label class="quick-recent-port-field quick-user-port-field' + (online ? ' hidden' : '') + '"><span>端口</span>' +
+        '<input class="quick-recent-port quick-user-port" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="本地端口" value="' + escapeHtml(localPort) + '">' +
+      '</label>' +
+    '</div>';
+  }
+
+  function syncTenantUserRowTarget(row, env, localPort, syncInput = true) {
+    if (!row) return;
+    const normalizedEnv = normalizeEnv(env);
+    const normalizedPort = normalizePort(localPort);
+    row.dataset.env = normalizedEnv;
+    row.dataset.localPort = normalizedPort;
+    row.querySelectorAll('.quick-user-env-btn').forEach((button) => {
+      const active = button.dataset.userEnv === normalizedEnv;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    row.querySelector('.quick-user-port-field')?.classList.toggle('hidden', normalizedEnv !== 'local');
+    const input = row.querySelector('.quick-user-port');
+    if (input && syncInput) input.value = normalizedPort;
+    row.querySelectorAll('.action-btn').forEach((button) => {
+      button.dataset.env = normalizedEnv;
+      button.dataset.localPort = normalizedPort;
+      const baseLabel = button.dataset.baseLabel || button.getAttribute('aria-label') || '';
+      button.dataset.baseLabel = baseLabel;
+      const targetLabel = normalizedEnv === 'local' ? '本地端口 ' + normalizedPort : '线上';
+      const label = baseLabel + '（' + targetLabel + '）';
+      button.title = label;
+      button.setAttribute('aria-label', label);
+    });
+  }
+
+  function onTenantUserTargetClick(event) {
+    const envButton = event.target.closest('.quick-user-env-btn');
+    if (!envButton) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const row = envButton.closest('.quick-tenant-user-row');
+    const input = row?.querySelector('.quick-user-port');
+    syncTenantUserRowTarget(row, envButton.dataset.userEnv, input?.value || row?.dataset.localPort);
+  }
+
+  function onTenantUserPortInput(event, commit) {
+    const input = event.target.closest('.quick-user-port');
+    if (!input) return;
+    const row = input.closest('.quick-tenant-user-row');
+    if (!row) return;
+    syncTenantUserRowTarget(row, row.dataset.env, input.value, commit);
+  }
+
   function recentTargetControls(record, env, localPort) {
     const online = env === 'online';
     const label = (record.tenantName || '未知租户') + ' ' + (record.userName || record.id || '') + ' 登录环境';
@@ -4171,6 +4249,9 @@ if (typeof module !== 'undefined' && module.exports) {
     });
     $('studentAppSiteUrl')?.addEventListener('change', () => validateStudentAppSiteInput(true));
     $('quickLoginBody')?.addEventListener('click', onActionClick);
+    $('userList')?.addEventListener('click', onTenantUserTargetClick);
+    $('userList')?.addEventListener('input', (event) => onTenantUserPortInput(event, false));
+    $('userList')?.addEventListener('change', (event) => onTenantUserPortInput(event, true));
     $('recentList')?.addEventListener('click', onRecentClick);
     $('recentList')?.addEventListener('input', (event) => onRecentPortInput(event, false));
     $('recentList')?.addEventListener('change', (event) => onRecentPortInput(event, true));
