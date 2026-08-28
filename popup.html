@@ -1174,23 +1174,15 @@
     }
     .quick-context {
       display: grid;
-      gap: 8px;
-      padding: 10px 0 12px;
+      gap: 7px;
+      padding: 12px 0;
     }
-    .quick-target-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-    .quick-target-label,
     .quick-section-title,
     .quick-stage-title,
     .quick-label {
       color: var(--text-2);
       font-weight: 700;
     }
-    .quick-target-label,
     .quick-label { font-size: 11px; }
     .quick-env-row {
       display: grid;
@@ -1201,9 +1193,17 @@
     .quick-env-row .field { margin: 0; }
     .quick-env-row:has(#portField.hidden) { grid-template-columns: minmax(0, 1fr); }
     .quick-env-row .field-label { margin-top: 0; }
+    /* Token 状态与当前目标环境合并为一行元信息 */
+    .quick-context-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 26px;
+    }
     .quick-api-note {
-      color: var(--text-2);
-      font-size: 10.5px;
+      color: var(--text-3);
+      font-size: 10px;
       line-height: 1.45;
       overflow-wrap: anywhere;
     }
@@ -1227,23 +1227,37 @@
       font-size: 10.5px;
       line-height: 1.45;
     }
+    /* Token 状态压缩为带状态点的胶囊 */
     .quick-auth-notice {
-      min-height: 32px;
-      display: flex;
+      display: inline-flex;
       align-items: center;
-      padding: 7px 10px;
+      gap: 6px;
+      min-height: 0;
+      padding: 4px 10px;
       border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
+      border-radius: 999px;
       background: var(--sage-50);
       color: var(--sage-700);
+    }
+    .quick-auth-notice::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      flex: 0 0 6px;
+      border-radius: 50%;
+      background: currentColor;
     }
     .quick-auth-notice[data-kind="warning"] {
       border-color: rgba(217,119,6,.32);
       background: var(--warn-bg);
       color: #8a4a05;
     }
+    .quick-auth-notice[data-kind="loading"] { color: var(--text-2); }
     .quick-action-status {
       min-height: 18px;
+      padding: 3px 8px;
+      border-radius: var(--radius-sm);
+      background: var(--sage-50);
       color: var(--text-2);
     }
     .quick-action-status:empty { visibility: hidden; }
@@ -1252,7 +1266,7 @@
     .quick-session-note[data-kind="error"] { color: #b42318; }
     .quick-action-status[data-kind="success"] { color: var(--sage-700); }
     .quick-recent-section {
-      padding: 12px 0;
+      padding: 11px 0 13px;
       border-top: 1px solid var(--border);
       border-bottom: 1px solid var(--border);
     }
@@ -1269,6 +1283,7 @@
       font-size: 12px;
       letter-spacing: 0;
     }
+    /* 任务模式：主标签 + 副标题，与普通环境切换器拉开层级 */
     .quick-mode-switcher {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1279,33 +1294,86 @@
       background: var(--sage-100);
     }
     .quick-mode-switcher .env-btn {
-      min-height: 36px;
+      display: grid;
+      align-content: center;
+      gap: 1px;
+      min-height: 46px;
+      padding: 5px 4px;
       border: 1px solid transparent;
     }
     .quick-mode-switcher .env-btn.active { border-color: var(--border); }
-    .quick-mode-panel { animation: fadeIn .18s ease; }
+    .quick-mode-name { font-size: 12.5px; font-weight: 600; line-height: 1.2; }
+    .quick-mode-desc { font-size: 10px; font-weight: 400; color: var(--text-3); line-height: 1.3; }
+    .quick-mode-switcher .env-btn.active .quick-mode-desc { color: var(--sage-600); }
+    .quick-mode-panel { counter-reset: quick-step; animation: fadeIn .18s ease; }
+    /* 步骤 timeline：编号圆点 + 连接竖线；隐藏步骤不计数，完成态圆点变对勾 */
     .quick-stage {
-      padding: 12px 0;
+      counter-increment: quick-step;
+      position: relative;
+      padding: 11px 0 12px 30px;
       border-top: 1px solid var(--border);
     }
     .quick-mode-panel .quick-stage:first-child { border-top: 0; }
-    .quick-stage-header { min-height: 32px; }
+    .quick-stage::after {
+      content: '';
+      position: absolute;
+      left: 10px;
+      top: 34px;
+      bottom: 6px;
+      width: 2px;
+      border-radius: 2px;
+      background: var(--sage-200);
+    }
+    .quick-stage:last-child::after { display: none; }
+    .quick-stage-header { position: relative; min-height: 26px; }
+    .quick-stage-header::before {
+      content: counter(quick-step);
+      position: absolute;
+      left: -30px;
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: 2px solid var(--sage-500);
+      border-radius: 50%;
+      background: var(--panel);
+      color: var(--sage-700);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      z-index: 1;
+    }
+    .quick-stage.is-complete .quick-stage-header::before {
+      content: '✓';
+      background: var(--sage-500);
+      color: #fff;
+    }
     .quick-stage-status {
-      min-width: 50px;
+      flex-shrink: 0;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--sage-100);
       color: var(--text-2);
       font-size: 10px;
       font-weight: 600;
-      text-align: right;
+      text-align: center;
     }
-    .quick-stage.is-complete .quick-stage-status { color: var(--sage-700); }
+    .quick-stage.is-complete .quick-stage-status {
+      background: var(--success-bg);
+      color: var(--success);
+    }
     .quick-stage-summary {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px 12px;
+      gap: 6px 12px;
       align-items: center;
       margin-top: 8px;
-      padding: 9px 10px;
+      padding: 8px 10px;
       border-left: 3px solid var(--sage-400);
+      border-radius: var(--radius-sm);
       background: var(--sage-50);
     }
     .quick-summary-copy { min-width: 0; }
@@ -1335,9 +1403,21 @@
       gap: 8px;
       margin-top: 8px;
     }
+    /* APP 站点属于该步骤的前置配置，压缩为单行配置条而非表单字段 */
     .quick-app-site-field {
       display: grid;
-      gap: 6px;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+      padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      background: var(--sage-50);
+    }
+    .quick-app-site-field .quick-label { margin: 0; }
+    .quick-app-site-field .field-input {
+      min-height: 30px;
+      padding: 4px 10px;
+      font-size: 11.5px;
     }
     .quick-stage-body .list,
     .quick-stage-body .pager,
@@ -1425,7 +1505,7 @@
     }
     .quick-tenant-user-row {
       display: block;
-      padding: 11px 12px 10px;
+      padding: 8px 10px;
       cursor: default;
       background: var(--panel);
     }
@@ -1434,7 +1514,7 @@
     .quick-tenant-user-row .quick-row-select {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       width: 100%;
       padding: 0;
     }
@@ -1442,14 +1522,14 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 34px;
-      height: 34px;
-      flex: 0 0 34px;
+      width: 30px;
+      height: 30px;
+      flex: 0 0 30px;
       border: 1px solid var(--sage-200);
-      border-radius: 7px;
+      border-radius: 6px;
       background: var(--sage-100);
       color: var(--sage-700);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       line-height: 1;
       transition: background .18s ease, color .18s ease, border-color .18s ease;
@@ -1488,44 +1568,53 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    /* 工具栏与身份信息同行（左环境控件 / 右操作按钮），不额外占整行 */
     .quick-user-toolbar {
       display: grid;
-      grid-template-columns: minmax(112px, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) auto;
       align-items: center;
-      gap: 10px;
-      margin-top: 10px;
+      gap: 8px;
+      margin-top: 7px;
     }
     .quick-user-target-controls {
       min-width: 0;
       gap: 6px;
     }
     .quick-user-env-switcher {
-      min-width: 112px;
-      width: 112px;
-      grid-template-columns: repeat(2, minmax(48px, 1fr));
+      min-width: 0;
+      width: auto;
+      grid-template-columns: repeat(2, minmax(44px, 1fr));
+      gap: 2px;
       padding: 2px;
       background: var(--sage-50);
     }
     .quick-user-env-btn {
-      min-height: 28px;
+      min-height: 24px;
       padding: 0 7px;
+      font-size: 10.5px;
     }
     .quick-user-port-field { gap: 4px; }
     .quick-user-port {
-      width: 60px;
-      height: 32px;
-      padding: 5px 7px;
+      width: 56px;
+      height: 26px;
+      padding: 3px 6px;
+      font-size: 11px;
     }
     .quick-tenant-user-row .list-item-actions {
       width: auto;
       margin-left: 0;
       justify-content: flex-end;
-      gap: 5px;
+      gap: 4px;
     }
+    /* 行内操作按钮压到与环境控件同一档（26px） */
     .quick-user-toolbar .quick-action-btn {
-      width: 32px;
-      height: 32px;
-      flex-basis: 32px;
+      width: 26px;
+      height: 26px;
+      flex-basis: 26px;
+    }
+    .quick-user-toolbar .quick-action-btn svg {
+      width: 12px;
+      height: 12px;
     }
     .quick-action-btn,
     .quick-recent-action {
@@ -1538,28 +1627,46 @@
       height: 32px;
     }
     .quick-recent-list { margin-top: 6px; }
+    /* 最近登录两行网格：首行身份 + 登录主操作，次行环境切换 + 辅助操作 */
     .quick-recent-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 8px;
-      padding: 9px 0;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 5px 8px;
+      padding: 7px 6px;
       border: 0;
-      border-bottom: 1px solid var(--border);
-      border-radius: 0;
+      border-radius: var(--radius-sm);
       background: transparent;
     }
-    .quick-recent-row:last-of-type { border-bottom: 0; }
     .quick-recent-row:hover { background: var(--sage-50); }
+    .quick-recent-row .recent-item-info {
+      grid-column: 1;
+      grid-row: 1;
+      align-self: center;
+    }
+    .quick-recent-actions-main {
+      grid-column: 2;
+      grid-row: 1;
+      align-self: center;
+      justify-self: end;
+    }
+    .quick-recent-actions-aux {
+      grid-column: 2;
+      grid-row: 2;
+      align-self: center;
+      justify-self: end;
+    }
     .quick-recent-row .recent-item-text {
       flex-wrap: wrap;
-      margin-bottom: 2px;
+      margin-bottom: 1px;
       overflow-wrap: anywhere;
     }
     .quick-recent-target-controls {
+      grid-column: 1;
+      grid-row: 2;
       display: flex;
       align-items: center;
       flex-wrap: wrap;
-      gap: 8px;
+      gap: 6px;
       width: 100%;
     }
     .quick-recent-env-switcher {
@@ -1599,8 +1706,8 @@
     }
     .quick-recent-port {
       width: 72px;
-      height: 38px;
-      padding: 7px 8px;
+      height: 32px;
+      padding: 5px 8px;
       border: 1.5px solid var(--border);
       border-radius: var(--radius-sm);
       outline: 0;
@@ -1616,10 +1723,26 @@
     }
     .quick-recent-env-btn:focus-visible,
     .quick-recent-port:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 2px; }
-    .quick-recent-row .recent-item-actions {
-      width: 100%;
-      justify-content: flex-end;
-      gap: 6px;
+    .quick-recent-actions-main,
+    .quick-recent-actions-aux {
+      display: flex;
+      gap: 5px;
+    }
+    /* 最近登录按钮压缩一档，保证主操作与身份信息同排放得下 */
+    .quick-recent-row .quick-recent-action {
+      width: 30px;
+      height: 30px;
+      flex: 0 0 30px;
+    }
+    .quick-recent-action-apply {
+      background: var(--mint-50);
+      border-color: var(--mint-300);
+      color: var(--sage-700);
+    }
+    .quick-recent-action-apply:hover:not(:disabled) {
+      background: var(--mint-100);
+      border-color: var(--mint-400);
+      color: var(--sage-700);
     }
     .quick-recent-action-primary {
       background: var(--sage-500);
@@ -1711,13 +1834,19 @@
       .quick-field-grid,
       .quick-field-grid.equal,
       .quick-relation-toolbar,
-      .quick-stage-summary { grid-template-columns: minmax(0, 1fr); }
+      .quick-stage-summary,
+      .quick-recent-row { grid-template-columns: minmax(0, 1fr); }
       .quick-stage-summary .quick-secondary-btn { justify-self: start; }
       .quick-summary-actions { grid-column: 1; justify-content: flex-start; }
+      .quick-recent-actions-main,
+      .quick-recent-actions-aux {
+        grid-column: 1;
+        justify-self: stretch;
+      }
       .quick-user-toolbar { grid-template-columns: minmax(0, 1fr); }
       .quick-user-target-controls { width: 100%; }
-      .quick-tenant-user-row .list-item-actions,
-      .quick-recent-row .recent-item-actions { justify-content: flex-start; }
+      .quick-user-env-switcher { width: 100%; }
+      .quick-tenant-user-row .list-item-actions { justify-content: flex-start; }
     }
 
     .hidden { display: none !important; }
@@ -1903,13 +2032,9 @@
           <div class="section-content">
 
             <div class="quick-context">
-              <div class="quick-target-row">
-                <span class="quick-target-label">目标环境</span>
-                <span class="badge quick-env-badge warning" id="targetEnvBadge">AI平台 · 线上</span>
-              </div>
               <div class="quick-env-row">
                 <div class="field">
-                  <span class="quick-label" id="quickEnvLabel">环境</span>
+                  <span class="quick-label" id="quickEnvLabel">查询环境</span>
                   <div class="env-switcher" role="group" aria-labelledby="quickEnvLabel">
                     <button class="env-btn active" id="envOnlineBtn" type="button">线上</button>
                     <button class="env-btn" id="envDevBtn" type="button">开发</button>
@@ -1920,8 +2045,11 @@
                   <input class="field-input" id="localPort" type="text" autocomplete="off" placeholder="默认 8088">
                 </div>
               </div>
-              <div class="quick-api-note">后台/API 来源：gpt-admin-pre.hwzxs.com · AI token 仅在当前会话内使用 · 开发环境只切换打开目标</div>
-              <div class="quick-auth-notice" id="quickAuthNotice" data-kind="loading" role="status" aria-live="polite">正在检查后台 Token...</div>
+              <div class="quick-context-meta">
+                <div class="quick-auth-notice" id="quickAuthNotice" data-kind="loading" role="status" aria-live="polite">正在检查后台 Token...</div>
+                <span class="badge quick-env-badge warning" id="targetEnvBadge">AI平台 · 线上</span>
+              </div>
+              <div class="quick-api-note">AI 会话用后台 Token 静默建立；开发端口只改写打开地址，不切换查询来源</div>
               <div class="quick-action-status" id="quickActionStatus" role="status" aria-live="polite"></div>
             </div>
 
@@ -1936,8 +2064,14 @@
             </section>
 
             <div class="quick-mode-switcher" role="tablist" aria-label="查询任务">
-              <button class="env-btn active" id="modeTeacherBtn" type="button" role="tab" aria-controls="teacherModePanel">教师查学生</button>
-              <button class="env-btn" id="modeStudentBtn" type="button" role="tab" aria-controls="studentModePanel">学生查教师</button>
+              <button class="env-btn active" id="modeTeacherBtn" type="button" role="tab" aria-controls="teacherModePanel">
+                <span class="quick-mode-name">教师查学生</span>
+                <span class="quick-mode-desc">选老师，查他班里的学生</span>
+              </button>
+              <button class="env-btn" id="modeStudentBtn" type="button" role="tab" aria-controls="studentModePanel">
+                <span class="quick-mode-name">学生查教师</span>
+                <span class="quick-mode-desc">选学生，查班里的老师</span>
+              </button>
             </div>
 
             <div id="teacherModePanel" class="quick-mode-panel" role="tabpanel" aria-labelledby="modeTeacherBtn">

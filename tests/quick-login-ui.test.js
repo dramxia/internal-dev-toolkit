@@ -7,15 +7,20 @@ const popupHtml = fs.readFileSync(path.join(root, 'popup.html'), 'utf8');
 const quickUi = fs.readFileSync(path.join(root, 'src/popup/quick-login-ui.js'), 'utf8');
 const quickStateStorage = fs.readFileSync(path.join(root, 'src/common/quick-login-state.js'), 'utf8');
 const buildScript = fs.readFileSync(path.join(root, 'scripts/build.js'), 'utf8');
+const tenantModulePath = require.resolve('../src/common/tenant.js');
 const quickUiModulePath = require.resolve('../src/popup/quick-login-ui.js');
 const namespaceBeforeFormatTest = globalThis.InternalDevToolkit;
 globalThis.InternalDevToolkit = { tenant: {}, messages: {} };
+delete require.cache[tenantModulePath];
+require(tenantModulePath);
 const {
+  buildRecentTeacherSelection,
   buildStudentAppLoginPayload,
   buildStudentCredentialsText,
   normalizeAppSiteUrl,
 } = require(quickUiModulePath);
 delete require.cache[quickUiModulePath];
+delete require.cache[tenantModulePath];
 globalThis.InternalDevToolkit = namespaceBeforeFormatTest;
 
 const panelMatch = popupHtml.match(/<div class="panel" id="panel-quick">([\s\S]*?)<div class="panel" id="panel-other">/);
@@ -100,6 +105,12 @@ assert.match(panel, /id="relationSelectionSummary"/);
 assert.match(quickUi, /const DEFAULT_RECENT_VISIBLE = 3;/, '最近登录默认应只展示 3 条');
 assert.match(quickUi, /records = records\.slice\(0, 10\)/, '最近登录仍应限制为最多 10 条');
 assert.match(quickUi, /function recentTargetControls\([\s\S]*data-recent-env="online"[\s\S]*data-recent-env="local"/);
+assert.match(quickUi, /recentActionButton\('apply',[\s\S]*'应用到教师查学生'\)/, '最近登录项应渲染应用图标');
+assert.match(
+  quickUi,
+  /action === 'apply' && record\.role !== 'teacher'/,
+  '学生最近记录的应用图标应禁用',
+);
 assert.match(quickUi, /function syncRecentRowTarget\([\s\S]*button\.dataset\.env = normalizedEnv;[\s\S]*button\.dataset\.localPort = normalizedPort;/);
 assert.match(quickUi, /class="quick-recent-port"[^>]*inputmode="numeric"[^>]*autocomplete="off"/);
 assert.match(quickUi, /function tenantUserTargetControls\([\s\S]*data-user-env="online"[\s\S]*data-user-env="local"/);
@@ -123,7 +134,52 @@ const recentClickHandler = quickUi.match(/async function onRecentClick\(event\) 
 assert.ok(recentClickHandler, '应能提取最近登录点击处理器');
 assert.doesNotMatch(recentClickHandler[1], /state\.env\s*=|state\.mode\s*=|clearAllSessions\(\)/, '单条最近记录不得联动顶部环境或任务模式');
 assert.match(recentClickHandler[1], /syncRecentRowTarget\(row, envButton\.dataset\.recentEnv/);
+assert.match(recentClickHandler[1], /action === 'apply'[\s\S]*applyRecentToTeacherLookup\(meta, button/);
+assert.match(quickUi, /if \(t\.studentError\) throw new Error\(t\.studentError\)/, '学生查询失败不得被应用成功提示覆盖');
 assert.doesNotMatch(recentClickHandler[1], /DELETE_QUICK_LOGIN_RECENT[\s\S]*?env:\s*meta\.env/, '删除最近记录不应再按环境匹配');
+
+assert.deepEqual(
+  buildRecentTeacherSelection({
+    tenantId: 'tenant-139',
+    tenantName: '示例租户',
+    domain: 'tenant.example.test',
+    industry: 3,
+    id: 'login-user-7',
+    userName: '王老师',
+    role: 'teacher',
+    env: 'local',
+    localPort: '5173',
+  }),
+  {
+    selectedTenant: {
+      tenantId: 'tenant-139',
+      tenantName: '示例租户',
+      domain: 'tenant.example.test',
+      contactName: '',
+      contactPhone: '',
+      industry: 3,
+    },
+    selectedUser: {
+      id: 'login-user-7',
+      userId: '',
+      userName: '王老师',
+      phone: '',
+      account: '',
+      deptId: '',
+      deptName: '',
+      tenantId: 'tenant-139',
+      accessKey: '',
+      roleName: '',
+    },
+    env: 'local',
+    localPort: '5173',
+  },
+  '教师最近记录应恢复租户、账号和该记录自己的目标环境',
+);
+assert.throws(
+  () => buildRecentTeacherSelection({ tenantId: 'tenant-139', id: 'student-1', userName: '学生甲', role: 'student' }),
+  /仅教师最近记录可应用到教师查学生/,
+);
 
 function tagFor(id) {
   const match = panel.match(new RegExp(`<(?:input|select)\\b[^>]*\\bid="${id}"[^>]*>`));
@@ -179,12 +235,14 @@ assert.match(popupHtml, /\.quick-recent-env-switcher[\s\S]*grid-template-columns
 assert.match(popupHtml, /\.quick-recent-port\s*\{[\s\S]*width:\s*72px/);
 assert.match(popupHtml, /#userList\s*\{[\s\S]*max-height:\s*340px/);
 assert.match(popupHtml, /\.quick-tenant-user-row\s*\{[\s\S]*display:\s*block/);
-assert.match(popupHtml, /\.quick-user-avatar\s*\{[\s\S]*width:\s*34px[\s\S]*height:\s*34px/);
-assert.match(popupHtml, /\.quick-user-toolbar\s*\{[\s\S]*grid-template-columns: minmax\(112px, 1fr\) auto/);
+assert.match(popupHtml, /\.quick-user-avatar\s*\{[\s\S]*width:\s*30px[\s\S]*height:\s*30px/);
+assert.match(popupHtml, /\.quick-user-toolbar\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\) auto/);
 const quickUserToolbarStyles = popupHtml.match(/\.quick-user-toolbar\s*\{([^}]*)\}/);
 assert.ok(quickUserToolbarStyles, '应定义租户用户操作工具栏样式');
 assert.doesNotMatch(quickUserToolbarStyles[1], /border-top/, '租户用户项内部不应显示分割线');
-assert.match(popupHtml, /\.quick-user-port\s*\{[\s\S]*width:\s*60px[\s\S]*height:\s*32px/);
+assert.match(popupHtml, /\.quick-user-env-btn\s*\{[\s\S]*min-height:\s*24px/);
+assert.match(popupHtml, /\.quick-user-port\s*\{[\s\S]*width:\s*56px[\s\S]*height:\s*26px/);
+assert.match(popupHtml, /\.quick-user-toolbar \.quick-action-btn\s*\{[\s\S]*width:\s*26px[\s\S]*height:\s*26px/);
 assert.match(quickUi, /class="quick-user-avatar"[\s\S]*class="quick-user-toolbar"/);
 assert.match(popupHtml, /\.quick-tenant-user-row:hover\s*\{\s*background:\s*var\(--sage-50\)/);
 assert.match(popupHtml, /\.quick-tenant-user-row\.active:hover\s*\{\s*background:\s*var\(--sage-100\)/);
