@@ -1592,16 +1592,19 @@ if (typeof module !== 'undefined' && module.exports) {
   function renderAuthAvailability() {
     const notice = $('quickAuthNotice');
     if (!notice) return;
+    let text;
     if (state.adminTokenAvailable == null) {
-      notice.textContent = '正在检查后台 Token...';
+      text = '正在检查后台 Token...';
       notice.dataset.kind = 'loading';
     } else if (state.adminTokenAvailable) {
-      notice.textContent = '后台 Token 已就绪';
+      text = '后台 Token 已就绪';
       notice.dataset.kind = 'ready';
     } else {
-      notice.textContent = '需要后台 Token，请先在“后台账号”标签获取';
+      text = '需要后台 Token，请先在“后台账号”标签获取';
       notice.dataset.kind = 'warning';
     }
+    notice.textContent = text;
+    notice.title = text;
     const blocked = state.adminTokenAvailable === false;
     ['tenantSearch', 'accountSearchField', 'accountSearch'].forEach((id) => {
       const control = $(id);

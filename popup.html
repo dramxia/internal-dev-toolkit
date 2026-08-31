@@ -1177,8 +1177,7 @@
     }
     .quick-context {
       display: grid;
-      gap: 7px;
-      padding: 12px 0;
+      padding: 0;
     }
     .quick-section-title,
     .quick-stage-title,
@@ -1205,48 +1204,45 @@
       font-size: 10.5px;
       line-height: 1.45;
     }
-    /* Token 状态压缩为带状态点的胶囊 */
+    /* Token 是整个查询区的前置状态，放在标题栏并降低成功态的视觉权重。 */
     .quick-auth-notice {
       display: inline-flex;
       align-items: center;
-      justify-self: start;
-      gap: 6px;
+      gap: 5px;
+      max-width: 132px;
       min-height: 0;
-      padding: 4px 10px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      background: var(--sage-50);
-      color: var(--sage-700);
+      overflow: hidden;
+      color: var(--text-3);
+      font-weight: 500;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
     .quick-auth-notice::before {
       content: '';
-      width: 6px;
-      height: 6px;
-      flex: 0 0 6px;
+      width: 5px;
+      height: 5px;
+      flex: 0 0 5px;
       border-radius: 50%;
       background: currentColor;
     }
-    .quick-auth-notice[data-kind="warning"] {
-      border-color: rgba(217,119,6,.32);
-      background: var(--warn-bg);
-      color: #8a4a05;
-    }
-    .quick-auth-notice[data-kind="loading"] { color: var(--text-2); }
+    .quick-auth-notice[data-kind="warning"] { color: #8a4a05; }
+    .quick-auth-notice[data-kind="ready"] { color: var(--sage-600); }
+    .quick-auth-notice[data-kind="loading"] { color: var(--text-3); }
     .quick-action-status {
       min-height: 18px;
+      margin-top: 10px;
       padding: 3px 8px;
       border-radius: var(--radius-sm);
       background: var(--sage-50);
       color: var(--text-2);
     }
-    .quick-action-status:empty { visibility: hidden; }
+    .quick-action-status:empty { display: none; }
     .quick-action-status[data-kind="error"],
     .quick-inline-status[data-kind="error"],
     .quick-session-note[data-kind="error"] { color: #b42318; }
     .quick-action-status[data-kind="success"] { color: var(--sage-700); }
     .quick-recent-section {
       padding: 11px 0 13px;
-      border-top: 1px solid var(--border);
       border-bottom: 1px solid var(--border);
     }
     .quick-section-heading,
@@ -1822,6 +1818,7 @@
       .panels { padding-right: 10px; padding-left: 10px; }
       .section-header { padding-right: 12px; padding-left: 12px; }
       .section-content { padding-right: 12px; padding-left: 12px; }
+      .quick-auth-notice { max-width: 104px; }
       .teacher-search-row { flex-direction: column; }
       .teacher-lookup-toolbar { grid-template-columns: minmax(0, 1fr); }
       .quick-field-grid,
@@ -2016,6 +2013,7 @@
             <span class="section-header-title">师生关联查询</span>
           </div>
           <div class="section-header-right">
+            <div class="quick-auth-notice" id="quickAuthNotice" data-kind="loading" role="status" aria-live="polite">正在检查后台 Token...</div>
             <div class="chevron">▼</div>
           </div>
         </div>
@@ -2024,7 +2022,6 @@
           <div class="section-content">
 
             <div class="quick-context">
-              <div class="quick-auth-notice" id="quickAuthNotice" data-kind="loading" role="status" aria-live="polite">正在检查后台 Token...</div>
               <div class="quick-action-status" id="quickActionStatus" role="status" aria-live="polite"></div>
             </div>
 

@@ -268,6 +268,17 @@ assert.doesNotMatch(quickUi, /ns\.token\.saveToken/, 'quick UI 不得写入 admi
   '正在建立 AI 会话...', '正在获取登录链接...', '已选择', '读取失败',
 ].forEach((text) => assert.ok(popupHtml.includes(text) || quickUi.includes(text), `应覆盖状态文案：${text}`));
 assert.match(panel, /role="status" aria-live="polite"/);
+assert.match(
+  panel,
+  /section-header-right[\s\S]*id="quickAuthNotice"[\s\S]*class="chevron"[\s\S]*id="quickLoginBody"/,
+  '后台 Token 状态应位于查询区标题栏，避免打断主内容',
+);
+assert.doesNotMatch(
+  panel.match(/<div class="quick-context">([\s\S]*?)<\/div>/)?.[1] || '',
+  /quickAuthNotice/,
+  '主内容状态区不应重复展示后台 Token 成功标识',
+);
+assert.match(quickUi, /notice\.title = text;/, '窄屏截断 Token 状态时应保留完整提示');
 assert.match(panel, /role="tablist"/);
 assert.match(panel, /aria-controls="teacherModePanel"/);
 assert.match(popupHtml, /\.quick-list-button:focus-visible/);
