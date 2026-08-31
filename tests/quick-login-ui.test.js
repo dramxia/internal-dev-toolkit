@@ -14,10 +14,13 @@ globalThis.InternalDevToolkit = { tenant: {}, messages: {} };
 delete require.cache[tenantModulePath];
 require(tenantModulePath);
 const {
+  actionMeta,
   buildRecentTeacherSelection,
   buildStudentAppLoginPayload,
   buildStudentCredentialsText,
+  createPersistedState,
   normalizeAppSiteUrl,
+  state: quickUiState,
 } = require(quickUiModulePath);
 delete require.cache[quickUiModulePath];
 delete require.cache[tenantModulePath];
@@ -26,10 +29,12 @@ globalThis.InternalDevToolkit = namespaceBeforeFormatTest;
 const panelMatch = popupHtml.match(/<div class="panel" id="panel-quick">([\s\S]*?)<div class="panel" id="panel-other">/);
 assert.ok(panelMatch, '应能提取 #panel-quick 静态结构');
 const panel = panelMatch[1];
+assert.match(popupHtml, /data-tab="quick"[\s\S]*?师生查询[\s\S]*?<\/button>/, '快捷查询 Tab 应使用模块级名称“师生查询”');
+assert.match(panel, /section-header-title">师生关联查询<\/span>/, '快捷查询面板应使用能力名称“师生关联查询”');
+assert.doesNotMatch(popupHtml, />一键快捷登录<\//, '“一键快捷登录”不得继续作为模块标题');
 
 const legacyIds = [
-  'quickLoginSection', 'quickLoginHeader', 'envBadge', 'quickLoginBody',
-  'envOnlineBtn', 'envDevBtn', 'portField', 'localPort', 'targetEnvBadge',
+  'quickLoginSection', 'quickLoginHeader', 'quickLoginBody',
   'modeTeacherBtn', 'modeStudentBtn', 'teacherModePanel', 'tenantSearch',
   'tenantList', 'tenantEmpty', 'deptSelect', 'userSearch', 'userList',
   'userEmpty', 'userPager', 'teacherRefreshBtn', 'teacherNameSearch',
@@ -61,6 +66,17 @@ const required = requiredIds(quickUi);
 assert.equal(new Set(ids).size, ids.length, '#panel-quick 内不得出现重复 ID');
 assert.deepEqual([...required].sort(), [...ids].sort(), '静态结构应与 renderShell 校验契约完全一致');
 legacyIds.forEach((id) => assert.ok(ids.includes(id), `必须保留原有 DOM ID #${id}`));
+assert.doesNotMatch(panel, /查询环境|开发端口|id="(?:envBadge|targetEnvBadge|envOnlineBtn|envDevBtn|portField|localPort|quickEnvLabel)"/, '师生查询不得保留全局目标环境控件');
+assert.doesNotMatch(quickUi, /state\.(?:env|devPort)|function (?:targetEnv|switchEnv|updateEnvUI|updateEnvBadge|clearAllSessions)\b/, '目标环境不得再使用会清空查询会话的全局状态');
+const persistedStateBlock = quickUi.match(/function createPersistedState\(source = state\) \{([\s\S]*?)\n  \}\n\n  function restorePersistedState/);
+assert.ok(persistedStateBlock, '应能提取查询快照构建逻辑');
+assert.doesNotMatch(persistedStateBlock[1], /\benv:\s*source\.env|\bdevPort:/, '查询快照不得再保存全局环境和端口');
+assert.match(quickUi, /function actionMeta\([\s\S]*env: normalizeEnv\(button\.dataset\.env\)[\s\S]*localPort: normalizePort\(button\.dataset\.localPort\)/, '登录操作只能读取对应记录上的目标环境');
+const persistedWithoutGlobalTarget = createPersistedState(Object.assign({}, quickUiState, { env: 'dev', devPort: '5173' }));
+assert.equal(Object.hasOwn(persistedWithoutGlobalTarget, 'env'), false, '旧全局环境字段不得继续写入查询快照');
+assert.equal(Object.hasOwn(persistedWithoutGlobalTarget, 'devPort'), false, '旧全局端口字段不得继续写入查询快照');
+assert.equal(actionMeta({ dataset: {} }).env, 'online', '未设置记录级环境时应默认线上');
+assert.equal(actionMeta({ dataset: {} }).localPort, '8088', '未设置记录级端口时应保留本地默认端口');
 
 const renderShell = quickUi.match(/function renderShell\(\) \{([\s\S]*?)\n  \}\n\n  async function hasAdminToken/);
 assert.ok(renderShell, '应保留 renderShell 初始化入口');
@@ -113,49 +129,50 @@ assert.match(
 );
 assert.match(quickUi, /function syncRecentRowTarget\([\s\S]*button\.dataset\.env = normalizedEnv;[\s\S]*button\.dataset\.localPort = normalizedPort;/);
 assert.match(quickUi, /class="quick-recent-port"[^>]*inputmode="numeric"[^>]*autocomplete="off"/);
-assert.match(quickUi, /function tenantUserTargetControls\([\s\S]*data-user-env="online"[\s\S]*data-user-env="local"/);
+assert.match(quickUi, /function actionTargetControls\([\s\S]*data-target-env="online"[\s\S]*data-target-env="local"/);
 assert.match(quickUi, /class="quick-recent-port quick-user-port"[^>]*inputmode="numeric"[^>]*autocomplete="off"/);
 assert.match(
   quickUi,
-  /function renderTeacherUsers\([\s\S]*tenantUserTargetControls\(t\.selectedTenant, user, env, localPort\)[\s\S]*syncTenantUserRowTarget\(row, env, localPort\)/,
-  '租户用户列表每行都应渲染并同步独立环境开关',
+  /function renderTeacherUsers\([\s\S]*actionTargetControls\([\s\S]*syncActionTarget\(row, env, localPort\)/,
+  '教师账号列表每行都应渲染并同步独立环境开关',
 );
 assert.match(
   quickUi,
-  /function syncTenantUserRowTarget\([\s\S]*button\.dataset\.env = normalizedEnv;[\s\S]*button\.dataset\.localPort = normalizedPort/,
-  '租户用户行级环境应写入该行登录操作按钮',
-);
-const tenantUserTargetClick = quickUi.match(/function onTenantUserTargetClick\(event\) \{([\s\S]*?)\n  \}\n\n  function onTenantUserPortInput/);
-assert.ok(tenantUserTargetClick, '应能提取租户用户环境点击处理器');
-assert.match(tenantUserTargetClick[1], /syncTenantUserRowTarget\(row, envButton\.dataset\.userEnv/);
-assert.doesNotMatch(tenantUserTargetClick[1], /state\.env\s*=|clearAllSessions\(\)/, '租户用户行级切换不得联动顶部环境或清空会话');
-assert.match(quickUi, /\$\('userList'\)\?\.addEventListener\('click', onTenantUserTargetClick\)/);
-// 选中账号汇总条也必须保留行内环境切换：渲染 + 事件绑定 + 回写快照
-assert.match(
-  quickUi,
-  /\$\('teacherUserSummaryActions'\)\.innerHTML = '<div class="quick-summary-target">' \+\s*tenantUserTargetControls\(t\.selectedUser, t\.selectedUser, env, localPort\)/,
-  '选中账号后汇总条应继续渲染线上/本地切换',
+  /function renderAccountUsers\([\s\S]*quick-target-container[\s\S]*actionTargetControls\([\s\S]*syncActionTarget\(row, env, localPort\)/,
+  '学生账号列表每行都应渲染并同步独立环境开关',
 );
 assert.match(
   quickUi,
-  /actionButtons\(\{[\s\S]*?role: 'teacher',[\s\S]*?env,[\s\S]*?localPort,[\s\S]*?\}, false\);\s*syncTenantUserRowTarget\(\$\('teacherUserSummaryActions'\), env, localPort\)/,
-  '汇总条四个操作按钮应同步所选环境与端口',
+  /function renderStudentShell\([\s\S]*studentAccountSummaryActions[\s\S]*actionTargetControls\([\s\S]*syncActionTarget\(\$\('studentAccountSummaryActions'\), env, localPort\)/,
+  '学生账号汇总条应保留记录级环境开关',
 );
 assert.match(
   quickUi,
-  /\$\('teacherUserSummaryActions'\)\?\.addEventListener\('click', onTenantUserTargetClick\)/,
-  '汇总条环境切换应复用行级点击处理器',
+  /async function selectStudentAccount\([\s\S]*const env = normalizeEnv\(row\?\.dataset\.env\);[\s\S]*const localPort = normalizePort\(row\?\.dataset\.localPort\);[\s\S]*s\.selectedAccount = Object\.assign\(\{\}, account, \{ env, localPort \}\)/,
+  '选择学生账号时应把该行环境和端口写入选中记录',
 );
 assert.match(
   quickUi,
-  /closest\('\.quick-tenant-user-row, \.quick-summary-actions'\)/,
-  '环境切换处理器应同时支持列表行与汇总条',
+  /function renderRelationTeachers\([\s\S]*lookup-teacher-item quick-action-row quick-target-container[\s\S]*actionTargetControls\([\s\S]*syncActionTarget\(row, env, localPort\)/,
+  '关联教师列表每行都应渲染并同步独立环境开关',
 );
 assert.match(
   quickUi,
-  /function persistTeacherUserSummaryTarget\(container\) \{[\s\S]*?t\.selectedUser = Object\.assign\(\{\}, t\.selectedUser, \{[\s\S]*?env: normalizeEnv\(container\.dataset\.env\)/,
-  '汇总条切换环境应回写 selectedUser 以便持久化与重选沿用',
+  /function syncActionTarget\([\s\S]*button\.dataset\.env = normalizedEnv;[\s\S]*button\.dataset\.localPort = normalizedPort/,
+  '记录级环境应写入对应登录操作按钮',
 );
+const actionTargetClick = quickUi.match(/function onActionTargetClick\(event\) \{([\s\S]*?)\n  \}\n\n  function onActionTargetPortInput/);
+assert.ok(actionTargetClick, '应能提取记录级环境点击处理器');
+assert.match(actionTargetClick[1], /syncActionTarget\(container, envButton\.dataset\.targetEnv/);
+assert.doesNotMatch(actionTargetClick[1], /clearAllSessions\(\)|clearTeacherSession\(\)|clearStudentSession\(\)/, '记录级环境切换不得清空查询会话');
+assert.match(quickUi, /\$\('quickLoginBody'\)\?\.addEventListener\('click', onActionTargetClick\)/, '所有结果区域应统一委托记录级环境事件');
+assert.match(
+  quickUi,
+  /function persistSummaryTarget\(container\) \{[\s\S]*?#teacherUserSummary[\s\S]*?t\.selectedUser = Object\.assign[\s\S]*?#studentAccountSummary[\s\S]*?s\.selectedAccount = Object\.assign/,
+  '教师和学生汇总条的目标环境都应写回查询快照',
+);
+assert.match(panel, /class="quick-summary-actions quick-target-container" id="teacherUserSummaryActions"/);
+assert.match(panel, /class="quick-summary-actions quick-target-container" id="studentAccountSummaryActions"/);
 const recentClickHandler = quickUi.match(/async function onRecentClick\(event\) \{([\s\S]*?)\n  \}\n\n  \/\/ ── 事件绑定/);
 assert.ok(recentClickHandler, '应能提取最近登录点击处理器');
 assert.doesNotMatch(recentClickHandler[1], /state\.env\s*=|state\.mode\s*=|clearAllSessions\(\)/, '单条最近记录不得联动顶部环境或任务模式');
@@ -214,7 +231,7 @@ function tagFor(id) {
 }
 
 [
-  'localPort', 'tenantSearch', 'userSearch', 'teacherNameSearch',
+  'tenantSearch', 'userSearch', 'teacherNameSearch',
   'teacherAccountSearch', 'studentAppSiteUrl', 'studentNameSearch', 'studentCodeSearch', 'accountSearch',
 ].forEach((id) => {
   const tag = tagFor(id);
@@ -255,7 +272,7 @@ assert.match(panel, /role="tablist"/);
 assert.match(panel, /aria-controls="teacherModePanel"/);
 assert.match(popupHtml, /\.quick-list-button:focus-visible/);
 assert.match(popupHtml, /@media \(prefers-reduced-motion: reduce\)/);
-assert.match(popupHtml, /@media \(max-width: 380px\)[\s\S]*\.quick-env-row/);
+assert.doesNotMatch(popupHtml, /\.quick-env-row/, '全局查询环境布局样式应一并删除');
 assert.match(popupHtml, /\.quick-recent-row[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
 assert.match(popupHtml, /\.quick-recent-env-switcher[\s\S]*grid-template-columns: repeat\(2/);
 assert.match(popupHtml, /\.quick-recent-port\s*\{[\s\S]*width:\s*72px/);
@@ -278,7 +295,7 @@ assert.match(popupHtml, /\.quick-user-env-btn\s*\{[\s\S]*min-height:\s*24px/);
 assert.match(popupHtml, /\.quick-user-port\s*\{[\s\S]*width:\s*56px[\s\S]*height:\s*26px/);
 assert.match(popupHtml, /\.quick-user-toolbar \.quick-action-btn\s*\{[\s\S]*width:\s*26px[\s\S]*height:\s*26px/);
 assert.match(quickUi, /class="quick-user-avatar"[\s\S]*class="quick-user-toolbar"/);
-assert.match(quickUi, /<div class="quick-user-toolbar">' \+\s*tenantUserTargetControls[\s\S]*actionButtons\(/, '工具栏应紧跟环境控件与操作按钮');
+assert.match(quickUi, /<div class="quick-user-toolbar">' \+\s*actionTargetControls[\s\S]*actionButtons\(/, '工具栏应紧跟环境控件与操作按钮');
 assert.match(popupHtml, /\.quick-tenant-user-row:hover\s*\{\s*background:\s*var\(--sage-50\)/);
 assert.match(popupHtml, /\.quick-tenant-user-row\.active:hover\s*\{\s*background:\s*var\(--sage-100\)/);
 
@@ -577,8 +594,8 @@ async function testTenantUserRowRender() {
   assert.ok(toolbar, '行内应有工具栏');
   const envBtns = toolbar.querySelectorAll('.quick-user-env-btn');
   assert.equal(envBtns.length, 2, '工具栏应有线上/本地切换');
-  assert.equal(envBtns[0].dataset.userEnv, 'online');
-  assert.equal(envBtns[1].dataset.userEnv, 'local');
+  assert.equal(envBtns[0].dataset.targetEnv, 'online');
+  assert.equal(envBtns[1].dataset.targetEnv, 'local');
   assert.ok(envBtns[0].classList.contains('active'), '线上应默认激活');
 
   const portInput = toolbar.querySelector('.quick-user-port');

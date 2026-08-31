@@ -1170,7 +1170,7 @@
       color: var(--sage-600);
       font-weight: 600;
     }
-    /* 快捷登录：高频侧边栏任务工作区 */
+    /* 师生查询：高频侧边栏任务工作区 */
     .quick-section-toggle:focus-visible {
       outline: 2px solid var(--sage-600);
       outline-offset: -2px;
@@ -1187,31 +1187,6 @@
       font-weight: 700;
     }
     .quick-label { font-size: 11px; }
-    .quick-env-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(112px, .65fr);
-      gap: 8px;
-      align-items: end;
-    }
-    .quick-env-row .field { margin: 0; }
-    .quick-env-row:has(#portField.hidden) { grid-template-columns: minmax(0, 1fr); }
-    .quick-env-row .field-label { margin-top: 0; }
-    /* Token 状态与当前目标环境合并为一行元信息 */
-    .quick-context-meta {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      min-height: 26px;
-    }
-    .quick-api-note {
-      color: var(--text-3);
-      font-size: 10px;
-      line-height: 1.45;
-      overflow-wrap: anywhere;
-    }
-    .quick-env-badge.warning { color: #8a4a05; }
-    .quick-env-badge.success { color: var(--sage-700); }
     .quick-context .field-input::placeholder,
     .quick-mode-panel .field-input::placeholder,
     .quick-mode-panel .list-item-meta,
@@ -1234,6 +1209,7 @@
     .quick-auth-notice {
       display: inline-flex;
       align-items: center;
+      justify-self: start;
       gap: 6px;
       min-height: 0;
       padding: 4px 10px;
@@ -1511,6 +1487,7 @@
       align-items: center;
     }
     .quick-action-row .list-item-actions { margin-left: auto; }
+    .quick-action-row > .quick-user-toolbar { margin-left: auto; }
     #userList {
       max-height: 340px;
       background: var(--sage-50);
@@ -1847,7 +1824,6 @@
       .section-content { padding-right: 12px; padding-left: 12px; }
       .teacher-search-row { flex-direction: column; }
       .teacher-lookup-toolbar { grid-template-columns: minmax(0, 1fr); }
-      .quick-env-row,
       .quick-field-grid,
       .quick-field-grid.equal,
       .quick-relation-toolbar,
@@ -1861,6 +1837,7 @@
         justify-self: stretch;
       }
       .quick-user-toolbar { justify-content: flex-start; }
+      .quick-action-row > .quick-user-toolbar { margin-left: 0; }
       .quick-user-env-switcher { flex: 1 1 auto; }
       .quick-tenant-user-row .list-item-actions { justify-content: flex-start; }
     }
@@ -1915,7 +1892,7 @@
     </button>
     <button class="tab-btn" data-tab="quick">
       <span class="tab-icon">⚡</span>
-      一键登录
+      师生查询
     </button>
     <button class="tab-btn" data-tab="app">
       <span class="tab-icon">📱</span>
@@ -1990,7 +1967,7 @@
           <button class="btn btn-ghost btn-full" id="copyTokenBtn" disabled>复制后台 Token</button>
 
           <div class="callout">
-            💡 API 登录获取的是后台 admin token，仅用于后台接口；一键登录会另行获取 AI 平台 token，二者不会混用
+            💡 API 登录获取的是后台 admin token，仅用于后台接口；师生查询会另行获取 AI 平台 token，二者不会混用
           </div>
 
         </div>
@@ -2019,7 +1996,7 @@
           <button class="btn btn-ghost btn-full" id="copyDomainBtn" disabled>复制域名</button>
 
           <div class="callout">
-            💡 修改后端域名后，API 登录与一键登录都将使用该地址。
+            💡 修改后端域名后，API 登录与师生查询都将使用该地址。
             留空则恢复项目默认域名
             <code id="domainDefaultHint"></code>
           </div>
@@ -2036,10 +2013,9 @@
         <div class="section-header quick-section-toggle" id="quickLoginHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="quickLoginBody">
           <div class="section-header-left">
             <div class="section-icon mint">⚡</div>
-            <span class="section-header-title">一键快捷登录</span>
+            <span class="section-header-title">师生关联查询</span>
           </div>
           <div class="section-header-right">
-            <span class="badge quick-env-badge warning" id="envBadge">AI平台 · 线上</span>
             <div class="chevron">▼</div>
           </div>
         </div>
@@ -2048,24 +2024,7 @@
           <div class="section-content">
 
             <div class="quick-context">
-              <div class="quick-env-row">
-                <div class="field">
-                  <span class="quick-label" id="quickEnvLabel">查询环境</span>
-                  <div class="env-switcher" role="group" aria-labelledby="quickEnvLabel">
-                    <button class="env-btn active" id="envOnlineBtn" type="button">线上</button>
-                    <button class="env-btn" id="envDevBtn" type="button">开发</button>
-                  </div>
-                </div>
-                <div class="field hidden" id="portField">
-                  <label class="quick-label" for="localPort">开发端口</label>
-                  <input class="field-input" id="localPort" type="text" autocomplete="off" placeholder="默认 8088">
-                </div>
-              </div>
-              <div class="quick-context-meta">
-                <div class="quick-auth-notice" id="quickAuthNotice" data-kind="loading" role="status" aria-live="polite">正在检查后台 Token...</div>
-                <span class="badge quick-env-badge warning" id="targetEnvBadge">AI平台 · 线上</span>
-              </div>
-              <div class="quick-api-note">AI 会话用后台 Token 静默建立；开发端口只改写打开地址，不切换查询来源</div>
+              <div class="quick-auth-notice" id="quickAuthNotice" data-kind="loading" role="status" aria-live="polite">正在检查后台 Token...</div>
               <div class="quick-action-status" id="quickActionStatus" role="status" aria-live="polite"></div>
             </div>
 
@@ -2127,7 +2086,7 @@
                     <div class="quick-summary-meta" id="teacherUserSummaryMeta"></div>
                   </div>
                   <button class="btn btn-ghost quick-secondary-btn" id="changeTeacherUserBtn" type="button">更换</button>
-                  <div class="quick-summary-actions" id="teacherUserSummaryActions"></div>
+                  <div class="quick-summary-actions quick-target-container" id="teacherUserSummaryActions"></div>
                 </div>
                 <div class="quick-stage-body" id="teacherUserStepBody">
                   <label class="quick-label" for="userSearch">租户用户</label>
@@ -2205,7 +2164,7 @@
                     <div class="quick-summary-meta" id="studentAccountSummaryMeta"></div>
                   </div>
                   <button class="btn btn-ghost quick-secondary-btn" id="changeStudentAccountBtn" type="button">更换</button>
-                  <div class="quick-summary-actions" id="studentAccountSummaryActions"></div>
+                  <div class="quick-summary-actions quick-target-container" id="studentAccountSummaryActions"></div>
                 </div>
                 <div class="quick-stage-body" id="studentAccountStepBody">
                   <div class="quick-field-grid">

@@ -1,4 +1,4 @@
-/* 内部开发工具箱 — 一键登录双向查询 UI */
+/* 内部开发工具箱 — 师生关联查询 UI */
 (() => {
   'use strict';
 
@@ -10,8 +10,7 @@
   const DEFAULT_RECENT_VISIBLE = 3;
   const DEFAULT_STUDENT_PASSWORD = 'Xx@123456';
   const REQUIRED_QUICK_IDS = Object.freeze([
-    'quickLoginSection', 'quickLoginHeader', 'envBadge', 'quickLoginBody',
-    'targetEnvBadge', 'envOnlineBtn', 'envDevBtn', 'portField', 'localPort', 'quickEnvLabel',
+    'quickLoginSection', 'quickLoginHeader', 'quickLoginBody',
     'quickAuthNotice', 'quickActionStatus', 'recentList', 'quickRecentCount', 'quickRecentHeading',
     'modeTeacherBtn', 'modeStudentBtn', 'teacherModePanel', 'studentModePanel',
     'teacherTenantStep', 'teacherTenantState', 'teacherTenantSummary',
@@ -59,8 +58,6 @@
   const state = {
     expanded: true,
     mode: 'teacher',
-    env: 'online',
-    devPort: DEFAULT_DEV_PORT,
     loadingLogin: false,
     recentExpanded: false,
     adminTokenAvailable: null,
@@ -234,8 +231,6 @@
     const s = source.student;
     return {
       mode: source.mode === 'student' ? 'student' : 'teacher',
-      env: source.env === 'dev' ? 'dev' : 'online',
-      devPort: normalizePort(source.devPort),
       teacher: {
         selectedTenant: t.selectedTenant,
         tenantKeyword: t.tenantKeyword,
@@ -278,8 +273,6 @@
   function restorePersistedState(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return false;
     state.mode = snapshot.mode === 'student' ? 'student' : 'teacher';
-    state.env = snapshot.env === 'dev' ? 'dev' : 'online';
-    state.devPort = normalizePort(snapshot.devPort);
     const t = snapshot.teacher;
     if (t && typeof t === 'object') {
       state.teacher.selectedTenant = t.selectedTenant && typeof t.selectedTenant === 'object' ? t.selectedTenant : null;
@@ -386,8 +379,8 @@
         t.selectedUser = Object.assign({}, t.selectedUser, {
           origin: result.origin,
           aiToken: result.aiToken,
-          env: normalizeEnv(t.selectedUser.env || targetEnv()),
-          localPort: normalizePort(t.selectedUser.localPort || state.devPort),
+          env: normalizeEnv(t.selectedUser.env),
+          localPort: normalizePort(t.selectedUser.localPort),
         });
         t.sessionError = '';
       }).catch((error) => {
@@ -406,7 +399,6 @@
           session: Object.assign({}, s.selectedAccount.session, {
             origin: result.origin,
             aiToken: result.aiToken,
-            env: state.env,
           }),
         });
       }).catch((error) => {
@@ -449,41 +441,6 @@
       env: normalizeEnv(record.env),
       localPort: normalizePort(record.localPort),
     };
-  }
-
-  function targetEnv() {
-    return state.env === 'dev' ? 'local' : 'online';
-  }
-
-  function updateEnvBadge() {
-    const text = state.env === 'dev'
-      ? 'AI平台 · 开发 :' + normalizePort(state.devPort)
-      : 'AI平台 · 线上';
-    const className = state.env === 'dev' ? 'badge quick-env-badge success' : 'badge quick-env-badge warning';
-    ['envBadge', 'targetEnvBadge'].forEach((id) => {
-      const badge = $(id);
-      if (!badge) return;
-      badge.textContent = text;
-      badge.className = className;
-    });
-  }
-
-  function updateEnvUI() {
-    const online = $('envOnlineBtn');
-    const dev = $('envDevBtn');
-    const portField = $('portField');
-    const port = $('localPort');
-    if (online) {
-      online.classList.toggle('active', state.env === 'online');
-      online.setAttribute('aria-pressed', String(state.env === 'online'));
-    }
-    if (dev) {
-      dev.classList.toggle('active', state.env === 'dev');
-      dev.setAttribute('aria-pressed', String(state.env === 'dev'));
-    }
-    if (portField) portField.classList.toggle('hidden', state.env !== 'dev');
-    if (port && state.env === 'dev') port.value = normalizePort(state.devPort);
-    updateEnvBadge();
   }
 
   function clearTeacherSession() {
@@ -535,29 +492,6 @@
     s.relationError = '';
   }
 
-  function clearAllSessions() {
-    clearTeacherSession();
-    state.teacher.userPage = resetPage();
-    clearStudentSession(false);
-    renderTeacherShell();
-    renderStudentShell();
-  }
-
-  function switchEnv(env) {
-    if (state.loadingLogin) {
-      setStatus('正在获取登录链接，请稍候再切换环境', '');
-      return;
-    }
-    const next = env === 'dev' ? 'dev' : 'online';
-    if (next === state.env) return;
-    state.env = next;
-    if (state.env === 'dev') state.devPort = normalizePort(state.devPort);
-    clearAllSessions();
-    updateEnvUI();
-    setActionStatus('环境已切换，请重新选择账号建立 AI 会话');
-    setStatus('环境已切换，请重新选择账号建立 AI 会话', '');
-  }
-
   function switchMode(mode) {
     if (state.loadingLogin) {
       setStatus('正在获取登录链接，请稍候再切换查询模式', '');
@@ -601,8 +535,6 @@
     if (missingIds.length) {
       throw new Error('一键登录静态结构缺少 DOM ID: ' + missingIds.join(', '));
     }
-    $('localPort').value = state.devPort;
-    updateEnvUI();
     updateModeUI();
   }
 
@@ -1034,12 +966,12 @@
     const doc = d.document || document;
     normalized.forEach((user) => {
       const selected = t.selectedUser?.id === user.id;
-      const env = targetEnv();
-      const localPort = normalizePort(state.devPort);
+      const env = 'online';
+      const localPort = DEFAULT_DEV_PORT;
       const displayName = user.userName || '(未命名)';
       const avatarText = Array.from(String(user.userName || user.account || '?').trim())[0] || '?';
       const row = doc.createElement('div');
-      row.className = 'list-item quick-action-row quick-tenant-user-row fade-in' + (selected ? ' active' : '');
+      row.className = 'list-item quick-action-row quick-target-container quick-tenant-user-row fade-in' + (selected ? ' active' : '');
       row.dataset.env = env;
       row.dataset.localPort = localPort;
       row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="' + selected + '"' + (t.loadingSession ? ' disabled' : '') + '>' +
@@ -1049,7 +981,11 @@
         (user.roleName ? '<span class="list-item-role">' + escapeHtml(user.roleName) + '</span>' : '') +
         '</span><span class="list-item-meta">' + escapeHtml(user.account || user.phone || user.userId) + '</span></span></button>' +
         '<div class="quick-user-toolbar">' +
-        tenantUserTargetControls(t.selectedTenant, user, env, localPort) +
+        actionTargetControls({
+          id: user.id,
+          tenantName: t.selectedTenant.tenantName,
+          userName: user.userName,
+        }, env, localPort) +
         actionButtons({
           id: user.id,
           tenantId: t.selectedTenant.tenantId,
@@ -1065,7 +1001,7 @@
       if (!deps) {
         row.querySelector('.quick-row-select')?.addEventListener('click', () => selectTeacherUser(user, row));
       }
-      syncTenantUserRowTarget(row, env, localPort);
+      syncActionTarget(row, env, localPort);
       list.appendChild(row);
     });
     const pagerEl = getEl('userPager');
@@ -1109,8 +1045,8 @@
         industry: t.selectedTenant.industry,
         origin: result.origin,
         aiToken: result.aiToken,
-        env: normalizeEnv(row?.dataset.env || targetEnv()),
-        localPort: normalizePort(row?.dataset.localPort || state.devPort),
+        env: normalizeEnv(row?.dataset.env),
+        localPort: normalizePort(row?.dataset.localPort),
       };
       t.sessionError = '';
       t.loadingSession = false;
@@ -1569,11 +1505,15 @@
     if (userReady) {
       $('teacherUserSummaryTitle').textContent = t.selectedUser.userName || '(未命名账号)';
       $('teacherUserSummaryMeta').textContent = [t.selectedUser.account, t.selectedUser.tenantName].filter(Boolean).join(' / ');
-      const env = normalizeEnv(t.selectedUser.env || targetEnv());
-      const localPort = normalizePort(t.selectedUser.localPort || state.devPort);
+      const env = normalizeEnv(t.selectedUser.env);
+      const localPort = normalizePort(t.selectedUser.localPort);
       // 汇总条保留与列表行相同的线上/本地切换，切换只作用于本条目的四个操作按钮
       $('teacherUserSummaryActions').innerHTML = '<div class="quick-summary-target">' +
-        tenantUserTargetControls(t.selectedUser, t.selectedUser, env, localPort) +
+        actionTargetControls({
+          id: t.selectedUser.id,
+          tenantName: t.selectedUser.tenantName,
+          userName: t.selectedUser.userName,
+        }, env, localPort) +
         '</div>' +
         actionButtons({
           id: t.selectedUser.id,
@@ -1586,7 +1526,7 @@
           env,
           localPort,
         }, false);
-      syncTenantUserRowTarget($('teacherUserSummaryActions'), env, localPort);
+      syncActionTarget($('teacherUserSummaryActions'), env, localPort);
     } else {
       $('teacherUserSummaryActions').innerHTML = '';
     }
@@ -1686,13 +1626,23 @@
     list.classList.remove('hidden');
     s.accountPage.records.forEach((account) => {
       const selected = s.selectedAccount?.id === account.id;
+      const env = normalizeEnv(account.env);
+      const localPort = normalizePort(account.localPort);
       const row = document.createElement('div');
-      row.className = 'list-item quick-action-row fade-in' + (selected ? ' active' : '');
+      row.className = 'list-item quick-action-row quick-target-container fade-in' + (selected ? ' active' : '');
+      row.dataset.env = env;
+      row.dataset.localPort = localPort;
       const typeText = account.type === '1' || account.accountType === '1' || /学生|student/i.test(String(account.type || '')) ? '学生' : '账号';
       row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="' + selected + '"' + (s.loadingSession ? ' disabled' : '') + '><span class="list-item-content"><span class="list-item-title">' +
         escapeHtml(account.username || '(未命名)') + '<span class="list-item-role">' + typeText + '</span></span>' +
         '<span class="list-item-meta">' + escapeHtml(account.account || '无账号') + ' · ' +
         escapeHtml(account.tenantName || account.tenantId || '未知租户') + '</span></span></button>' +
+        '<div class="quick-user-toolbar">' +
+        actionTargetControls({
+          id: account.loginId,
+          tenantName: account.tenantName,
+          userName: account.username,
+        }, env, localPort, !account.loginId || !account.tenantId || s.loadingSession) +
         actionButtons({
           id: account.loginId,
           tenantId: account.tenantId,
@@ -1701,8 +1651,12 @@
           industry: account.industry,
           userName: account.username,
           role: 'student',
-        }, !account.loginId || !account.tenantId || s.loadingSession);
+          env,
+          localPort,
+        }, !account.loginId || !account.tenantId || s.loadingSession) +
+        '</div>';
       row.querySelector('.quick-row-select')?.addEventListener('click', () => selectStudentAccount(account, row));
+      syncActionTarget(row, env, localPort);
       list.appendChild(row);
     });
     buildPagerUI($('accountPager'), s.accountPage, (page) => {
@@ -1719,10 +1673,12 @@
       return;
     }
     clearStudentSession();
+    const env = normalizeEnv(row?.dataset.env);
+    const localPort = normalizePort(row?.dataset.localPort);
     const requestId = ++s.sessionRequestId;
     s.loadingSession = true;
     s.relationError = '';
-    s.selectedAccount = account;
+    s.selectedAccount = Object.assign({}, account, { env, localPort });
     renderStudentShell();
     try {
       const result = await request('RESOLVE_USER_SESSION', {
@@ -1732,10 +1688,11 @@
       });
       if (requestId !== s.sessionRequestId) return;
       s.selectedAccount = Object.assign({}, account, {
+        env,
+        localPort,
         session: {
           origin: result.origin,
           aiToken: result.aiToken,
-          env: state.env,
         },
       });
       s.loadingSession = false;
@@ -1903,15 +1860,27 @@
     if (accountReady) {
       $('studentAccountSummaryTitle').textContent = s.selectedAccount.username || '(未命名学生)';
       $('studentAccountSummaryMeta').textContent = [s.selectedAccount.account, s.selectedAccount.tenantName].filter(Boolean).join(' / ');
-      $('studentAccountSummaryActions').innerHTML = actionButtons({
-        id: s.selectedAccount.loginId,
-        tenantId: s.selectedAccount.tenantId,
-        tenantName: s.selectedAccount.tenantName,
-        domain: s.selectedAccount.domain,
-        industry: s.selectedAccount.industry,
-        userName: s.selectedAccount.username,
-        role: 'student',
-      }, !s.selectedAccount.loginId || !s.selectedAccount.tenantId);
+      const env = normalizeEnv(s.selectedAccount.env);
+      const localPort = normalizePort(s.selectedAccount.localPort);
+      $('studentAccountSummaryActions').innerHTML = '<div class="quick-summary-target">' +
+        actionTargetControls({
+          id: s.selectedAccount.loginId,
+          tenantName: s.selectedAccount.tenantName,
+          userName: s.selectedAccount.username,
+        }, env, localPort, !s.selectedAccount.loginId || !s.selectedAccount.tenantId) +
+        '</div>' +
+        actionButtons({
+          id: s.selectedAccount.loginId,
+          tenantId: s.selectedAccount.tenantId,
+          tenantName: s.selectedAccount.tenantName,
+          domain: s.selectedAccount.domain,
+          industry: s.selectedAccount.industry,
+          userName: s.selectedAccount.username,
+          role: 'student',
+          env,
+          localPort,
+        }, !s.selectedAccount.loginId || !s.selectedAccount.tenantId);
+      syncActionTarget($('studentAccountSummaryActions'), env, localPort);
     } else {
       $('studentAccountSummaryActions').innerHTML = '';
     }
@@ -2226,8 +2195,12 @@
     const renderRows = (teachers, note) => {
       list.innerHTML = '';
       teachers.forEach((teacherItem) => {
+        const env = normalizeEnv(teacherItem.env);
+        const localPort = normalizePort(teacherItem.localPort);
         const row = document.createElement('div');
-        row.className = 'list-item lookup-teacher-item quick-action-row fade-in' + (!teacherItem.loginId ? ' relation-disabled' : '');
+        row.className = 'list-item lookup-teacher-item quick-action-row quick-target-container fade-in' + (!teacherItem.loginId ? ' relation-disabled' : '');
+        row.dataset.env = env;
+        row.dataset.localPort = localPort;
         const duties = teacherItem.duties?.length
           ? '<div class="lookup-teacher-duties">' + teacherItem.duties.map((duty) => '<span class="teacher-badge teach">' + escapeHtml(duty) + '</span>').join('') + '</div>'
           : '';
@@ -2236,6 +2209,12 @@
         row.innerHTML = '<div class="list-item-content"><div class="list-item-title">' +
           escapeHtml(teacherItem.loginName || teacherItem.name || '(未命名)') + '</div><div class="list-item-meta">' +
           escapeHtml(accountText) + unresolvedText + (note ? ' · ' + escapeHtml(note) : '') + '</div>' + duties + '</div>' +
+          '<div class="quick-user-toolbar">' +
+          actionTargetControls({
+            id: teacherItem.loginId,
+            tenantName: teacherItem.tenantName,
+            userName: teacherItem.loginName || teacherItem.name,
+          }, env, localPort, !teacherItem.loginId) +
           actionButtons({
             id: teacherItem.loginId,
             tenantId: teacherItem.tenantId,
@@ -2244,7 +2223,11 @@
             industry: teacherItem.industry,
             userName: teacherItem.loginName || teacherItem.name,
             role: 'teacher',
-          }, !teacherItem.loginId);
+            env,
+            localPort,
+          }, !teacherItem.loginId) +
+          '</div>';
+        syncActionTarget(row, env, localPort);
         list.appendChild(row);
       });
       if (!teachers.length) {
@@ -2366,10 +2349,6 @@
   // ── 登录操作与最近记录 ──
 
   function actionMeta(button) {
-    const currentPort = targetEnv() === 'local'
-      ? normalizePort($('localPort')?.value || state.devPort)
-      : '';
-    if (targetEnv() === 'local') state.devPort = currentPort;
     return {
       id: button.dataset.id || '',
       tenantId: button.dataset.tenantId || '',
@@ -2378,8 +2357,8 @@
       industry: button.dataset.industry || '',
       userName: button.dataset.userName || '',
       role: button.dataset.role || 'teacher',
-      env: button.dataset.env || targetEnv(),
-      localPort: button.dataset.localPort || currentPort,
+      env: normalizeEnv(button.dataset.env),
+      localPort: normalizePort(button.dataset.localPort),
     };
   }
 
@@ -2459,33 +2438,34 @@
     );
   }
 
-  function tenantUserTargetControls(selectedTenant, user, env, localPort) {
+  function actionTargetControls(meta, env, localPort, disabled = false) {
     const online = env === 'online';
-    const label = (selectedTenant?.tenantName || '未知租户') + ' ' + (user.userName || user.id || '') + ' 登录环境';
+    const unavailable = disabled ? ' disabled aria-disabled="true"' : '';
+    const label = (meta.tenantName || '未知租户') + ' ' + (meta.userName || meta.id || '') + ' 登录环境';
     return '<div class="quick-recent-env-switcher quick-user-env-switcher" role="group" aria-label="' + escapeHtml(label) + '">' +
-        '<button class="quick-recent-env-btn quick-user-env-btn' + (online ? ' active' : '') + '" type="button" data-user-env="online" aria-pressed="' + online + '">线上</button>' +
-        '<button class="quick-recent-env-btn quick-user-env-btn' + (!online ? ' active' : '') + '" type="button" data-user-env="local" aria-pressed="' + (!online) + '">本地</button>' +
+        '<button class="quick-recent-env-btn quick-user-env-btn' + (online ? ' active' : '') + '" type="button" data-target-env="online" aria-pressed="' + online + '"' + unavailable + '>线上</button>' +
+        '<button class="quick-recent-env-btn quick-user-env-btn' + (!online ? ' active' : '') + '" type="button" data-target-env="local" aria-pressed="' + (!online) + '"' + unavailable + '>本地</button>' +
       '</div>' +
       '<label class="quick-recent-port-field quick-user-port-field' + (online ? ' hidden' : '') + '"><span>端口</span>' +
-        '<input class="quick-recent-port quick-user-port" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="本地端口" value="' + escapeHtml(localPort) + '">' +
+        '<input class="quick-recent-port quick-user-port" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="本地端口" value="' + escapeHtml(localPort) + '"' + unavailable + '>' +
       '</label>';
   }
 
-  function syncTenantUserRowTarget(row, env, localPort, syncInput = true) {
-    if (!row) return;
+  function syncActionTarget(container, env, localPort, syncInput = true) {
+    if (!container) return;
     const normalizedEnv = normalizeEnv(env);
     const normalizedPort = normalizePort(localPort);
-    row.dataset.env = normalizedEnv;
-    row.dataset.localPort = normalizedPort;
-    row.querySelectorAll('.quick-user-env-btn').forEach((button) => {
-      const active = button.dataset.userEnv === normalizedEnv;
+    container.dataset.env = normalizedEnv;
+    container.dataset.localPort = normalizedPort;
+    container.querySelectorAll('.quick-user-env-btn').forEach((button) => {
+      const active = button.dataset.targetEnv === normalizedEnv;
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', String(active));
     });
-    row.querySelector('.quick-user-port-field')?.classList.toggle('hidden', normalizedEnv !== 'local');
-    const input = row.querySelector('.quick-user-port');
+    container.querySelector('.quick-user-port-field')?.classList.toggle('hidden', normalizedEnv !== 'local');
+    const input = container.querySelector('.quick-user-port');
     if (input && syncInput) input.value = normalizedPort;
-    row.querySelectorAll('.action-btn').forEach((button) => {
+    container.querySelectorAll('.action-btn').forEach((button) => {
       button.dataset.env = normalizedEnv;
       button.dataset.localPort = normalizedPort;
       const baseLabel = button.dataset.baseLabel || button.getAttribute('aria-label') || '';
@@ -2497,37 +2477,46 @@
     });
   }
 
-  // 选中账号后的汇总条切换环境/端口时，同步回写 selectedUser，
-  // 保证快照持久化与「更换后重选」沿用最新目标环境
-  function persistTeacherUserSummaryTarget(container) {
-    if (!container?.closest('#teacherUserSummary')) return;
-    const t = state.teacher;
-    if (!t.selectedUser) return;
-    t.selectedUser = Object.assign({}, t.selectedUser, {
-      env: normalizeEnv(container.dataset.env),
-      localPort: normalizePort(container.dataset.localPort),
-    });
-    persistStateSoon();
+  function persistSummaryTarget(container) {
+    if (container?.closest('#teacherUserSummary')) {
+      const t = state.teacher;
+      if (!t.selectedUser) return;
+      t.selectedUser = Object.assign({}, t.selectedUser, {
+        env: normalizeEnv(container.dataset.env),
+        localPort: normalizePort(container.dataset.localPort),
+      });
+      persistStateSoon();
+      return;
+    }
+    if (container?.closest('#studentAccountSummary')) {
+      const s = state.student;
+      if (!s.selectedAccount) return;
+      s.selectedAccount = Object.assign({}, s.selectedAccount, {
+        env: normalizeEnv(container.dataset.env),
+        localPort: normalizePort(container.dataset.localPort),
+      });
+      persistStateSoon();
+    }
   }
 
-  function onTenantUserTargetClick(event) {
+  function onActionTargetClick(event) {
     const envButton = event.target.closest('.quick-user-env-btn');
     if (!envButton) return;
     event.preventDefault();
     event.stopPropagation();
-    const row = envButton.closest('.quick-tenant-user-row, .quick-summary-actions');
-    const input = row?.querySelector('.quick-user-port');
-    syncTenantUserRowTarget(row, envButton.dataset.userEnv, input?.value || row?.dataset.localPort);
-    persistTeacherUserSummaryTarget(row);
+    const container = envButton.closest('.quick-target-container');
+    const input = container?.querySelector('.quick-user-port');
+    syncActionTarget(container, envButton.dataset.targetEnv, input?.value || container?.dataset.localPort);
+    persistSummaryTarget(container);
   }
 
-  function onTenantUserPortInput(event, commit) {
+  function onActionTargetPortInput(event, commit) {
     const input = event.target.closest('.quick-user-port');
     if (!input) return;
-    const row = input.closest('.quick-tenant-user-row, .quick-summary-actions');
-    if (!row) return;
-    syncTenantUserRowTarget(row, row.dataset.env, input.value, commit);
-    if (commit) persistTeacherUserSummaryTarget(row);
+    const container = input.closest('.quick-target-container');
+    if (!container) return;
+    syncActionTarget(container, container.dataset.env, input.value, commit);
+    if (commit) persistSummaryTarget(container);
   }
 
   function recentTargetControls(record, env, localPort) {
@@ -2606,7 +2595,7 @@
     const shown = state.recentExpanded ? records : records.slice(0, DEFAULT_RECENT_VISIBLE);
     shown.forEach((record) => {
       const env = normalizeEnv(record.env);
-      const localPort = normalizePort(record.localPort || state.devPort);
+      const localPort = normalizePort(record.localPort);
       const row = document.createElement('div');
       row.className = 'recent-item quick-recent-row fade-in';
       row.dataset.env = env;
@@ -2813,8 +2802,6 @@
         toggleSection();
       });
     }
-    $('envOnlineBtn')?.addEventListener('click', () => switchEnv('online'));
-    $('envDevBtn')?.addEventListener('click', () => switchEnv('dev'));
     $('modeTeacherBtn')?.addEventListener('click', () => switchMode('teacher'));
     $('modeStudentBtn')?.addEventListener('click', () => switchMode('student'));
     document.querySelector('.quick-mode-switcher')?.addEventListener('keydown', (event) => {
@@ -2824,18 +2811,6 @@
       switchMode(nextMode);
       $(nextMode === 'teacher' ? 'modeTeacherBtn' : 'modeStudentBtn')?.focus();
     });
-    const port = $('localPort');
-    port?.addEventListener('input', debounce(() => {
-      const next = normalizePort(port.value);
-      if (next !== state.devPort) {
-        state.devPort = next;
-        clearAllSessions();
-        setActionStatus('开发端口已更新，请重新选择账号建立 AI 会话');
-      }
-      port.value = state.devPort;
-      updateEnvBadge();
-    }, SEARCH_DEBOUNCE));
-
     const tenantSearch = $('tenantSearch');
     const scheduleTenantSearch = createDebouncedSearch((keyword) => {
       const t = state.teacher;
@@ -2999,12 +2974,9 @@
     });
     $('studentAppSiteUrl')?.addEventListener('change', () => validateStudentAppSiteInput(true));
     $('quickLoginBody')?.addEventListener('click', onActionClick);
-    $('userList')?.addEventListener('click', onTenantUserTargetClick);
-    $('userList')?.addEventListener('input', (event) => onTenantUserPortInput(event, false));
-    $('userList')?.addEventListener('change', (event) => onTenantUserPortInput(event, true));
-    $('teacherUserSummaryActions')?.addEventListener('click', onTenantUserTargetClick);
-    $('teacherUserSummaryActions')?.addEventListener('input', (event) => onTenantUserPortInput(event, false));
-    $('teacherUserSummaryActions')?.addEventListener('change', (event) => onTenantUserPortInput(event, true));
+    $('quickLoginBody')?.addEventListener('click', onActionTargetClick);
+    $('quickLoginBody')?.addEventListener('input', (event) => onActionTargetPortInput(event, false));
+    $('quickLoginBody')?.addEventListener('change', (event) => onActionTargetPortInput(event, true));
     $('recentList')?.addEventListener('click', onRecentClick);
     $('recentList')?.addEventListener('input', (event) => onRecentPortInput(event, false));
     $('recentList')?.addEventListener('change', (event) => onRecentPortInput(event, true));
@@ -3033,7 +3005,6 @@
     section?.classList.add('expanded');
     $('quickLoginHeader')?.setAttribute('aria-expanded', 'true');
     restoreFormValues();
-    updateEnvUI();
     updateModeUI();
     await hasAdminToken();
     await rehydratePersistedSessions();
@@ -3061,6 +3032,7 @@
   };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
+      actionMeta,
       buildRecentTeacherSelection,
       buildStudentCredentialsText,
       buildStudentAppLoginPayload,
