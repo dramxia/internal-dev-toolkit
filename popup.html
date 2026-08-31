@@ -1043,12 +1043,15 @@
       transition: background .13s;
     }
     .teacher-item:last-child { border-bottom: none; }
-    .teacher-item:hover { background: var(--sage-100); }
+    .teacher-item:hover { background: var(--sage-50); }
+    /* 选中态用 inset 环 + 加粗姓名表达，避免 border-left 造成的布局跳动 */
     .teacher-item.selected {
-      background: var(--sage-100);
-      border-left: 3px solid var(--sage-400);
-      padding-left: 10px;
+      background: var(--sage-50);
+      box-shadow: inset 0 0 0 1.5px var(--sage-300);
+      transition: background .13s, box-shadow .15s;
     }
+    .teacher-item.selected:hover { background: var(--sage-100); }
+    .teacher-item.selected .teacher-item-name { color: var(--sage-700); font-weight: 600; }
 
     .teacher-item-header {
       display: flex;
@@ -1396,7 +1399,16 @@
     .quick-summary-actions {
       grid-column: 1 / -1;
       display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
       justify-content: flex-end;
+    }
+    /* 选中账号汇总条内的环境切换与操作按钮保持单行排列 */
+    .quick-summary-actions .quick-summary-target {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-right: auto;
     }
     .quick-stage-body {
       display: grid;
@@ -1503,11 +1515,15 @@
       max-height: 340px;
       background: var(--sage-50);
     }
+    /* 租户用户行与最近登录同一套视觉语言：透明行 + 首行身份/主操作，次行环境控件 */
     .quick-tenant-user-row {
-      display: block;
-      padding: 8px 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 4px 8px;
+      padding: 7px 10px;
       cursor: default;
-      background: var(--panel);
+      background: transparent;
     }
     .quick-tenant-user-row:hover { background: var(--sage-50); }
     .quick-tenant-user-row.active:hover { background: var(--sage-100); }
@@ -1515,7 +1531,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      width: 100%;
+      min-width: 0;
       padding: 0;
     }
     .quick-user-avatar {
@@ -1568,25 +1584,22 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    /* 工具栏与身份信息同行（左环境控件 / 右操作按钮），不额外占整行 */
+    /* 工具栏：环境切换 + 端口输入 + 操作按钮同行靠右，空间不足时整体换行并占满宽度 */
     .quick-user-toolbar {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      display: flex;
+      flex-wrap: wrap;
       align-items: center;
-      gap: 8px;
-      margin-top: 7px;
-    }
-    .quick-user-target-controls {
-      min-width: 0;
+      justify-content: flex-end;
       gap: 6px;
     }
     .quick-user-env-switcher {
-      min-width: 0;
-      width: auto;
+      display: grid;
       grid-template-columns: repeat(2, minmax(44px, 1fr));
       gap: 2px;
+      min-width: 96px;
       padding: 2px;
-      background: var(--sage-50);
+      border-radius: var(--radius-sm);
+      background: var(--sage-100);
     }
     .quick-user-env-btn {
       min-height: 24px;
@@ -1788,12 +1801,16 @@
       font-size: 9px;
       font-weight: 700;
     }
-    .lookup-student-item { cursor: pointer; }
+    .lookup-student-item { cursor: pointer; transition: background .13s; }
+    .lookup-student-item:hover { background: var(--sage-50); }
+    /* 与教师查学生的教师列表选中态保持一致：inset 环 + 加粗姓名 */
     .lookup-student-item.selected {
-      background: var(--sage-100);
-      border-left: 3px solid var(--sage-400);
-      padding-left: 10px;
+      background: var(--sage-50);
+      box-shadow: inset 0 0 0 1.5px var(--sage-300);
+      transition: background .13s, box-shadow .15s;
     }
+    .lookup-student-item.selected:hover { background: var(--sage-100); }
+    .lookup-student-item.selected .student-item-name { color: var(--sage-700); font-weight: 600; }
     .lookup-teacher-item { cursor: default; align-items: flex-start; }
     .lookup-teacher-item:hover { background: transparent; }
     .lookup-teacher-duties {
@@ -1843,9 +1860,8 @@
         grid-column: 1;
         justify-self: stretch;
       }
-      .quick-user-toolbar { grid-template-columns: minmax(0, 1fr); }
-      .quick-user-target-controls { width: 100%; }
-      .quick-user-env-switcher { width: 100%; }
+      .quick-user-toolbar { justify-content: flex-start; }
+      .quick-user-env-switcher { flex: 1 1 auto; }
       .quick-tenant-user-row .list-item-actions { justify-content: flex-start; }
     }
 

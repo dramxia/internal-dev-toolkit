@@ -130,6 +130,32 @@ assert.ok(tenantUserTargetClick, '应能提取租户用户环境点击处理器'
 assert.match(tenantUserTargetClick[1], /syncTenantUserRowTarget\(row, envButton\.dataset\.userEnv/);
 assert.doesNotMatch(tenantUserTargetClick[1], /state\.env\s*=|clearAllSessions\(\)/, '租户用户行级切换不得联动顶部环境或清空会话');
 assert.match(quickUi, /\$\('userList'\)\?\.addEventListener\('click', onTenantUserTargetClick\)/);
+// 选中账号汇总条也必须保留行内环境切换：渲染 + 事件绑定 + 回写快照
+assert.match(
+  quickUi,
+  /\$\('teacherUserSummaryActions'\)\.innerHTML = '<div class="quick-summary-target">' \+\s*tenantUserTargetControls\(t\.selectedUser, t\.selectedUser, env, localPort\)/,
+  '选中账号后汇总条应继续渲染线上/本地切换',
+);
+assert.match(
+  quickUi,
+  /actionButtons\(\{[\s\S]*?role: 'teacher',[\s\S]*?env,[\s\S]*?localPort,[\s\S]*?\}, false\);\s*syncTenantUserRowTarget\(\$\('teacherUserSummaryActions'\), env, localPort\)/,
+  '汇总条四个操作按钮应同步所选环境与端口',
+);
+assert.match(
+  quickUi,
+  /\$\('teacherUserSummaryActions'\)\?\.addEventListener\('click', onTenantUserTargetClick\)/,
+  '汇总条环境切换应复用行级点击处理器',
+);
+assert.match(
+  quickUi,
+  /closest\('\.quick-tenant-user-row, \.quick-summary-actions'\)/,
+  '环境切换处理器应同时支持列表行与汇总条',
+);
+assert.match(
+  quickUi,
+  /function persistTeacherUserSummaryTarget\(container\) \{[\s\S]*?t\.selectedUser = Object\.assign\(\{\}, t\.selectedUser, \{[\s\S]*?env: normalizeEnv\(container\.dataset\.env\)/,
+  '汇总条切换环境应回写 selectedUser 以便持久化与重选沿用',
+);
 const recentClickHandler = quickUi.match(/async function onRecentClick\(event\) \{([\s\S]*?)\n  \}\n\n  \/\/ ── 事件绑定/);
 assert.ok(recentClickHandler, '应能提取最近登录点击处理器');
 assert.doesNotMatch(recentClickHandler[1], /state\.env\s*=|state\.mode\s*=|clearAllSessions\(\)/, '单条最近记录不得联动顶部环境或任务模式');
@@ -234,16 +260,25 @@ assert.match(popupHtml, /\.quick-recent-row[\s\S]*grid-template-columns: minmax\
 assert.match(popupHtml, /\.quick-recent-env-switcher[\s\S]*grid-template-columns: repeat\(2/);
 assert.match(popupHtml, /\.quick-recent-port\s*\{[\s\S]*width:\s*72px/);
 assert.match(popupHtml, /#userList\s*\{[\s\S]*max-height:\s*340px/);
-assert.match(popupHtml, /\.quick-tenant-user-row\s*\{[\s\S]*display:\s*block/);
+assert.match(popupHtml, /\.quick-tenant-user-row\s*\{[\s\S]*display:\s*grid/, '租户用户行应为两行网格布局');
+assert.match(
+  popupHtml,
+  /\.quick-tenant-user-row\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\) auto/,
+  '租户用户行首列身份区应可收缩、次列工具栏自适应',
+);
+assert.doesNotMatch(
+  popupHtml.match(/\.quick-tenant-user-row\s*\{([^}]*)\}/)[1],
+  /background:\s*var\(--panel\)/,
+  '租户用户行不应使用独立卡片底色',
+);
 assert.match(popupHtml, /\.quick-user-avatar\s*\{[\s\S]*width:\s*30px[\s\S]*height:\s*30px/);
-assert.match(popupHtml, /\.quick-user-toolbar\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\) auto/);
-const quickUserToolbarStyles = popupHtml.match(/\.quick-user-toolbar\s*\{([^}]*)\}/);
-assert.ok(quickUserToolbarStyles, '应定义租户用户操作工具栏样式');
-assert.doesNotMatch(quickUserToolbarStyles[1], /border-top/, '租户用户项内部不应显示分割线');
+assert.match(popupHtml, /\.quick-user-toolbar\s*\{[\s\S]*display:\s*flex[\s\S]*flex-wrap:\s*wrap/, '工具栏应可整体换行');
+assert.doesNotMatch(popupHtml, /quick-user-target-controls/, '环境控件外层包装已移除');
 assert.match(popupHtml, /\.quick-user-env-btn\s*\{[\s\S]*min-height:\s*24px/);
 assert.match(popupHtml, /\.quick-user-port\s*\{[\s\S]*width:\s*56px[\s\S]*height:\s*26px/);
 assert.match(popupHtml, /\.quick-user-toolbar \.quick-action-btn\s*\{[\s\S]*width:\s*26px[\s\S]*height:\s*26px/);
 assert.match(quickUi, /class="quick-user-avatar"[\s\S]*class="quick-user-toolbar"/);
+assert.match(quickUi, /<div class="quick-user-toolbar">' \+\s*tenantUserTargetControls[\s\S]*actionButtons\(/, '工具栏应紧跟环境控件与操作按钮');
 assert.match(popupHtml, /\.quick-tenant-user-row:hover\s*\{\s*background:\s*var\(--sage-50\)/);
 assert.match(popupHtml, /\.quick-tenant-user-row\.active:hover\s*\{\s*background:\s*var\(--sage-100\)/);
 
@@ -384,6 +419,191 @@ assert.ok(
 const relationLoader = quickUi.match(/async function loadStudentRelationData\(\) \{([\s\S]*?)\n  \}\n\n  function selectMatchedStudent/);
 assert.ok(relationLoader, '应能提取学生关系刷新流程');
 assert.match(relationLoader[1], /s\.relationLoading = true;\s*invalidateRelationTeacherResolution\(\)/, '刷新或切学期应取消旧教师反查');
+
+async function testTenantUserRowRender() {
+  const originalNamespace = globalThis.InternalDevToolkit;
+  globalThis.InternalDevToolkit = { tenant: {}, messages: {} };
+  delete require.cache[tenantModulePath];
+  require(tenantModulePath);
+  delete require.cache[quickUiModulePath];
+  const { renderTeacherUsers, state } = require(quickUiModulePath);
+
+  class StubClassList {
+    constructor(owner) { this.owner = owner; }
+    _set(values) { this.owner._classes = new Set(values); }
+    add(...names) { names.forEach((n) => this.owner._classes.add(n)); }
+    remove(...names) { names.forEach((n) => this.owner._classes.delete(n)); }
+    contains(name) { return this.owner._classes.has(name); }
+    toggle(name, force) {
+      const on = force === undefined ? !this.owner._classes.has(name) : !!force;
+      if (on) this.owner._classes.add(name); else this.owner._classes.delete(name);
+      return on;
+    }
+  }
+  const VOID_TAGS = new Set(['input', 'br', 'hr', 'img', 'meta', 'link', 'path', 'polyline', 'rect', 'circle', 'line']);
+  class StubElement {
+    constructor(tagName) {
+      this.tagName = String(tagName).toUpperCase();
+      this.children = [];
+      this.parentNode = null;
+      this.attributes = {};
+      this.dataset = {};
+      this.style = {};
+      this._classes = new Set();
+      this.classList = new StubClassList(this);
+      this.textContent = '';
+      this._innerHTML = '';
+    }
+    set className(value) { this.classList._set(String(value).split(/\s+/).filter(Boolean)); }
+    get className() { return [...this._classes].join(' '); }
+    setAttribute(name, value) { this.attributes[name] = String(value); }
+    getAttribute(name) { return name in this.attributes ? this.attributes[name] : null; }
+    /* 简化解析：扫描所有开标签，按闭合标签维护父子栈；SVG 子标签视为 void */
+    set innerHTML(value) {
+      this._innerHTML = String(value);
+      this.children = [];
+      if (VOID_TAGS.has(this.tagName.toLowerCase())) return;
+      const stack = [this];
+      const tagRe = /<(\/?)([a-zA-Z][\w-]*)((?:"[^"]*"|'[^']*'|[^'">])*)>/g;
+      let match;
+      while ((match = tagRe.exec(this._innerHTML)) !== null) {
+        const [, closeSlash, rawTag, rawAttrs] = match;
+        const tag = rawTag.toLowerCase();
+        if (closeSlash) {
+          for (let i = stack.length - 1; i > 0; i -= 1) {
+            if (stack[i].tagName === tag.toUpperCase()) { stack.length = i; break; }
+          }
+          continue;
+        }
+        const el = new StubElement(tag);
+        String(rawAttrs || '').replace(/([\w-]+)(?:="([^"]*)")?/g, (m, name, val) => {
+          if (name.startsWith('data-')) {
+            const key = name.replace(/^data-/, '').replace(/-([a-z])/g, (s, c) => c.toUpperCase());
+            el.dataset[key] = val === undefined ? '' : val;
+          } else if (name === 'class') {
+            el.className = val || '';
+          } else if (name === 'disabled') {
+            el.disabled = true;
+          } else {
+            el.setAttribute(name, val === undefined ? '' : val);
+          }
+          return m;
+        });
+        const parent = stack[stack.length - 1];
+        el.parentNode = parent;
+        parent.children.push(el);
+        if (!VOID_TAGS.has(tag) && !/\/>$/.test(match[0])) stack.push(el);
+      }
+    }
+    get innerHTML() { return this._innerHTML; }
+    get disabled() { return !!this._disabled; }
+    set disabled(value) { this._disabled = !!value; }
+    _walk(visit) {
+      for (const child of this.children) {
+        if (visit(child) === false) return false;
+        if (child._walk(visit) === false) return false;
+      }
+      return true;
+    }
+    querySelector(selector) {
+      let found = null;
+      this._walk((el) => {
+        if (matchesSelector(el, selector)) { found = el; return false; }
+        return true;
+      });
+      return found;
+    }
+    querySelectorAll(selector) {
+      const out = [];
+      this._walk((el) => { if (matchesSelector(el, selector)) out.push(el); return true; });
+      return out;
+    }
+    appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+    addEventListener() {}
+  }
+  function matchesSelector(el, selector) {
+    if (selector.startsWith('.')) return el._classes.has(selector.slice(1));
+    if (selector.startsWith('[') && selector.endsWith(']')) {
+      const name = selector.slice(1, -1);
+      return name in el.attributes;
+    }
+    return el.tagName === selector.toUpperCase();
+  }
+
+  const listEl = new StubElement('div');
+  const emptyEl = new StubElement('div');
+  const pagerEl = new StubElement('div');
+  const ids = { userList: listEl, userEmpty: emptyEl, userPager: pagerEl };
+  const pagerCalls = [];
+  const deps = {
+    $: (id) => ids[id] || null,
+    document: { createElement: (tag) => new StubElement(tag) },
+    buildPagerUI: (el, page, cb) => { pagerCalls.push({ el, page: Object.assign({}, page), cb }); },
+  };
+
+  state.teacher.selectedTenant = {
+    tenantId: 'tenant-1', tenantName: '示例租户', domain: 'example.test', industry: 3,
+  };
+  state.teacher.selectedUser = null;
+  state.teacher.loadingSession = false;
+  state.teacher.userError = '';
+  state.teacher.loadingUsers = false;
+  state.teacher.userPage = {
+    current: 1,
+    size: 10,
+    total: 2,
+    records: [
+      { id: 'u-1', username: '王丽华', account: 'wanglihua01', roleName: '校长' },
+      { id: 'u-2', username: '张强', account: '13800001111', roleName: '' },
+    ],
+  };
+
+  renderTeacherUsers(deps);
+
+  assert.equal(listEl.children.length, 2, '应渲染两条租户用户行');
+  assert.ok(!listEl.classList.contains('hidden'), '列表应可见');
+  assert.ok(emptyEl.classList.contains('hidden'), '空态应隐藏');
+
+  const row = listEl.children[0];
+  assert.ok(row.classList.contains('quick-tenant-user-row'), '行应使用租户用户样式');
+  assert.equal(row.dataset.env, 'online', '行默认目标环境应为线上');
+
+  const selectBtn = row.querySelector('.quick-row-select');
+  assert.ok(selectBtn, '行内应有选择按钮');
+  assert.equal(selectBtn.getAttribute('aria-pressed'), 'false');
+  assert.ok(row.querySelector('.quick-user-avatar'), '行内应有头像');
+
+  const toolbar = row.querySelector('.quick-user-toolbar');
+  assert.ok(toolbar, '行内应有工具栏');
+  const envBtns = toolbar.querySelectorAll('.quick-user-env-btn');
+  assert.equal(envBtns.length, 2, '工具栏应有线上/本地切换');
+  assert.equal(envBtns[0].dataset.userEnv, 'online');
+  assert.equal(envBtns[1].dataset.userEnv, 'local');
+  assert.ok(envBtns[0].classList.contains('active'), '线上应默认激活');
+
+  const portInput = toolbar.querySelector('.quick-user-port');
+  assert.ok(portInput, '工具栏应有端口输入');
+  assert.equal(portInput.getAttribute('aria-label'), '本地端口');
+
+  const actionBtns = toolbar.querySelectorAll('.action-btn');
+  assert.equal(actionBtns.length, 4, '工具栏应有 4 个登录操作按钮');
+  ['open', 'copy', 'student', 'teacher'].forEach((action, index) => {
+    assert.equal(actionBtns[index].dataset.action, action);
+    assert.equal(actionBtns[index].dataset.env, 'online', '操作按钮应同步行环境');
+    assert.equal(actionBtns[index].dataset.tenantId, 'tenant-1');
+  });
+  assert.match(actionBtns[0].getAttribute('aria-label'), /打开 AI 平台（线上）/, '操作按钮标签应包含目标环境');
+
+  assert.equal(pagerCalls.length, 1, '应渲染分页');
+  assert.equal(pagerCalls[0].el, pagerEl);
+  assert.equal(typeof pagerCalls[0].cb, 'function');
+
+  delete require.cache[quickUiModulePath];
+  delete require.cache[tenantModulePath];
+  globalThis.InternalDevToolkit = originalNamespace;
+}
+
+testTenantUserRowRender();
 
 testImmediateInvalidationBeforeDebouncedLoad()
   .then(() => console.log('quick login UI regression tests passed'))

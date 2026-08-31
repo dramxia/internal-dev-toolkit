@@ -2410,10 +2410,12 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
-  function renderTeacherUsers() {
+  function renderTeacherUsers(deps) {
+    const d = deps || {};
+    const getEl = d.$ || $;
     const t = state.teacher;
-    const list = $('userList');
-    const empty = $('userEmpty');
+    const list = getEl('userList');
+    const empty = getEl('userEmpty');
     const normalized = (t.userPage.records || []).map(tenant.normalizeUser);
     if (!list || !empty) return;
     list.innerHTML = '';
@@ -2421,7 +2423,7 @@ if (typeof module !== 'undefined' && module.exports) {
       list.classList.add('hidden');
       empty.textContent = '先选择租户';
       empty.classList.remove('hidden');
-      $('userPager')?.classList.add('hidden');
+      getEl('userPager')?.classList.add('hidden');
       return;
     }
     if (!normalized.length) {
@@ -2430,19 +2432,20 @@ if (typeof module !== 'undefined' && module.exports) {
         ? '正在加载租户用户...'
         : (t.userError || (t.selectedTenant ? '未找到租户用户' : '先选择租户'));
       empty.classList.remove('hidden');
-      const pager = $('userPager');
+      const pager = getEl('userPager');
       if (pager) pager.classList.add('hidden');
       return;
     }
     empty.classList.add('hidden');
     list.classList.remove('hidden');
+    const doc = d.document || document;
     normalized.forEach((user) => {
       const selected = t.selectedUser?.id === user.id;
       const env = targetEnv();
       const localPort = normalizePort(state.devPort);
       const displayName = user.userName || '(未命名)';
       const avatarText = Array.from(String(user.userName || user.account || '?').trim())[0] || '?';
-      const row = document.createElement('div');
+      const row = doc.createElement('div');
       row.className = 'list-item quick-action-row quick-tenant-user-row fade-in' + (selected ? ' active' : '');
       row.dataset.env = env;
       row.dataset.localPort = localPort;
@@ -2466,14 +2469,21 @@ if (typeof module !== 'undefined' && module.exports) {
           localPort,
         }, !user.id || t.loadingSession) +
         '</div>';
-      row.querySelector('.quick-row-select')?.addEventListener('click', () => selectTeacherUser(user, row));
+      if (!deps) {
+        row.querySelector('.quick-row-select')?.addEventListener('click', () => selectTeacherUser(user, row));
+      }
       syncTenantUserRowTarget(row, env, localPort);
       list.appendChild(row);
     });
-    buildPagerUI($('userPager'), t.userPage, (page) => {
-      t.userPage.current = page;
-      loadTeacherUsers(false);
-    });
+    const pagerEl = getEl('userPager');
+    if (d.buildPagerUI) {
+      d.buildPagerUI(pagerEl, t.userPage, d.onPage || (() => {}));
+    } else {
+      buildPagerUI(pagerEl, t.userPage, (page) => {
+        t.userPage.current = page;
+        loadTeacherUsers(false);
+      });
+    }
   }
 
   async function selectTeacherUser(user, row) {
@@ -2966,17 +2976,24 @@ if (typeof module !== 'undefined' && module.exports) {
     if (userReady) {
       $('teacherUserSummaryTitle').textContent = t.selectedUser.userName || '(未命名账号)';
       $('teacherUserSummaryMeta').textContent = [t.selectedUser.account, t.selectedUser.tenantName].filter(Boolean).join(' / ');
-      $('teacherUserSummaryActions').innerHTML = actionButtons({
-        id: t.selectedUser.id,
-        tenantId: t.selectedUser.tenantId,
-        tenantName: t.selectedUser.tenantName,
-        domain: t.selectedUser.domain,
-        industry: t.selectedUser.industry,
-        userName: t.selectedUser.userName,
-        role: 'teacher',
-        env: t.selectedUser.env,
-        localPort: t.selectedUser.localPort,
-      }, false);
+      const env = normalizeEnv(t.selectedUser.env || targetEnv());
+      const localPort = normalizePort(t.selectedUser.localPort || state.devPort);
+      // 汇总条保留与列表行相同的线上/本地切换，切换只作用于本条目的四个操作按钮
+      $('teacherUserSummaryActions').innerHTML = '<div class="quick-summary-target">' +
+        tenantUserTargetControls(t.selectedUser, t.selectedUser, env, localPort) +
+        '</div>' +
+        actionButtons({
+          id: t.selectedUser.id,
+          tenantId: t.selectedUser.tenantId,
+          tenantName: t.selectedUser.tenantName,
+          domain: t.selectedUser.domain,
+          industry: t.selectedUser.industry,
+          userName: t.selectedUser.userName,
+          role: 'teacher',
+          env,
+          localPort,
+        }, false);
+      syncTenantUserRowTarget($('teacherUserSummaryActions'), env, localPort);
     } else {
       $('teacherUserSummaryActions').innerHTML = '';
     }
@@ -3852,15 +3869,13 @@ if (typeof module !== 'undefined' && module.exports) {
   function tenantUserTargetControls(selectedTenant, user, env, localPort) {
     const online = env === 'online';
     const label = (selectedTenant?.tenantName || '未知租户') + ' ' + (user.userName || user.id || '') + ' 登录环境';
-    return '<div class="quick-recent-target-controls quick-user-target-controls">' +
-      '<div class="quick-recent-env-switcher quick-user-env-switcher" role="group" aria-label="' + escapeHtml(label) + '">' +
+    return '<div class="quick-recent-env-switcher quick-user-env-switcher" role="group" aria-label="' + escapeHtml(label) + '">' +
         '<button class="quick-recent-env-btn quick-user-env-btn' + (online ? ' active' : '') + '" type="button" data-user-env="online" aria-pressed="' + online + '">线上</button>' +
         '<button class="quick-recent-env-btn quick-user-env-btn' + (!online ? ' active' : '') + '" type="button" data-user-env="local" aria-pressed="' + (!online) + '">本地</button>' +
       '</div>' +
       '<label class="quick-recent-port-field quick-user-port-field' + (online ? ' hidden' : '') + '"><span>端口</span>' +
         '<input class="quick-recent-port quick-user-port" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="本地端口" value="' + escapeHtml(localPort) + '">' +
-      '</label>' +
-    '</div>';
+      '</label>';
   }
 
   function syncTenantUserRowTarget(row, env, localPort, syncInput = true) {
@@ -3889,22 +3904,37 @@ if (typeof module !== 'undefined' && module.exports) {
     });
   }
 
+  // 选中账号后的汇总条切换环境/端口时，同步回写 selectedUser，
+  // 保证快照持久化与「更换后重选」沿用最新目标环境
+  function persistTeacherUserSummaryTarget(container) {
+    if (!container?.closest('#teacherUserSummary')) return;
+    const t = state.teacher;
+    if (!t.selectedUser) return;
+    t.selectedUser = Object.assign({}, t.selectedUser, {
+      env: normalizeEnv(container.dataset.env),
+      localPort: normalizePort(container.dataset.localPort),
+    });
+    persistStateSoon();
+  }
+
   function onTenantUserTargetClick(event) {
     const envButton = event.target.closest('.quick-user-env-btn');
     if (!envButton) return;
     event.preventDefault();
     event.stopPropagation();
-    const row = envButton.closest('.quick-tenant-user-row');
+    const row = envButton.closest('.quick-tenant-user-row, .quick-summary-actions');
     const input = row?.querySelector('.quick-user-port');
     syncTenantUserRowTarget(row, envButton.dataset.userEnv, input?.value || row?.dataset.localPort);
+    persistTeacherUserSummaryTarget(row);
   }
 
   function onTenantUserPortInput(event, commit) {
     const input = event.target.closest('.quick-user-port');
     if (!input) return;
-    const row = input.closest('.quick-tenant-user-row');
+    const row = input.closest('.quick-tenant-user-row, .quick-summary-actions');
     if (!row) return;
     syncTenantUserRowTarget(row, row.dataset.env, input.value, commit);
+    if (commit) persistTeacherUserSummaryTarget(row);
   }
 
   function recentTargetControls(record, env, localPort) {
@@ -4379,6 +4409,9 @@ if (typeof module !== 'undefined' && module.exports) {
     $('userList')?.addEventListener('click', onTenantUserTargetClick);
     $('userList')?.addEventListener('input', (event) => onTenantUserPortInput(event, false));
     $('userList')?.addEventListener('change', (event) => onTenantUserPortInput(event, true));
+    $('teacherUserSummaryActions')?.addEventListener('click', onTenantUserTargetClick);
+    $('teacherUserSummaryActions')?.addEventListener('input', (event) => onTenantUserPortInput(event, false));
+    $('teacherUserSummaryActions')?.addEventListener('change', (event) => onTenantUserPortInput(event, true));
     $('recentList')?.addEventListener('click', onRecentClick);
     $('recentList')?.addEventListener('input', (event) => onRecentPortInput(event, false));
     $('recentList')?.addEventListener('change', (event) => onRecentPortInput(event, true));
@@ -4422,6 +4455,17 @@ if (typeof module !== 'undefined' && module.exports) {
 
   const quickLoginUi = { init };
   ns.quickLoginUi = quickLoginUi;
+  /* 截图/冒烟测试用：以假数据直渲染租户用户列表（不触网、不绑选择事件） */
+  ns.quickLoginUiDebug = {
+    renderTeacherUsersForShot(selectedTenant, records, current) {
+      const t = state.teacher;
+      t.selectedTenant = selectedTenant;
+      t.userPage = { current: current || 1, size: 10, total: records.length, records };
+      renderTeacherUsers({
+        $: (id) => (id === 'userPager' ? null : $(id)),
+      });
+    },
+  };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       buildRecentTeacherSelection,
@@ -4430,6 +4474,7 @@ if (typeof module !== 'undefined' && module.exports) {
       createDebouncedSearch,
       createPersistedState,
       normalizeAppSiteUrl,
+      renderTeacherUsers,
       restorePersistedState,
       state,
     };
