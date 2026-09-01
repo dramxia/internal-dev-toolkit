@@ -88,9 +88,18 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function setCurrentProjectId(id) {
+    const project = ns.projects.getById(id);
+    if (!project) throw new Error(`未知项目: ${id}`);
     await chrome.storage.local.set({ [STORAGE_KEY]: id });
     cachedProjectId = id;
-    cachedProject = ns.projects.getById(id);
+    cachedProject = project;
+    return cachedProject;
+  }
+
+  async function switchProjectContext(id) {
+    const project = await setCurrentProjectId(id);
+    if (ns.customDomain) await ns.customDomain.loadCachedOverride();
+    return project;
   }
 
   async function loadCurrentProject() {
@@ -187,6 +196,7 @@ if (typeof module !== 'undefined' && module.exports) {
   ns.currentProject = {
     getCurrentProjectId,
     setCurrentProjectId,
+    switchProjectContext,
     loadCurrentProject,
     getCachedProjectId,
     getProject,
@@ -1324,6 +1334,38 @@ if (typeof module !== 'undefined' && module.exports) {
   let hideTimer = 0;
   // 默认仅 ok 自动消失；调用方可通过 duration 为其它类型设置关闭时间。
   const OK_AUTO_HIDE_MS = 1800;
+  let activeContentAnimation = null;
+
+  function transitionTarget(kind) {
+    if (kind === 'workspace') return document.querySelector('.panel.active');
+    if (kind === 'quick') return document.querySelector('.quick-mode-panel:not(.hidden)');
+    if (kind === 'higher') return document.getElementById('otherLoginSection');
+    return document.querySelector('.panel.active');
+  }
+
+  function transitionView(update, kind = 'content') {
+    if (typeof update !== 'function') return null;
+    activeContentAnimation?.cancel();
+    activeContentAnimation = null;
+    update();
+
+    const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const target = transitionTarget(kind);
+    if (reduceMotion || typeof target?.animate !== 'function') return null;
+
+    const animation = target.animate([
+      { opacity: 0.88, transform: 'translate3d(0, 4px, 0)' },
+      { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+    ], {
+      duration: 150,
+      easing: 'cubic-bezier(.2, .8, .2, 1)',
+    });
+    activeContentAnimation = animation;
+    animation.finished.finally(() => {
+      if (activeContentAnimation === animation) activeContentAnimation = null;
+    }).catch(() => {});
+    return animation;
+  }
 
   function toast(text, kind, options = {}) {
     const el = document.getElementById(TOAST_ID);
@@ -1524,7 +1566,7 @@ if (typeof module !== 'undefined' && module.exports) {
     document.addEventListener('scroll', () => closeActionMenu(false), true);
   }
 
-  ns.ui = { toast, compactActions, observeActions, closeActionMenu };
+  ns.ui = { toast, transitionView, compactActions, observeActions, closeActionMenu };
 })();
 
 
@@ -1544,6 +1586,7 @@ if (typeof module !== 'undefined' && module.exports) {
       panelId: 'panel-admin',
       path: '后台登录',
       utilities: { token: 'admin-token', domain: 'admin-domain' },
+      usesProjectContext: true,
     },
     quickLogin: {
       id: 'relations',
@@ -1552,6 +1595,7 @@ if (typeof module !== 'undefined' && module.exports) {
       panelId: 'panel-quick',
       path: '教师 -> 学生',
       utilities: { history: 'quick-history', token: 'admin-token' },
+      usesProjectContext: true,
     },
     otherLogin: {
       id: 'higher',
@@ -1560,6 +1604,7 @@ if (typeof module !== 'undefined' && module.exports) {
       panelId: 'panel-other',
       path: '账号登入',
       utilities: { history: 'other-history', token: 'other-token' },
+      usesProjectContext: false,
     },
     appLogin: {
       id: 'app',
@@ -1568,6 +1613,7 @@ if (typeof module !== 'undefined' && module.exports) {
       panelId: 'panel-app',
       path: '学生登录',
       utilities: { history: 'app-history', token: 'app-token' },
+      usesProjectContext: false,
     },
   });
 
@@ -1596,6 +1642,11 @@ if (typeof module !== 'undefined' && module.exports) {
   let activeUtility = '';
   let returnState = null;
   const beforeLeave = new Map();
+  const featureLifecycles = new Map();
+  const featureInitPromises = new Map();
+  const workspaceScroll = new Map();
+  const otherViewScroll = new Map([['account', 0], ['teachers', 0]]);
+  let activeOtherView = 'account';
 
   function createNavigationGate() {
     let active = false;
@@ -1625,6 +1676,7 @@ if (typeof module !== 'undefined' && module.exports) {
           projectId: project.id,
           projectName: project.name,
           workspaceId: `${project.id}:${meta.id}`,
+          contextProjectId: meta.usesProjectContext ? project.id : '',
         }));
       }
     }
@@ -1634,8 +1686,47 @@ if (typeof module !== 'undefined' && module.exports) {
   function selectInitialWorkspace(items, currentProjectId, storedWorkspaceId) {
     const source = Array.isArray(items) ? items : [];
     const stored = source.find((item) => item.workspaceId === storedWorkspaceId) || null;
-    if (stored?.projectId === currentProjectId) return stored;
+    if (stored) return stored;
     return source.find((item) => item.projectId === currentProjectId) || source[0] || null;
+  }
+
+  function registerFeatureLifecycle(feature, lifecycle) {
+    if (!feature || !lifecycle) return;
+    featureLifecycles.set(feature, lifecycle);
+  }
+
+  function ensureFeatureInitialized(feature) {
+    if (!featureLifecycles.has(feature)) return Promise.resolve();
+    if (!featureInitPromises.has(feature)) {
+      const lifecycle = featureLifecycles.get(feature);
+      featureInitPromises.set(feature, Promise.resolve().then(() => lifecycle.init?.()));
+    }
+    return featureInitPromises.get(feature);
+  }
+
+  function activateFeature(workspace) {
+    if (!workspace) return;
+    const lifecycle = featureLifecycles.get(workspace.feature);
+    ensureFeatureInitialized(workspace.feature)
+      .then(() => lifecycle?.activate?.(workspace))
+      .catch((error) => ns.ui.toast(error?.message || '模块初始化失败', 'err'));
+  }
+
+  function warmInactiveFeatures(activeFeature) {
+    const queue = [...new Set(definitions.map((item) => item.feature))]
+      .filter((feature) => feature !== activeFeature);
+    const scheduleNext = () => {
+      if (!queue.length) return;
+      const run = () => {
+        const feature = queue.shift();
+        ensureFeatureInitialized(feature)
+          .catch(() => {})
+          .finally(scheduleNext);
+      };
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 1500 });
+      else setTimeout(run, 32);
+    };
+    scheduleNext();
   }
 
   async function readStoredWorkspace() {
@@ -1723,22 +1814,44 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function activateWorkspace(workspace, options = {}) {
     if (!workspace) return false;
+    const main = $('workspaceMain');
+    if (activeWorkspace && main && !activeUtility) workspaceScroll.set(activeWorkspace.workspaceId, main.scrollTop);
     activeWorkspace = workspace;
     activeUtility = '';
     document.body.classList.remove('utility-open');
     $('workspaceBackBtn').hidden = true;
     document.querySelectorAll('.utility-screen').forEach((screen) => { screen.hidden = true; });
     document.querySelectorAll('.panel').forEach((panel) => {
-      panel.classList.toggle('active', panel.id === workspace.panelId);
+      const selected = panel.id === workspace.panelId;
+      panel.classList.toggle('active', selected);
+      panel.setAttribute('aria-hidden', String(!selected));
+      panel.inert = !selected;
     });
     syncHeader();
     syncDock();
-    if (options.restoreScroll && $('workspaceMain')) {
-      requestAnimationFrame(() => { $('workspaceMain').scrollTop = options.restoreScroll; });
-    } else if ($('workspaceMain')) {
-      $('workspaceMain').scrollTop = 0;
-    }
+    const targetScroll = Number.isFinite(options.restoreScroll)
+      ? options.restoreScroll
+      : (workspaceScroll.get(workspace.workspaceId) || 0);
+    if (main) main.scrollTop = targetScroll;
+    activateFeature(workspace);
     return true;
+  }
+
+  function commitWorkspace(workspace, options = {}) {
+    const update = () => activateWorkspace(workspace, options);
+    if (options.transition === false || !ns.ui?.transitionView) return update();
+    ns.ui.transitionView(update, 'workspace');
+    return true;
+  }
+
+  async function ensureProjectContext(projectId) {
+    if (!projectId || projectId === ns.currentProject.getCachedProjectId()) return;
+    const response = await ns.messages.sendToBackground({
+      type: 'SET_PROJECT_CONTEXT',
+      payload: { projectId },
+    });
+    if (!response?.ok) throw new Error(response?.error || '后端项目上下文切换失败');
+    await ns.currentProject.switchProjectContext(projectId);
   }
 
   async function runBeforeLeave(key) {
@@ -1783,17 +1896,9 @@ if (typeof module !== 'undefined' && module.exports) {
     const previous = returnState;
     const workspace = workspaceForId(previous.workspaceId) || activeWorkspace;
     returnState = null;
-    activateWorkspace(workspace, { restoreScroll: previous.scrollTop });
+    commitWorkspace(workspace, { restoreScroll: previous.scrollTop });
     requestAnimationFrame(() => previous.trigger?.focus?.({ preventScroll: true }));
     return true;
-  }
-
-  function setDockBusy(active) {
-    const dock = $('workspaceDock');
-    if (dock) dock.setAttribute('aria-busy', String(active));
-    document.querySelectorAll('.workspace-dock-item').forEach((button) => {
-      button.disabled = active;
-    });
   }
 
   async function switchWorkspace(workspaceId) {
@@ -1803,41 +1908,41 @@ if (typeof module !== 'undefined' && module.exports) {
       navigationGate.leave();
       return;
     }
-    setDockBusy(true);
-    let reloadScheduled = false;
     try {
       if (activeUtility && !(await back())) return;
-      await storeWorkspace(target.workspaceId);
-      if (target.projectId !== ns.currentProject.getCachedProjectId()) {
-        await ns.currentProject.setCurrentProjectId(target.projectId);
-        location.reload();
-        reloadScheduled = true;
-        return;
-      }
-      activateWorkspace(target);
+      await ensureProjectContext(target.contextProjectId);
+      commitWorkspace(target);
+      storeWorkspace(target.workspaceId).catch(() => {});
     } catch (error) {
       ns.ui.toast(`切换任务失败: ${error.message}`, 'err');
     } finally {
-      if (!reloadScheduled) {
-        navigationGate.leave();
-        setDockBusy(false);
-      }
+      navigationGate.leave();
     }
   }
 
   function switchOtherView(view) {
-    const teacherView = view === 'teachers';
+    const nextView = view === 'teachers' ? 'teachers' : 'account';
+    if (nextView === activeOtherView) return;
+    const main = $('workspaceMain');
+    if (main) otherViewScroll.set(activeOtherView, main.scrollTop);
+    const teacherView = nextView === 'teachers';
     const section = $('otherLoginSection');
     const teacherSection = $('otherTeacherSection');
     if (!section || !teacherSection) return;
-    section.classList.toggle('show-teachers', teacherView);
-    teacherSection.classList.toggle('hidden', !teacherView);
-    document.querySelectorAll('#otherSubviewNav [data-other-view]').forEach((button) => {
-      const active = button.dataset.otherView === (teacherView ? 'teachers' : 'account');
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', String(active));
-    });
-    setPath(teacherView ? '教师直达' : '账号登入');
+    const update = () => {
+      activeOtherView = nextView;
+      section.classList.toggle('show-teachers', teacherView);
+      teacherSection.classList.toggle('hidden', !teacherView);
+      document.querySelectorAll('#otherSubviewNav [data-other-view]').forEach((button) => {
+        const active = button.dataset.otherView === nextView;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      setPath(teacherView ? '教师直达' : '账号登入');
+      if (main) main.scrollTop = otherViewScroll.get(nextView) || 0;
+    };
+    if (ns.ui?.transitionView) ns.ui.transitionView(update, 'higher');
+    else update();
   }
 
   function bindEvents() {
@@ -1887,6 +1992,10 @@ if (typeof module !== 'undefined' && module.exports) {
 
   async function init() {
     definitions = buildWorkspaceDefinitions(ns.projects.PROJECTS);
+    const validContexts = definitions.map((item) => item.contextProjectId).filter(Boolean);
+    if (!validContexts.includes(ns.currentProject.getCachedProjectId())) {
+      await ensureProjectContext(validContexts[0] || ns.projects.DEFAULT_PROJECT_ID);
+    }
     renderDock();
     createUtilityScreens();
     bindEvents();
@@ -1897,11 +2006,12 @@ if (typeof module !== 'undefined' && module.exports) {
       storedWorkspaceId = await readStoredWorkspace();
     } catch (_) {}
     const workspace = selectInitialWorkspace(definitions, currentProjectId, storedWorkspaceId);
-    activateWorkspace(workspace);
+    commitWorkspace(workspace, { transition: false });
     if (workspace) {
       try { await storeWorkspace(workspace.workspaceId); } catch (_) {}
     }
     observeStatus();
+    warmInactiveFeatures(workspace?.feature);
   }
 
   ns.workspaceUi = {
@@ -1911,6 +2021,7 @@ if (typeof module !== 'undefined' && module.exports) {
     setPath,
     switchWorkspace,
     registerBeforeLeave,
+    registerFeatureLifecycle,
     syncHeader,
     buildWorkspaceDefinitions,
     selectInitialWorkspace,
@@ -1975,8 +2086,11 @@ if (typeof module !== 'undefined' && module.exports) {
     'lookupTeacherEmpty',
   ]);
   let initialized = false;
+  let activationPromise = null;
   let persistenceReady = false;
-  let persistenceScheduled = false;
+  let persistenceTimer = 0;
+  let lastPersistedSignature = '';
+  const renderSignatures = new Map();
 
   const icons = {
     login: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>',
@@ -2076,6 +2190,22 @@ if (typeof module !== 'undefined' && module.exports) {
       clearTimeout(timer);
       timer = setTimeout(() => fn(...args), ms);
     };
+  }
+
+  function shouldRender(key, value) {
+    const signature = JSON.stringify(value);
+    if (renderSignatures.get(key) === signature) return false;
+    renderSignatures.set(key, signature);
+    return true;
+  }
+
+  function setHtmlIfChanged(element, signatureValue, html) {
+    if (!element) return false;
+    const signature = JSON.stringify(signatureValue);
+    if (element.dataset.renderSignature === signature) return false;
+    element.dataset.renderSignature = signature;
+    element.innerHTML = html;
+    return true;
   }
 
   function createDebouncedSearch(invalidate, load, ms = SEARCH_DEBOUNCE) {
@@ -2223,10 +2353,6 @@ if (typeof module !== 'undefined' && module.exports) {
         selectedStudent: s.selectedStudent,
         selectedClassId: s.selectedClassId,
         relationError: s.relationError,
-        regularAccountsByTenant: s.regularAccountsByTenant && typeof s.regularAccountsByTenant === 'object'
-          ? s.regularAccountsByTenant : {},
-        relationTeacherCache: s.relationTeacherCache && typeof s.relationTeacherCache === 'object'
-          ? s.relationTeacherCache : {},
       },
     };
   }
@@ -2281,13 +2407,26 @@ if (typeof module !== 'undefined' && module.exports) {
     return true;
   }
 
+  async function flushPersistedState() {
+    clearTimeout(persistenceTimer);
+    persistenceTimer = 0;
+    if (!persistenceReady || !ns.quickLoginStateStorage) return;
+    const snapshot = createPersistedState();
+    const signature = JSON.stringify(snapshot);
+    if (signature === lastPersistedSignature) return;
+    lastPersistedSignature = signature;
+    try {
+      await ns.quickLoginStateStorage.save(snapshot);
+    } catch (error) {
+      lastPersistedSignature = '';
+      console.warn('[一键登录] 查询状态保存失败:', error?.message || error);
+    }
+  }
+
   function persistStateSoon() {
-    if (!persistenceReady || persistenceScheduled || !ns.quickLoginStateStorage) return;
-    persistenceScheduled = true;
-    Promise.resolve().then(() => {
-      persistenceScheduled = false;
-      return ns.quickLoginStateStorage.save(createPersistedState());
-    }).catch((error) => console.warn('[一键登录] 查询状态保存失败:', error?.message || error));
+    if (!persistenceReady || !ns.quickLoginStateStorage) return;
+    clearTimeout(persistenceTimer);
+    persistenceTimer = setTimeout(flushPersistedState, 250);
   }
 
   async function loadPersistedState() {
@@ -2467,9 +2606,13 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     const next = mode === 'student' ? 'student' : 'teacher';
     if (next === state.mode) return;
-    state.mode = next;
-    // 两种查询模式各自维护独立状态，切换时保留已选账号、分页和关联结果。
-    updateModeUI();
+    const update = () => {
+      state.mode = next;
+      // 两种查询模式各自维护独立状态，切换时保留已选账号、分页和关联结果。
+      updateModeUI();
+    };
+    if (ns.ui?.transitionView) ns.ui.transitionView(update, 'quick');
+    else update();
     persistStateSoon();
     setActionStatus('');
     setStatus('', '');
@@ -2504,8 +2647,12 @@ if (typeof module !== 'undefined' && module.exports) {
     const requestedStep = Number(index);
     if (!Number.isInteger(requestedStep) || requestedStep < 0 || requestedStep > maxStep) return;
     targetState.activeStep = requestedStep;
-    if (studentMode) renderStudentShell();
-    else renderTeacherShell();
+    const update = () => {
+      if (studentMode) renderStudentShell();
+      else renderTeacherShell();
+    };
+    if (ns.ui?.transitionView) ns.ui.transitionView(update, 'quick');
+    else update();
     const focusIds = studentMode
       ? ['accountSearch', 'lookupByStudentBtn']
       : ['tenantSearch', 'userSearch', 'teacherNameSearch', 'studentNameSearch'];
@@ -2533,13 +2680,23 @@ if (typeof module !== 'undefined' && module.exports) {
         { label: '关联教师', complete: Boolean(state.student.selectedClassId) },
       ];
     track.style.setProperty('--step-count', String(steps.length));
-    track.innerHTML = steps.map((step, index) => {
-      const stateClass = index === activeStep ? ' current' : (step.complete ? ' complete' : '');
-      const interactive = index <= maxStep;
-      return `<button class="quick-progress-step${stateClass}" type="button" data-step-index="${index}" ` +
-        `aria-current="${index === activeStep ? 'step' : 'false'}"${interactive ? '' : ' disabled'}>` +
-        `${index + 1} ${step.label}</button>`;
-    }).join('');
+    const existing = [...track.querySelectorAll('.quick-progress-step')];
+    steps.forEach((step, index) => {
+      let button = existing[index];
+      if (!button) {
+        button = document.createElement('button');
+        button.className = 'quick-progress-step';
+        button.type = 'button';
+        track.appendChild(button);
+      }
+      button.dataset.stepIndex = String(index);
+      button.textContent = `${index + 1} ${step.label}`;
+      button.classList.toggle('current', index === activeStep);
+      button.classList.toggle('complete', index !== activeStep && step.complete);
+      button.disabled = index > maxStep;
+      button.setAttribute('aria-current', index === activeStep ? 'step' : 'false');
+    });
+    existing.slice(steps.length).forEach((button) => button.remove());
     compact.textContent = `步骤 ${activeStep + 1}/${steps.length} · ${steps[activeStep].label}`;
     ns.workspaceUi?.setPath(teacherMode ? '教师 -> 学生' : '学生 -> 教师');
   }
@@ -2967,6 +3124,17 @@ if (typeof module !== 'undefined' && module.exports) {
     const empty = getEl('userEmpty');
     const normalized = (t.userPage.records || []).map(tenant.normalizeUser);
     if (!list || !empty) return;
+    if (!deps && !shouldRender('teacher-users', {
+      tenantId: t.selectedTenant?.tenantId,
+      selectedId: t.selectedUser?.id,
+      selectedEnv: t.selectedUser?.env,
+      selectedPort: t.selectedUser?.localPort,
+      loadingUsers: t.loadingUsers,
+      loadingSession: t.loadingSession,
+      error: t.userError,
+      page: [t.userPage.current, t.userPage.total],
+      records: normalized.map((item) => [item.id, item.userName, item.account, item.phone, item.userId, item.roleName]),
+    })) return;
     list.innerHTML = '';
     if (!t.selectedTenant) {
       list.classList.add('hidden');
@@ -2995,7 +3163,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const displayName = user.userName || '(未命名)';
       const avatarText = Array.from(String(user.userName || user.account || '?').trim())[0] || '?';
       const row = doc.createElement('div');
-      row.className = 'list-item quick-action-row quick-target-container quick-tenant-user-row fade-in' + (selected ? ' active' : '');
+      row.className = 'list-item quick-action-row quick-target-container quick-tenant-user-row' + (selected ? ' active' : '');
       row.dataset.env = env;
       row.dataset.localPort = localPort;
       row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="' + selected + '"' + (t.loadingSession ? ' disabled' : '') + '>' +
@@ -3161,6 +3329,13 @@ if (typeof module !== 'undefined' && module.exports) {
     const list = $('teacherList');
     const empty = $('teacherEmpty');
     if (!list || !empty) return;
+    if (!shouldRender('teachers', {
+      selectedId: t.selectedTeacher?.id,
+      loading: t.loadingTeachers,
+      error: t.teacherError,
+      page: [t.teacherPage.current, t.teacherPage.total],
+      records: t.teacherPage.records.map((item) => [item.id, item.name, item.account, item.statusText, item.statusOn]),
+    })) return;
     list.innerHTML = '';
     if (!t.teacherPage.records.length) {
       list.classList.add('hidden');
@@ -3178,7 +3353,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const selected = t.selectedTeacher?.id === teacherItem.id;
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'teacher-item quick-list-button fade-in' + (selected ? ' selected' : '');
+      row.className = 'teacher-item quick-list-button' + (selected ? ' selected' : '');
       row.setAttribute('aria-pressed', String(selected));
       const status = teacherItem.statusText
         ? '<span class="teacher-badge ' + (teacherItem.statusOn === true ? 'status-on' : 'status-off') + '">' + escapeHtml(teacherItem.statusText) + '</span>'
@@ -3320,6 +3495,11 @@ if (typeof module !== 'undefined' && module.exports) {
     persistStateSoon();
     if (!el || !t.selectedTeacher) return;
     const duties = t.selectedTeacher.detailDuties || [];
+    if (!shouldRender('teacher-duties', {
+      selectedId: t.selectedTeacher.id,
+      loading: t.loadingDuties,
+      duties,
+    })) return;
     if (t.loadingDuties) {
       el.textContent = '正在读取教学班级…';
       el.classList.remove('hidden');
@@ -3452,6 +3632,14 @@ if (typeof module !== 'undefined' && module.exports) {
     const list = $('studentList');
     const empty = $('studentEmpty');
     if (!list || !empty) return;
+    if (!shouldRender('teacher-students', {
+      tenantId: t.selectedTenant?.tenantId,
+      selectedTeacherId: t.selectedTeacher?.id,
+      loading: t.loadingStudents,
+      error: t.studentError,
+      page: [t.studentPage.current, t.studentPage.total],
+      records: t.studentPage.records.map((item) => [item.id, item.name, item.code, item.account, item.className, item.statusText, item.statusOn]),
+    })) return;
     list.innerHTML = '';
     if (!t.studentPage.records.length) {
       list.classList.add('hidden');
@@ -3465,7 +3653,7 @@ if (typeof module !== 'undefined' && module.exports) {
     list.classList.remove('hidden');
     t.studentPage.records.forEach((student) => {
       const row = document.createElement('div');
-      row.className = 'student-item fade-in';
+      row.className = 'student-item';
       const status = student.statusText
         ? '<span class="student-item-badge ' + (student.statusOn === true ? 'status-on' : 'status-off') + '">' + escapeHtml(student.statusText) + '</span>'
         : '';
@@ -3537,8 +3725,13 @@ if (typeof module !== 'undefined' && module.exports) {
       $('teacherUserSummaryMeta').textContent = [t.selectedUser.account, t.selectedUser.tenantName].filter(Boolean).join(' / ');
       const env = normalizeEnv(t.selectedUser.env);
       const localPort = normalizePort(t.selectedUser.localPort);
-      // 汇总条保留与列表行相同的线上/本地切换，切换只作用于本条目的四个操作按钮
-      $('teacherUserSummaryActions').innerHTML = '<div class="quick-summary-target">' +
+      const summaryActions = $('teacherUserSummaryActions');
+      const summaryChanged = setHtmlIfChanged(summaryActions, {
+        id: t.selectedUser.id,
+        tenantId: t.selectedUser.tenantId,
+        env,
+        localPort,
+      }, '<div class="quick-summary-target">' +
         actionTargetControls({
           id: t.selectedUser.id,
           tenantName: t.selectedUser.tenantName,
@@ -3555,10 +3748,10 @@ if (typeof module !== 'undefined' && module.exports) {
           role: 'teacher',
           env,
           localPort,
-        }, false);
-      syncActionTarget($('teacherUserSummaryActions'), env, localPort);
+        }, false));
+      if (summaryChanged) syncActionTarget(summaryActions, env, localPort);
     } else {
-      $('teacherUserSummaryActions').innerHTML = '';
+      setHtmlIfChanged($('teacherUserSummaryActions'), 'empty', '');
     }
     setInlineStatus(
       'teacherSessionStatus',
@@ -3643,6 +3836,17 @@ if (typeof module !== 'undefined' && module.exports) {
     const list = $('accountList');
     const empty = $('accountEmpty');
     if (!list || !empty) return;
+    if (!shouldRender('student-accounts', {
+      selectedId: s.selectedAccount?.id,
+      selectedEnv: s.selectedAccount?.env,
+      selectedPort: s.selectedAccount?.localPort,
+      loadingAccounts: s.loadingAccounts,
+      loadingSession: s.loadingSession,
+      error: s.accountError,
+      keyword: s.keyword,
+      page: [s.accountPage.current, s.accountPage.total],
+      records: s.accountPage.records.map((item) => [item.id, item.loginId, item.username, item.account, item.tenantId, item.tenantName, item.type, item.accountType, item.env, item.localPort]),
+    })) return;
     list.innerHTML = '';
     if (!s.accountPage.records.length) {
       list.classList.add('hidden');
@@ -3661,7 +3865,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const env = normalizeEnv(account.env);
       const localPort = normalizePort(account.localPort);
       const row = document.createElement('div');
-      row.className = 'list-item quick-action-row quick-target-container fade-in' + (selected ? ' active' : '');
+      row.className = 'list-item quick-action-row quick-target-container' + (selected ? ' active' : '');
       row.dataset.env = env;
       row.dataset.localPort = localPort;
       const typeText = account.type === '1' || account.accountType === '1' || /学生|student/i.test(String(account.type || '')) ? '学生' : '账号';
@@ -3773,6 +3977,15 @@ if (typeof module !== 'undefined' && module.exports) {
   function renderRelationSemesters() {
     const select = $('teacherLookupSemesterSelect');
     if (!select) return;
+    const signature = {
+      semesterId: state.student.semesterId,
+      semesters: state.student.semesters.map((item) => [item.id, item.label]),
+    };
+    if (!shouldRender('relation-semesters', signature)) {
+      select.value = state.student.semesterId || '';
+      select.disabled = state.student.relationLoading || !state.student.semesters.length;
+      return;
+    }
     select.innerHTML = '<option value="">选择学期</option>';
     state.student.semesters.forEach((semester) => {
       const option = document.createElement('option');
@@ -3787,6 +4000,14 @@ if (typeof module !== 'undefined' && module.exports) {
   function renderRelationClasses() {
     const select = $('lookupClassSelect');
     if (!select) return;
+    const signature = {
+      selectedClassId: state.student.selectedClassId,
+      classes: state.student.classes.map((item) => [item.id, item.label, item.name]),
+    };
+    if (!shouldRender('relation-classes', signature)) {
+      select.value = state.student.selectedClassId || '';
+      return;
+    }
     select.innerHTML = '<option value="">选择班级</option>';
     state.student.classes.forEach((item) => {
       const option = document.createElement('option');
@@ -3803,6 +4024,12 @@ if (typeof module !== 'undefined' && module.exports) {
     const empty = $('lookupStudentEmpty');
     const pager = $('lookupStudentPager');
     if (!list || !empty || !pager) return;
+    if (!shouldRender('matched-students', {
+      error: s.relationError,
+      selectedId: s.selectedStudent?.id,
+      classes: s.classes.map((item) => [item.id, item.label, item.name]),
+      students: s.matchedStudents.map((item) => [item.id, item.name, item.code, item.account, item.classId, item.className]),
+    })) return;
     list.innerHTML = '';
     pager.classList.add('hidden');
     if (!s.matchedStudents.length) {
@@ -3817,7 +4044,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const matchedClass = tenant.findStudentClass(student, s.classes);
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'student-item lookup-student-item quick-student-select fade-in' +
+      row.className = 'student-item lookup-student-item quick-student-select' +
         (s.selectedStudent?.id === student.id ? ' selected' : '');
       row.setAttribute('aria-pressed', String(s.selectedStudent?.id === student.id));
       row.innerHTML = '<span class="student-item-info"><span class="student-item-name">' +
@@ -3900,7 +4127,13 @@ if (typeof module !== 'undefined' && module.exports) {
       $('studentAccountSummaryMeta').textContent = [s.selectedAccount.account, s.selectedAccount.tenantName].filter(Boolean).join(' / ');
       const env = normalizeEnv(s.selectedAccount.env);
       const localPort = normalizePort(s.selectedAccount.localPort);
-      $('studentAccountSummaryActions').innerHTML = '<div class="quick-summary-target">' +
+      const summaryActions = $('studentAccountSummaryActions');
+      const summaryChanged = setHtmlIfChanged(summaryActions, {
+        id: s.selectedAccount.loginId,
+        tenantId: s.selectedAccount.tenantId,
+        env,
+        localPort,
+      }, '<div class="quick-summary-target">' +
         actionTargetControls({
           id: s.selectedAccount.loginId,
           tenantName: s.selectedAccount.tenantName,
@@ -3917,10 +4150,10 @@ if (typeof module !== 'undefined' && module.exports) {
           role: 'student',
           env,
           localPort,
-        }, !s.selectedAccount.loginId || !s.selectedAccount.tenantId);
-      syncActionTarget($('studentAccountSummaryActions'), env, localPort);
+        }, !s.selectedAccount.loginId || !s.selectedAccount.tenantId));
+      if (summaryChanged) syncActionTarget(summaryActions, env, localPort);
     } else {
-      $('studentAccountSummaryActions').innerHTML = '';
+      setHtmlIfChanged($('studentAccountSummaryActions'), 'empty', '');
     }
     setInlineStatus(
       'accountSessionStatus',
@@ -4248,7 +4481,7 @@ if (typeof module !== 'undefined' && module.exports) {
         const env = normalizeEnv(teacherItem.env);
         const localPort = normalizePort(teacherItem.localPort);
         const row = document.createElement('div');
-        row.className = 'list-item lookup-teacher-item quick-action-row quick-target-container fade-in' + (!teacherItem.loginId ? ' relation-disabled' : '');
+        row.className = 'list-item lookup-teacher-item quick-action-row quick-target-container' + (!teacherItem.loginId ? ' relation-disabled' : '');
         row.dataset.env = env;
         row.dataset.localPort = localPort;
         const duties = teacherItem.duties?.length
@@ -4635,7 +4868,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const env = normalizeEnv(record.env);
       const localPort = normalizePort(record.localPort);
       const row = document.createElement('div');
-      row.className = 'recent-item quick-recent-row fade-in';
+      row.className = 'recent-item quick-recent-row';
       row.dataset.env = env;
       row.dataset.localPort = localPort;
       row.innerHTML = '<div class="recent-item-info"><div class="recent-item-text"><span class="recent-role-badge">' +
@@ -5041,6 +5274,7 @@ if (typeof module !== 'undefined' && module.exports) {
         }).catch(() => {});
       });
     }
+    window.addEventListener('pagehide', () => { flushPersistedState(); });
   }
 
   async function init() {
@@ -5057,7 +5291,6 @@ if (typeof module !== 'undefined' && module.exports) {
     restoreFormValues();
     updateModeUI();
     await hasAdminToken();
-    await rehydratePersistedSessions();
     if (!state.teacher.selectedTenant && state.teacher.tenantKeyword) {
       renderTenantList(state.teacher.tenantRecords);
     }
@@ -5067,7 +5300,20 @@ if (typeof module !== 'undefined' && module.exports) {
     await renderRecent();
   }
 
-  const quickLoginUi = { init };
+  function activate() {
+    if (activationPromise) return activationPromise;
+    activationPromise = (async () => {
+      await hasAdminToken();
+      await rehydratePersistedSessions();
+      renderTeacherShell();
+      renderTeacherStudents();
+      renderStudentShell();
+      await renderRecent();
+    })();
+    return activationPromise;
+  }
+
+  const quickLoginUi = { init, activate };
   ns.quickLoginUi = quickLoginUi;
   /* 截图/冒烟测试用：以假数据直渲染租户用户列表（不触网、不绑选择事件） */
   ns.quickLoginUiDebug = {
@@ -5140,6 +5386,8 @@ if (typeof module !== 'undefined' && module.exports) {
   let loading = false;
   let historyExpanded = false;
   let teacherLoading = false;
+  let initialized = false;
+  let activationPromise = null;
   let teacherState = {
     records: [],
     total: 0,
@@ -5769,17 +6017,21 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function init() {
+    if (initialized) return;
+    initialized = true;
     bindEvents();
     ns.workspaceUi?.registerBeforeLeave('other-token', onTokenBlur);
-    await renderCredentials();
-    await renderToken();
-    await renderHistory();
-    // 已有 token 时自动拉教师列表
-    await loadTeachers(true);
+    await Promise.all([renderCredentials(), renderToken(), renderHistory()]);
+  }
+
+  function activate() {
+    if (!activationPromise) activationPromise = loadTeachers(true);
+    return activationPromise;
   }
 
   ns.otherLoginUi = {
     init,
+    activate,
     renderToken,
     renderCredentials,
     renderHistory,
@@ -5835,6 +6087,8 @@ if (typeof module !== 'undefined' && module.exports) {
 
   let lastSavedToken = '';
   let eventsBound = false;
+  let initialized = false;
+  let activationPromise = null;
 
   function $(id) {
     return document.getElementById(IDs[id] || id);
@@ -6569,20 +6823,25 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function init() {
+    if (initialized) return;
+    initialized = true;
     bindEvents();
     ns.workspaceUi?.registerBeforeLeave('app-token', onTokenBlur);
-    await renderCredentials();
-    await renderToken();
-    await renderHistory();
-    // 有站点地址时预加载学校列表
-    const siteUrl = ($('siteUrl')?.value || '').trim();
-    if (siteUrl) {
-      await loadSchools();
-    }
+    await Promise.all([renderCredentials(), renderToken(), renderHistory()]);
+  }
+
+  function activate() {
+    if (activationPromise) return activationPromise;
+    activationPromise = (async () => {
+      const siteUrl = ($('siteUrl')?.value || '').trim();
+      if (siteUrl) await loadSchools();
+    })();
+    return activationPromise;
   }
 
   ns.appLoginUi = {
     init,
+    activate,
     renderToken,
     renderCredentials,
     renderHistory,
@@ -6617,6 +6876,7 @@ if (typeof module !== 'undefined' && module.exports) {
   let lastSavedToken = '';
   // 记录最近一次从存储读到的自定义域名覆盖；空串表示未覆盖（使用项目默认）
   let lastSavedDomain = '';
+  let adminInitialized = false;
 
   function getEditableText(el) {
     return (el.textContent || '').replace(/ /g, ' ');
@@ -6908,32 +7168,23 @@ if (typeof module !== 'undefined' && module.exports) {
     });
   }
 
+  async function initAdminPanel() {
+    if (adminInitialized) return;
+    adminInitialized = true;
+    await Promise.all([renderCredentials(), renderToken(), renderDomain()]);
+    bindCredentials();
+    bindAdminPanelToggle();
+    ns.workspaceUi?.registerBeforeLeave('admin-token', onTokenBlur);
+    ns.workspaceUi?.registerBeforeLeave('admin-domain', onDomainBlur);
+  }
+
   async function init() {
     await ns.currentProject.loadCurrentProject();
-    const enabledFeatures = ns.currentProject.getEnabledFeatures();
-
-    if (ns.workspaceUi) {
-      await ns.workspaceUi.init();
-    }
-
-    if (enabledFeatures.includes('adminPanel')) {
-      await renderCredentials();
-      await renderToken();
-      await renderDomain();
-      bindCredentials();
-      bindAdminPanelToggle();
-      ns.workspaceUi?.registerBeforeLeave('admin-token', onTokenBlur);
-      ns.workspaceUi?.registerBeforeLeave('admin-domain', onDomainBlur);
-    }
-    if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
-      await ns.quickLoginUi.init();
-    }
-    if (ns.otherLoginUi && enabledFeatures.includes('otherLogin')) {
-      await ns.otherLoginUi.init();
-    }
-    if (ns.appLoginUi && enabledFeatures.includes('appLogin')) {
-      await ns.appLoginUi.init();
-    }
+    ns.workspaceUi?.registerFeatureLifecycle('adminPanel', { init: initAdminPanel });
+    ns.workspaceUi?.registerFeatureLifecycle('quickLogin', ns.quickLoginUi);
+    ns.workspaceUi?.registerFeatureLifecycle('otherLogin', ns.otherLoginUi);
+    ns.workspaceUi?.registerFeatureLifecycle('appLogin', ns.appLoginUi);
+    await ns.workspaceUi?.init();
     ns.ui.observeActions?.();
     ns.workspaceUi?.syncHeader();
   }

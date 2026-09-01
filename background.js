@@ -88,9 +88,18 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function setCurrentProjectId(id) {
+    const project = ns.projects.getById(id);
+    if (!project) throw new Error(`未知项目: ${id}`);
     await chrome.storage.local.set({ [STORAGE_KEY]: id });
     cachedProjectId = id;
-    cachedProject = ns.projects.getById(id);
+    cachedProject = project;
+    return cachedProject;
+  }
+
+  async function switchProjectContext(id) {
+    const project = await setCurrentProjectId(id);
+    if (ns.customDomain) await ns.customDomain.loadCachedOverride();
+    return project;
   }
 
   async function loadCurrentProject() {
@@ -187,6 +196,7 @@ if (typeof module !== 'undefined' && module.exports) {
   ns.currentProject = {
     getCurrentProjectId,
     setCurrentProjectId,
+    switchProjectContext,
     loadCurrentProject,
     getCachedProjectId,
     getProject,
@@ -4664,6 +4674,15 @@ if (typeof module !== 'undefined' && module.exports) {
 
     if (msg.type === 'PING') {
       sendResponse({ type: 'PONG', at: Date.now() });
+      return true;
+    }
+
+    if (msg.type === 'SET_PROJECT_CONTEXT') {
+      const projectId = String(msg.payload?.projectId || '');
+      commonNs.currentProject
+        .switchProjectContext(projectId)
+        .then((project) => sendResponse({ ok: true, projectId: project.id }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }
 

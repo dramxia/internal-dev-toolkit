@@ -38,6 +38,8 @@
   let loading = false;
   let historyExpanded = false;
   let teacherLoading = false;
+  let initialized = false;
+  let activationPromise = null;
   let teacherState = {
     records: [],
     total: 0,
@@ -667,17 +669,21 @@
   }
 
   async function init() {
+    if (initialized) return;
+    initialized = true;
     bindEvents();
     ns.workspaceUi?.registerBeforeLeave('other-token', onTokenBlur);
-    await renderCredentials();
-    await renderToken();
-    await renderHistory();
-    // 已有 token 时自动拉教师列表
-    await loadTeachers(true);
+    await Promise.all([renderCredentials(), renderToken(), renderHistory()]);
+  }
+
+  function activate() {
+    if (!activationPromise) activationPromise = loadTeachers(true);
+    return activationPromise;
   }
 
   ns.otherLoginUi = {
     init,
+    activate,
     renderToken,
     renderCredentials,
     renderHistory,

@@ -64,6 +64,15 @@
       return true;
     }
 
+    if (msg.type === 'SET_PROJECT_CONTEXT') {
+      const projectId = String(msg.payload?.projectId || '');
+      commonNs.currentProject
+        .switchProjectContext(projectId)
+        .then((project) => sendResponse({ ok: true, projectId: project.id }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'LOGIN_API' && ns.api) {
       ns.api
         .doLogin(msg.payload)

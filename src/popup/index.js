@@ -15,6 +15,7 @@
   let lastSavedToken = '';
   // 记录最近一次从存储读到的自定义域名覆盖；空串表示未覆盖（使用项目默认）
   let lastSavedDomain = '';
+  let adminInitialized = false;
 
   function getEditableText(el) {
     return (el.textContent || '').replace(/ /g, ' ');
@@ -306,32 +307,23 @@
     });
   }
 
+  async function initAdminPanel() {
+    if (adminInitialized) return;
+    adminInitialized = true;
+    await Promise.all([renderCredentials(), renderToken(), renderDomain()]);
+    bindCredentials();
+    bindAdminPanelToggle();
+    ns.workspaceUi?.registerBeforeLeave('admin-token', onTokenBlur);
+    ns.workspaceUi?.registerBeforeLeave('admin-domain', onDomainBlur);
+  }
+
   async function init() {
     await ns.currentProject.loadCurrentProject();
-    const enabledFeatures = ns.currentProject.getEnabledFeatures();
-
-    if (ns.workspaceUi) {
-      await ns.workspaceUi.init();
-    }
-
-    if (enabledFeatures.includes('adminPanel')) {
-      await renderCredentials();
-      await renderToken();
-      await renderDomain();
-      bindCredentials();
-      bindAdminPanelToggle();
-      ns.workspaceUi?.registerBeforeLeave('admin-token', onTokenBlur);
-      ns.workspaceUi?.registerBeforeLeave('admin-domain', onDomainBlur);
-    }
-    if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
-      await ns.quickLoginUi.init();
-    }
-    if (ns.otherLoginUi && enabledFeatures.includes('otherLogin')) {
-      await ns.otherLoginUi.init();
-    }
-    if (ns.appLoginUi && enabledFeatures.includes('appLogin')) {
-      await ns.appLoginUi.init();
-    }
+    ns.workspaceUi?.registerFeatureLifecycle('adminPanel', { init: initAdminPanel });
+    ns.workspaceUi?.registerFeatureLifecycle('quickLogin', ns.quickLoginUi);
+    ns.workspaceUi?.registerFeatureLifecycle('otherLogin', ns.otherLoginUi);
+    ns.workspaceUi?.registerFeatureLifecycle('appLogin', ns.appLoginUi);
+    await ns.workspaceUi?.init();
     ns.ui.observeActions?.();
     ns.workspaceUi?.syncHeader();
   }

@@ -13,9 +13,18 @@
   }
 
   async function setCurrentProjectId(id) {
+    const project = ns.projects.getById(id);
+    if (!project) throw new Error(`未知项目: ${id}`);
     await chrome.storage.local.set({ [STORAGE_KEY]: id });
     cachedProjectId = id;
-    cachedProject = ns.projects.getById(id);
+    cachedProject = project;
+    return cachedProject;
+  }
+
+  async function switchProjectContext(id) {
+    const project = await setCurrentProjectId(id);
+    if (ns.customDomain) await ns.customDomain.loadCachedOverride();
+    return project;
   }
 
   async function loadCurrentProject() {
@@ -112,6 +121,7 @@
   ns.currentProject = {
     getCurrentProjectId,
     setCurrentProjectId,
+    switchProjectContext,
     loadCurrentProject,
     getCachedProjectId,
     getProject,

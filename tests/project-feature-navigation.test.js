@@ -68,12 +68,17 @@ for (const sourceId of [
 }
 
 assert.match(workspaceUi, /const STORAGE_KEY = 'sidePanelActiveWorkspace'/);
-assert.match(workspaceUi, /await ns\.currentProject\.setCurrentProjectId\(target\.projectId\)/);
-assert.match(workspaceUi, /location\.reload\(\)/, '跨项目任务切换后应刷新侧栏上下文');
-assert.match(workspaceUi, /registerBeforeLeave/);
-assert.match(workspaceUi, /scrollTop: \$\('workspaceMain'\)\?\.scrollTop/);
+assert.match(workspaceUi, /contextProjectId: meta\.usesProjectContext \? project\.id : ''/);
+assert.match(workspaceUi, /type: 'SET_PROJECT_CONTEXT'/, '后台项目上下文应通过消息同步而非刷新文档');
+assert.doesNotMatch(workspaceUi, /location\.reload\(\)/, '底部模块切换不得刷新侧栏文档');
+assert.match(workspaceUi, /registerFeatureLifecycle/);
+assert.match(workspaceUi, /workspaceScroll\.set\(activeWorkspace\.workspaceId, main\.scrollTop\)/);
 assert.match(workspaceUi, /event\.key === 'Escape' && activeUtility/);
-assert.match(popupIndex, /await ns\.workspaceUi\.init\(\)/);
+assert.match(popupIndex, /registerFeatureLifecycle\('adminPanel'/);
+assert.match(popupIndex, /registerFeatureLifecycle\('quickLogin'/);
+assert.match(popupIndex, /registerFeatureLifecycle\('otherLogin'/);
+assert.match(popupIndex, /registerFeatureLifecycle\('appLogin'/);
+assert.match(popupIndex, /await ns\.workspaceUi\?\.init\(\)/);
 assert.doesNotMatch(popupIndex, /projectSwitcherUi|bindTabSwitcher|featureTabs/);
 assert.match(buildScript, /'src\/popup\/workspace-ui\.js'/);
 assert.doesNotMatch(buildScript, /'src\/popup\/project-switcher-ui\.js'/);
@@ -96,6 +101,8 @@ for (const elementId of [
 const popupModule = fs.readFileSync(path.join(root, 'src/popup/other-login-ui.js'), 'utf8');
 const backgroundModule = fs.readFileSync(path.join(root, 'src/background/other-login.js'), 'utf8');
 const backgroundIndex = fs.readFileSync(path.join(root, 'src/background/index.js'), 'utf8');
+assert.match(backgroundIndex, /msg\.type === 'SET_PROJECT_CONTEXT'/, 'background 应支持无刷新项目上下文同步');
+assert.match(backgroundIndex, /switchProjectContext\(projectId\)/, '项目上下文同步应同时刷新 background 内存缓存');
 for (const messageType of [
   'OTHER_LOGIN',
   'OTHER_ENTER',
@@ -111,6 +118,13 @@ for (const messageType of [
   assert.ok(popupModule.includes(messageType), `Popup 应继续发送 ${messageType}`);
   assert.ok(backgroundIndex.includes(messageType), `后台应继续处理 ${messageType}`);
 }
+assert.match(popupModule, /let initialized = false;/, '高校模块初始化必须幂等');
+assert.match(popupModule, /function activate\(\)[\s\S]*loadTeachers\(true\)/, '高校教师列表只在首次激活时加载');
+assert.doesNotMatch(
+  popupModule.match(/async function init\(\) \{([\s\S]*?)\n  \}\n\n  function activate/)?.[1] || '',
+  /loadTeachers\(/,
+  '高校模块空闲预热不得请求教师列表',
+);
 for (const storageKey of ['otherLoginCredentials', 'otherLoginToken', 'otherLoginHistory']) {
   assert.ok(backgroundModule.includes(storageKey), `后台应继续使用原存储键 ${storageKey}`);
 }

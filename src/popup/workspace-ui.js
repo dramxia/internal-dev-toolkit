@@ -13,6 +13,7 @@
       panelId: 'panel-admin',
       path: '后台登录',
       utilities: { token: 'admin-token', domain: 'admin-domain' },
+      usesProjectContext: true,
     },
     quickLogin: {
       id: 'relations',
@@ -21,6 +22,7 @@
       panelId: 'panel-quick',
       path: '教师 -> 学生',
       utilities: { history: 'quick-history', token: 'admin-token' },
+      usesProjectContext: true,
     },
     otherLogin: {
       id: 'higher',
@@ -29,6 +31,7 @@
       panelId: 'panel-other',
       path: '账号登入',
       utilities: { history: 'other-history', token: 'other-token' },
+      usesProjectContext: false,
     },
     appLogin: {
       id: 'app',
@@ -37,6 +40,7 @@
       panelId: 'panel-app',
       path: '学生登录',
       utilities: { history: 'app-history', token: 'app-token' },
+      usesProjectContext: false,
     },
   });
 
@@ -65,6 +69,11 @@
   let activeUtility = '';
   let returnState = null;
   const beforeLeave = new Map();
+  const featureLifecycles = new Map();
+  const featureInitPromises = new Map();
+  const workspaceScroll = new Map();
+  const otherViewScroll = new Map([['account', 0], ['teachers', 0]]);
+  let activeOtherView = 'account';
 
   function createNavigationGate() {
     let active = false;
@@ -94,6 +103,7 @@
           projectId: project.id,
           projectName: project.name,
           workspaceId: `${project.id}:${meta.id}`,
+          contextProjectId: meta.usesProjectContext ? project.id : '',
         }));
       }
     }
@@ -103,8 +113,47 @@
   function selectInitialWorkspace(items, currentProjectId, storedWorkspaceId) {
     const source = Array.isArray(items) ? items : [];
     const stored = source.find((item) => item.workspaceId === storedWorkspaceId) || null;
-    if (stored?.projectId === currentProjectId) return stored;
+    if (stored) return stored;
     return source.find((item) => item.projectId === currentProjectId) || source[0] || null;
+  }
+
+  function registerFeatureLifecycle(feature, lifecycle) {
+    if (!feature || !lifecycle) return;
+    featureLifecycles.set(feature, lifecycle);
+  }
+
+  function ensureFeatureInitialized(feature) {
+    if (!featureLifecycles.has(feature)) return Promise.resolve();
+    if (!featureInitPromises.has(feature)) {
+      const lifecycle = featureLifecycles.get(feature);
+      featureInitPromises.set(feature, Promise.resolve().then(() => lifecycle.init?.()));
+    }
+    return featureInitPromises.get(feature);
+  }
+
+  function activateFeature(workspace) {
+    if (!workspace) return;
+    const lifecycle = featureLifecycles.get(workspace.feature);
+    ensureFeatureInitialized(workspace.feature)
+      .then(() => lifecycle?.activate?.(workspace))
+      .catch((error) => ns.ui.toast(error?.message || '模块初始化失败', 'err'));
+  }
+
+  function warmInactiveFeatures(activeFeature) {
+    const queue = [...new Set(definitions.map((item) => item.feature))]
+      .filter((feature) => feature !== activeFeature);
+    const scheduleNext = () => {
+      if (!queue.length) return;
+      const run = () => {
+        const feature = queue.shift();
+        ensureFeatureInitialized(feature)
+          .catch(() => {})
+          .finally(scheduleNext);
+      };
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 1500 });
+      else setTimeout(run, 32);
+    };
+    scheduleNext();
   }
 
   async function readStoredWorkspace() {
@@ -192,22 +241,44 @@
 
   function activateWorkspace(workspace, options = {}) {
     if (!workspace) return false;
+    const main = $('workspaceMain');
+    if (activeWorkspace && main && !activeUtility) workspaceScroll.set(activeWorkspace.workspaceId, main.scrollTop);
     activeWorkspace = workspace;
     activeUtility = '';
     document.body.classList.remove('utility-open');
     $('workspaceBackBtn').hidden = true;
     document.querySelectorAll('.utility-screen').forEach((screen) => { screen.hidden = true; });
     document.querySelectorAll('.panel').forEach((panel) => {
-      panel.classList.toggle('active', panel.id === workspace.panelId);
+      const selected = panel.id === workspace.panelId;
+      panel.classList.toggle('active', selected);
+      panel.setAttribute('aria-hidden', String(!selected));
+      panel.inert = !selected;
     });
     syncHeader();
     syncDock();
-    if (options.restoreScroll && $('workspaceMain')) {
-      requestAnimationFrame(() => { $('workspaceMain').scrollTop = options.restoreScroll; });
-    } else if ($('workspaceMain')) {
-      $('workspaceMain').scrollTop = 0;
-    }
+    const targetScroll = Number.isFinite(options.restoreScroll)
+      ? options.restoreScroll
+      : (workspaceScroll.get(workspace.workspaceId) || 0);
+    if (main) main.scrollTop = targetScroll;
+    activateFeature(workspace);
     return true;
+  }
+
+  function commitWorkspace(workspace, options = {}) {
+    const update = () => activateWorkspace(workspace, options);
+    if (options.transition === false || !ns.ui?.transitionView) return update();
+    ns.ui.transitionView(update, 'workspace');
+    return true;
+  }
+
+  async function ensureProjectContext(projectId) {
+    if (!projectId || projectId === ns.currentProject.getCachedProjectId()) return;
+    const response = await ns.messages.sendToBackground({
+      type: 'SET_PROJECT_CONTEXT',
+      payload: { projectId },
+    });
+    if (!response?.ok) throw new Error(response?.error || '后端项目上下文切换失败');
+    await ns.currentProject.switchProjectContext(projectId);
   }
 
   async function runBeforeLeave(key) {
@@ -252,17 +323,9 @@
     const previous = returnState;
     const workspace = workspaceForId(previous.workspaceId) || activeWorkspace;
     returnState = null;
-    activateWorkspace(workspace, { restoreScroll: previous.scrollTop });
+    commitWorkspace(workspace, { restoreScroll: previous.scrollTop });
     requestAnimationFrame(() => previous.trigger?.focus?.({ preventScroll: true }));
     return true;
-  }
-
-  function setDockBusy(active) {
-    const dock = $('workspaceDock');
-    if (dock) dock.setAttribute('aria-busy', String(active));
-    document.querySelectorAll('.workspace-dock-item').forEach((button) => {
-      button.disabled = active;
-    });
   }
 
   async function switchWorkspace(workspaceId) {
@@ -272,41 +335,41 @@
       navigationGate.leave();
       return;
     }
-    setDockBusy(true);
-    let reloadScheduled = false;
     try {
       if (activeUtility && !(await back())) return;
-      await storeWorkspace(target.workspaceId);
-      if (target.projectId !== ns.currentProject.getCachedProjectId()) {
-        await ns.currentProject.setCurrentProjectId(target.projectId);
-        location.reload();
-        reloadScheduled = true;
-        return;
-      }
-      activateWorkspace(target);
+      await ensureProjectContext(target.contextProjectId);
+      commitWorkspace(target);
+      storeWorkspace(target.workspaceId).catch(() => {});
     } catch (error) {
       ns.ui.toast(`切换任务失败: ${error.message}`, 'err');
     } finally {
-      if (!reloadScheduled) {
-        navigationGate.leave();
-        setDockBusy(false);
-      }
+      navigationGate.leave();
     }
   }
 
   function switchOtherView(view) {
-    const teacherView = view === 'teachers';
+    const nextView = view === 'teachers' ? 'teachers' : 'account';
+    if (nextView === activeOtherView) return;
+    const main = $('workspaceMain');
+    if (main) otherViewScroll.set(activeOtherView, main.scrollTop);
+    const teacherView = nextView === 'teachers';
     const section = $('otherLoginSection');
     const teacherSection = $('otherTeacherSection');
     if (!section || !teacherSection) return;
-    section.classList.toggle('show-teachers', teacherView);
-    teacherSection.classList.toggle('hidden', !teacherView);
-    document.querySelectorAll('#otherSubviewNav [data-other-view]').forEach((button) => {
-      const active = button.dataset.otherView === (teacherView ? 'teachers' : 'account');
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', String(active));
-    });
-    setPath(teacherView ? '教师直达' : '账号登入');
+    const update = () => {
+      activeOtherView = nextView;
+      section.classList.toggle('show-teachers', teacherView);
+      teacherSection.classList.toggle('hidden', !teacherView);
+      document.querySelectorAll('#otherSubviewNav [data-other-view]').forEach((button) => {
+        const active = button.dataset.otherView === nextView;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      setPath(teacherView ? '教师直达' : '账号登入');
+      if (main) main.scrollTop = otherViewScroll.get(nextView) || 0;
+    };
+    if (ns.ui?.transitionView) ns.ui.transitionView(update, 'higher');
+    else update();
   }
 
   function bindEvents() {
@@ -356,6 +419,10 @@
 
   async function init() {
     definitions = buildWorkspaceDefinitions(ns.projects.PROJECTS);
+    const validContexts = definitions.map((item) => item.contextProjectId).filter(Boolean);
+    if (!validContexts.includes(ns.currentProject.getCachedProjectId())) {
+      await ensureProjectContext(validContexts[0] || ns.projects.DEFAULT_PROJECT_ID);
+    }
     renderDock();
     createUtilityScreens();
     bindEvents();
@@ -366,11 +433,12 @@
       storedWorkspaceId = await readStoredWorkspace();
     } catch (_) {}
     const workspace = selectInitialWorkspace(definitions, currentProjectId, storedWorkspaceId);
-    activateWorkspace(workspace);
+    commitWorkspace(workspace, { transition: false });
     if (workspace) {
       try { await storeWorkspace(workspace.workspaceId); } catch (_) {}
     }
     observeStatus();
+    warmInactiveFeatures(workspace?.feature);
   }
 
   ns.workspaceUi = {
@@ -380,6 +448,7 @@
     setPath,
     switchWorkspace,
     registerBeforeLeave,
+    registerFeatureLifecycle,
     syncHeader,
     buildWorkspaceDefinitions,
     selectInitialWorkspace,

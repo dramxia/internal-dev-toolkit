@@ -8,6 +8,38 @@
   let hideTimer = 0;
   // 默认仅 ok 自动消失；调用方可通过 duration 为其它类型设置关闭时间。
   const OK_AUTO_HIDE_MS = 1800;
+  let activeContentAnimation = null;
+
+  function transitionTarget(kind) {
+    if (kind === 'workspace') return document.querySelector('.panel.active');
+    if (kind === 'quick') return document.querySelector('.quick-mode-panel:not(.hidden)');
+    if (kind === 'higher') return document.getElementById('otherLoginSection');
+    return document.querySelector('.panel.active');
+  }
+
+  function transitionView(update, kind = 'content') {
+    if (typeof update !== 'function') return null;
+    activeContentAnimation?.cancel();
+    activeContentAnimation = null;
+    update();
+
+    const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const target = transitionTarget(kind);
+    if (reduceMotion || typeof target?.animate !== 'function') return null;
+
+    const animation = target.animate([
+      { opacity: 0.88, transform: 'translate3d(0, 4px, 0)' },
+      { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+    ], {
+      duration: 150,
+      easing: 'cubic-bezier(.2, .8, .2, 1)',
+    });
+    activeContentAnimation = animation;
+    animation.finished.finally(() => {
+      if (activeContentAnimation === animation) activeContentAnimation = null;
+    }).catch(() => {});
+    return animation;
+  }
 
   function toast(text, kind, options = {}) {
     const el = document.getElementById(TOAST_ID);
@@ -208,5 +240,5 @@
     document.addEventListener('scroll', () => closeActionMenu(false), true);
   }
 
-  ns.ui = { toast, compactActions, observeActions, closeActionMenu };
+  ns.ui = { toast, transitionView, compactActions, observeActions, closeActionMenu };
 })();

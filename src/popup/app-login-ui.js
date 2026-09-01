@@ -44,6 +44,8 @@
 
   let lastSavedToken = '';
   let eventsBound = false;
+  let initialized = false;
+  let activationPromise = null;
 
   function $(id) {
     return document.getElementById(IDs[id] || id);
@@ -778,20 +780,25 @@
   }
 
   async function init() {
+    if (initialized) return;
+    initialized = true;
     bindEvents();
     ns.workspaceUi?.registerBeforeLeave('app-token', onTokenBlur);
-    await renderCredentials();
-    await renderToken();
-    await renderHistory();
-    // 有站点地址时预加载学校列表
-    const siteUrl = ($('siteUrl')?.value || '').trim();
-    if (siteUrl) {
-      await loadSchools();
-    }
+    await Promise.all([renderCredentials(), renderToken(), renderHistory()]);
+  }
+
+  function activate() {
+    if (activationPromise) return activationPromise;
+    activationPromise = (async () => {
+      const siteUrl = ($('siteUrl')?.value || '').trim();
+      if (siteUrl) await loadSchools();
+    })();
+    return activationPromise;
   }
 
   ns.appLoginUi = {
     init,
+    activate,
     renderToken,
     renderCredentials,
     renderHistory,

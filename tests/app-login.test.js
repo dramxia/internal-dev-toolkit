@@ -359,7 +359,14 @@ require(modulePath);
   assert.match(popupHtml, /\.spinner \{[\s\S]*width: 14px;[\s\S]*height: 14px;[\s\S]*animation: spinner-rotate \.65s linear infinite;/, 'spinner 应有稳定尺寸和旋转动画');
   assert.match(popupHtml, /@keyframes spinner-rotate \{[\s\S]*transform: rotate\(360deg\);/, 'spinner 旋转关键帧必须存在');
   assert.match(popupUi, /let eventsBound = false;/, 'App UI 应维护事件绑定状态');
+  assert.match(popupUi, /let initialized = false;/, 'App UI 初始化必须幂等');
   assert.match(popupUi, /function bindEvents\(\) \{\s*if \(eventsBound\) return;\s*eventsBound = true;/, 'App UI 重复初始化时不得叠加事件监听器');
+  assert.match(popupUi, /function activate\(\)[\s\S]*if \(siteUrl\) await loadSchools\(\)/, '学校列表只在 APP 首次激活时预加载');
+  assert.doesNotMatch(
+    popupUi.match(/async function init\(\) \{([\s\S]*?)\n  \}\n\n  function activate/)?.[1] || '',
+    /loadSchools\(/,
+    'APP 空闲预热不得请求学校列表',
+  );
   const historyRenderer = popupUi.match(/async function renderHistory\(\)[\s\S]*?\n  \}\n\n  async function findHistoryRecord/);
   assert.ok(historyRenderer, '应能提取 App 历史记录渲染器');
   assert.match(historyRenderer[0], /paginateHistoryRecords\(filteredRecords, state\.historyPage\)/, '分页应基于租户班级筛选后的历史数据');

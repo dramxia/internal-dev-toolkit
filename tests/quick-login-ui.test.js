@@ -126,7 +126,17 @@ assert.doesNotMatch(
 );
 assert.match(quickUi, /activeStep: boundedStep\(t\.activeStep, 3\)/, '教师流程当前步骤应写入查询快照');
 assert.match(quickUi, /activeStep: boundedStep\(s\.activeStep, 1\)/, '学生流程当前步骤应写入查询快照');
-assert.match(quickUi, /const interactive = index <= maxStep;/, '所有已解锁步骤都应可以反复切换');
+assert.match(quickUi, /button\.disabled = index > maxStep;/, '所有已解锁步骤都应可以反复切换');
+const renderProgress = quickUi.match(/function renderProgress\(\) \{([\s\S]*?)\n  \}\n\n  function onProgressClick/);
+assert.ok(renderProgress, '应能提取步骤进度渲染逻辑');
+assert.doesNotMatch(renderProgress[1], /track\.innerHTML\s*=/, '步骤状态更新不得重建全部进度按钮');
+assert.match(renderProgress[1], /track\.querySelectorAll\('\.quick-progress-step'\)/, '步骤按钮应复用现有节点');
+assert.match(quickUi, /persistenceTimer = setTimeout\(flushPersistedState, 250\)/, '查询快照写入应使用 250ms debounce');
+assert.match(quickUi, /if \(signature === lastPersistedSignature\) return;/, '相同查询快照不得重复写 storage');
+assert.doesNotMatch(persistedStateBlock[1], /regularAccountsByTenant|relationTeacherCache/, '大型运行时关系缓存不得写入持久化快照');
+assert.match(quickUi, /shouldRender\('teacher-users'/, '教师账号列表应按数据签名跳过无关重绘');
+assert.match(quickUi, /shouldRender\('student-accounts'/, '学生账号列表应按数据签名跳过无关重绘');
+assert.match(quickUi, /transitionView\(update, 'quick'\)/, '关系模式和步骤切换应使用显式视图过渡');
 assert.match(buildScript, /'src\/common\/quick-login-state\.js'[\s\S]*'src\/popup\/quick-login-ui\.js'/, '查询状态存储模块应先于 UI 打包');
 assert.match(quickUi, /await loadPersistedState\(\);[\s\S]*renderShell\(\);[\s\S]*bindEvents\(\);/, '首次渲染前应恢复查询快照');
 assert.match(quickUi, /teacher:\s*\{[\s\S]*student:\s*\{/, '同一个快照应同时保存教师与学生查询状态');
@@ -180,7 +190,7 @@ assert.match(
 );
 assert.match(
   quickUi,
-  /function renderStudentShell\([\s\S]*studentAccountSummaryActions[\s\S]*actionTargetControls\([\s\S]*syncActionTarget\(\$\('studentAccountSummaryActions'\), env, localPort\)/,
+  /function renderStudentShell\([\s\S]*studentAccountSummaryActions[\s\S]*actionTargetControls\([\s\S]*syncActionTarget\(summaryActions, env, localPort\)/,
   '学生账号汇总条应保留记录级环境开关',
 );
 assert.match(
@@ -345,7 +355,7 @@ assert.match(popupHtml, /\.quick-user-toolbar \.quick-action-btn\s*\{[\s\S]*widt
 assert.match(quickUi, /class="quick-user-avatar"[\s\S]*class="quick-user-toolbar"/);
 assert.match(quickUi, /<div class="quick-user-toolbar">' \+\s*actionTargetControls[\s\S]*actionButtons\(/, '工具栏应紧跟环境控件与操作按钮');
 assert.match(popupHtml, /\.quick-tenant-user-row:hover\s*\{\s*background:\s*var\(--sage-50\)/);
-assert.match(popupHtml, /\.quick-tenant-user-row\.active:hover\s*\{\s*background:\s*var\(--sage-100\)/);
+assert.match(popupHtml, /\.quick-tenant-user-row\.active:hover\s*\{\s*background:\s*var\(--sage-50\)/);
 
 const visiblePanelText = panel.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, ' ');
 assert.doesNotMatch(visiblePanelText, /[—–]/, '目标面板可见文本不得包含长破折号或分隔用短破折号');
