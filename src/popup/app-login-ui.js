@@ -220,7 +220,7 @@
     const next = getEditableText(tokenEl).trim();
     if (next === lastSavedToken) {
       await renderToken();
-      return;
+      return true;
     }
     try {
       if (!next) {
@@ -234,8 +234,10 @@
         setStatus('Token 已保存', 'ok');
       }
       await renderToken();
+      return true;
     } catch (err) {
       setStatus(`保存失败: ${err.message}`, 'err');
+      return false;
     }
   }
 
@@ -755,6 +757,15 @@
         setStatus(`复制失败: ${err.message}`, 'err');
       }
     });
+    $('appClearTokenToolBtn')?.addEventListener('click', async () => {
+      try {
+        await messages.sendToBackground({ type: 'APP_CLEAR_TOKEN' });
+        await renderToken();
+        setStatus('Token 已清空', 'ok');
+      } catch (err) {
+        setStatus(`清除失败: ${err.message}`, 'err');
+      }
+    });
 
     const tokenEl = $('tokenValue');
     const tokenWrap = $('tokenWrap');
@@ -768,6 +779,7 @@
 
   async function init() {
     bindEvents();
+    ns.workspaceUi?.registerBeforeLeave('app-token', onTokenBlur);
     await renderCredentials();
     await renderToken();
     await renderHistory();

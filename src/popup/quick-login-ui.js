@@ -10,8 +10,10 @@
   const DEFAULT_RECENT_VISIBLE = 3;
   const DEFAULT_STUDENT_PASSWORD = 'Xx@123456';
   const REQUIRED_QUICK_IDS = Object.freeze([
-    'quickLoginSection', 'quickLoginHeader', 'quickLoginBody',
+    'quickLoginSection', 'quickLoginHeader', 'quickLoginBody', 'quickHistorySection',
     'quickAuthNotice', 'quickActionStatus', 'recentList', 'quickRecentCount', 'quickRecentHeading',
+    'quickHistoryFilters', 'quickHistoryRoleFilter', 'quickHistoryEnvFilter',
+    'quickStepProgress', 'quickStepProgressTrack', 'quickProgressCompact',
     'modeTeacherBtn', 'modeStudentBtn', 'teacherModePanel', 'studentModePanel',
     'teacherTenantStep', 'teacherTenantState', 'teacherTenantSummary',
     'teacherTenantSummaryTitle', 'teacherTenantSummaryMeta', 'changeTeacherTenantBtn',
@@ -60,8 +62,11 @@
     mode: 'teacher',
     loadingLogin: false,
     recentExpanded: false,
+    recentRoleFilter: '',
+    recentEnvFilter: '',
     adminTokenAvailable: null,
     teacher: {
+      activeStep: 0,
       selectedTenant: null,
       tenantKeyword: '',
       tenantRecords: [],
@@ -94,6 +99,8 @@
       studentPage: { current: 1, size: 10, total: 0, records: [] },
     },
     student: {
+      activeStep: 0,
+      editingRelationSelection: false,
       field: 'username',
       keyword: '',
       accountRequestId: 0,
@@ -163,11 +170,13 @@
     setInlineStatus('quickActionStatus', text, kind);
   }
 
-  function setStageState(stepId, stateId, { visible = true, complete = false, status = '' } = {}) {
+  function setStageState(stepId, stateId, { visible = true, complete = false, current, status = '' } = {}) {
     const step = $(stepId);
     if (!step) return;
+    const isCurrent = current == null ? visible && !complete : Boolean(current);
     step.classList.toggle('hidden', !visible);
     step.classList.toggle('is-complete', complete);
+    step.classList.toggle('is-current', isCurrent);
     step.setAttribute('aria-busy', String(/中$/.test(status)));
     const stateEl = $(stateId);
     if (stateEl) stateEl.textContent = status;
@@ -209,6 +218,22 @@
     return { current: 1, size, total: 0, records: [] };
   }
 
+  function boundedStep(value, max) {
+    const step = Number(value);
+    return Number.isInteger(step) ? Math.max(0, Math.min(step, max)) : 0;
+  }
+
+  function getTeacherReachableStep(teacherState = state.teacher) {
+    if (!teacherState.selectedTenant) return 0;
+    if (!teacherState.selectedUser) return 1;
+    if (!teacherState.selectedTeacher) return 2;
+    return 3;
+  }
+
+  function getStudentReachableStep(studentState = state.student) {
+    return studentState.selectedAccount?.session ? 1 : 0;
+  }
+
   function pageSnapshot(page, fallbackSize = 10) {
     return {
       current: Number(page?.current) || 1,
@@ -235,6 +260,7 @@
     return {
       mode: source.mode === 'student' ? 'student' : 'teacher',
       teacher: {
+        activeStep: boundedStep(t.activeStep, 3),
         selectedTenant: t.selectedTenant,
         tenantKeyword: t.tenantKeyword,
         tenantRecords: Array.isArray(t.tenantRecords) ? t.tenantRecords : [],
@@ -251,6 +277,7 @@
         studentPage: pageSnapshot(t.studentPage),
       },
       student: {
+        activeStep: boundedStep(s.activeStep, 1),
         field: ['username', 'account', 'tenantName'].includes(s.field) ? s.field : 'username',
         keyword: s.keyword,
         accountPage: pageSnapshot(s.accountPage),
@@ -292,6 +319,9 @@
       state.teacher.studentNameKeyword = typeof t.studentNameKeyword === 'string' ? t.studentNameKeyword : '';
       state.teacher.studentCodeKeyword = typeof t.studentCodeKeyword === 'string' ? t.studentCodeKeyword : '';
       state.teacher.studentPage = pageSnapshot(t.studentPage);
+      state.teacher.activeStep = Number.isInteger(t.activeStep)
+        ? boundedStep(t.activeStep, getTeacherReachableStep(state.teacher))
+        : getTeacherReachableStep(state.teacher);
     }
     const s = snapshot.student;
     if (s && typeof s === 'object') {
@@ -313,6 +343,9 @@
         ? s.regularAccountsByTenant : {};
       state.student.relationTeacherCache = s.relationTeacherCache && typeof s.relationTeacherCache === 'object'
         ? s.relationTeacherCache : {};
+      state.student.activeStep = Number.isInteger(s.activeStep)
+        ? boundedStep(s.activeStep, getStudentReachableStep(state.student))
+        : getStudentReachableStep(state.student);
     }
     return true;
   }
@@ -493,6 +526,7 @@
     s.relationLoading = false;
     s.resolvingTeachers = false;
     s.relationError = '';
+    s.editingRelationSelection = false;
   }
 
   function switchMode(mode) {
@@ -529,6 +563,61 @@
     }
     if (teacherPanel) teacherPanel.classList.toggle('hidden', state.mode !== 'teacher');
     if (studentPanel) studentPanel.classList.toggle('hidden', state.mode !== 'student');
+    renderProgress();
+  }
+
+  function navigateToStep(mode, index) {
+    const studentMode = mode === 'student';
+    const targetState = studentMode ? state.student : state.teacher;
+    const maxStep = studentMode ? getStudentReachableStep(targetState) : getTeacherReachableStep(targetState);
+    const requestedStep = Number(index);
+    if (!Number.isInteger(requestedStep) || requestedStep < 0 || requestedStep > maxStep) return;
+    targetState.activeStep = requestedStep;
+    if (studentMode) renderStudentShell();
+    else renderTeacherShell();
+    const focusIds = studentMode
+      ? ['accountSearch', 'lookupByStudentBtn']
+      : ['tenantSearch', 'userSearch', 'teacherNameSearch', 'studentNameSearch'];
+    focusControl(focusIds[requestedStep]);
+  }
+
+  function renderProgress() {
+    const track = $('quickStepProgressTrack');
+    const compact = $('quickProgressCompact');
+    if (!track || !compact) return;
+    const teacherMode = state.mode === 'teacher';
+    const targetState = teacherMode ? state.teacher : state.student;
+    const maxStep = teacherMode ? getTeacherReachableStep(targetState) : getStudentReachableStep(targetState);
+    targetState.activeStep = boundedStep(targetState.activeStep, maxStep);
+    const activeStep = targetState.activeStep;
+    const steps = teacherMode
+      ? [
+        { label: '租户', complete: Boolean(state.teacher.selectedTenant) },
+        { label: '账号', complete: Boolean(state.teacher.selectedUser) },
+        { label: '教师', complete: Boolean(state.teacher.selectedTeacher) },
+        { label: '学生', complete: Boolean(state.teacher.selectedTeacher) },
+      ]
+      : [
+        { label: '学生账号', complete: Boolean(state.student.selectedAccount?.session) },
+        { label: '关联教师', complete: Boolean(state.student.selectedClassId) },
+      ];
+    track.style.setProperty('--step-count', String(steps.length));
+    track.innerHTML = steps.map((step, index) => {
+      const stateClass = index === activeStep ? ' current' : (step.complete ? ' complete' : '');
+      const interactive = index <= maxStep;
+      return `<button class="quick-progress-step${stateClass}" type="button" data-step-index="${index}" ` +
+        `aria-current="${index === activeStep ? 'step' : 'false'}"${interactive ? '' : ' disabled'}>` +
+        `${index + 1} ${step.label}</button>`;
+    }).join('');
+    compact.textContent = `步骤 ${activeStep + 1}/${steps.length} · ${steps[activeStep].label}`;
+    ns.workspaceUi?.setPath(teacherMode ? '教师 -> 学生' : '学生 -> 教师');
+  }
+
+  function onProgressClick(event) {
+    const button = event.target.closest('.quick-progress-step');
+    if (!button || button.disabled) return;
+    const index = Number(button.dataset.stepIndex);
+    navigateToStep(state.mode, index);
   }
 
   function renderShell() {
@@ -879,6 +968,7 @@
   async function selectTeacherTenant(item) {
     const t = state.teacher;
     t.selectedTenant = item;
+    t.activeStep = 1;
     t.userKeyword = '';
     t.userPage = resetPage();
     clearTeacherSession();
@@ -1051,6 +1141,7 @@
         env: normalizeEnv(row?.dataset.env),
         localPort: normalizePort(row?.dataset.localPort),
       };
+      t.activeStep = 2;
       t.sessionError = '';
       t.loadingSession = false;
       t.teacherNameKeyword = String(t.selectedUser.userName || '').trim();
@@ -1182,6 +1273,7 @@
       return;
     }
     t.selectedTeacher = teacherItem;
+    t.activeStep = 3;
     t.studentPage = resetPage();
     t.classIds = [];
     renderTeacherShell();
@@ -1485,14 +1577,17 @@
     const tenantReady = Boolean(t.selectedTenant);
     const userReady = Boolean(t.selectedUser);
     const teacherReady = Boolean(t.selectedTeacher);
+    t.activeStep = boundedStep(t.activeStep, getTeacherReachableStep(t));
+    const activeStep = t.activeStep;
 
     setStageState('teacherTenantStep', 'teacherTenantState', {
       visible: true,
       complete: tenantReady,
+      current: activeStep === 0,
       status: t.loadingTenants ? '搜索中' : (tenantReady ? '已选择' : '当前'),
     });
-    toggleRegion('teacherTenantSummary', tenantReady);
-    toggleRegion('teacherTenantStepBody', !tenantReady);
+    toggleRegion('teacherTenantSummary', tenantReady && activeStep !== 0);
+    toggleRegion('teacherTenantStepBody', activeStep === 0);
     if (tenantReady) {
       $('teacherTenantSummaryTitle').textContent = t.selectedTenant.tenantName || '(未命名租户)';
       $('teacherTenantSummaryMeta').textContent = t.selectedTenant.domain || t.selectedTenant.contactPhone || t.selectedTenant.tenantId;
@@ -1501,10 +1596,11 @@
     setStageState('teacherUserStep', 'teacherUserState', {
       visible: tenantReady,
       complete: userReady,
+      current: activeStep === 1,
       status: t.loadingSession ? '连接中' : (t.loadingUsers ? '加载中' : (userReady ? '已选择' : '当前')),
     });
-    toggleRegion('teacherUserSummary', userReady);
-    toggleRegion('teacherUserStepBody', tenantReady && !userReady);
+    toggleRegion('teacherUserSummary', userReady && activeStep !== 1);
+    toggleRegion('teacherUserStepBody', tenantReady && activeStep === 1);
     if (userReady) {
       $('teacherUserSummaryTitle').textContent = t.selectedUser.userName || '(未命名账号)';
       $('teacherUserSummaryMeta').textContent = [t.selectedUser.account, t.selectedUser.tenantName].filter(Boolean).join(' / ');
@@ -1542,19 +1638,21 @@
     setStageState('teacherIdentityStep', 'teacherIdentityState', {
       visible: userReady,
       complete: teacherReady,
+      current: activeStep === 2,
       status: t.loadingTeachers ? '加载中' : (t.loadingDuties ? '读取中' : (teacherReady ? '已选择' : '当前')),
     });
-    toggleRegion('teacherIdentitySummary', teacherReady);
-    toggleRegion('teacherIdentityStepBody', userReady && !teacherReady);
+    toggleRegion('teacherIdentitySummary', teacherReady && activeStep !== 2);
+    toggleRegion('teacherIdentityStepBody', userReady && activeStep === 2);
     if (teacherReady) {
       $('teacherIdentitySummaryTitle').textContent = t.selectedTeacher.name || '(未命名教师)';
       $('teacherIdentitySummaryMeta').textContent = [t.selectedTeacher.account, t.selectedTeacher.statusText].filter(Boolean).join(' / ');
     }
 
-    toggleRegion('studentSection', teacherReady);
+    toggleRegion('studentSection', teacherReady && activeStep === 3);
     renderTeacherUsers();
     renderTeachers();
     renderTeacherDuties();
+    renderProgress();
     persistStateSoon();
   }
 
@@ -1698,6 +1796,8 @@
           aiToken: result.aiToken,
         },
       });
+      s.activeStep = 1;
+      s.editingRelationSelection = false;
       s.loadingSession = false;
       renderStudentShell();
       await loadStudentRelationData();
@@ -1818,7 +1918,7 @@
     const panel = $('studentRelationPanel');
     if (!panel) return;
     const ready = Boolean(s.selectedAccount?.session);
-    panel.classList.toggle('hidden', !ready);
+    panel.classList.toggle('hidden', !ready || s.activeStep !== 1);
     updateRelationBusy();
     const byStudent = $('lookupByStudentBtn');
     const byClass = $('lookupByClassBtn');
@@ -1828,9 +1928,10 @@
     byClass?.setAttribute('aria-pressed', String(s.relationMode === 'class'));
     const selectedClass = s.classes.find((item) => String(item.id) === String(s.selectedClassId));
     const selectionComplete = Boolean(selectedClass && (s.relationMode === 'class' || s.selectedStudent));
-    toggleRegion('relationSelectionSummary', selectionComplete);
-    toggleRegion('lookupStudentPanel', s.relationMode === 'student' && !selectionComplete);
-    toggleRegion('lookupClassPanel', s.relationMode === 'class' && !selectionComplete);
+    const showingSelection = !selectionComplete || s.editingRelationSelection;
+    toggleRegion('relationSelectionSummary', selectionComplete && !s.editingRelationSelection);
+    toggleRegion('lookupStudentPanel', s.relationMode === 'student' && showingSelection);
+    toggleRegion('lookupClassPanel', s.relationMode === 'class' && showingSelection);
     if (selectionComplete) {
       const semester = s.semesters.find((item) => String(item.id) === String(s.semesterId));
       $('relationSelectionSummaryTitle').textContent = s.selectedStudent?.name || selectedClass.label || selectedClass.name || selectedClass.id;
@@ -1853,13 +1954,16 @@
   function renderStudentShell() {
     const s = state.student;
     const accountReady = Boolean(s.selectedAccount?.session);
+    s.activeStep = boundedStep(s.activeStep, getStudentReachableStep(s));
+    const activeStep = s.activeStep;
     setStageState('studentAccountStep', 'studentAccountState', {
       visible: true,
       complete: accountReady,
+      current: activeStep === 0,
       status: s.loadingAccounts ? '搜索中' : (s.loadingSession ? '连接中' : (accountReady ? '已选择' : '当前')),
     });
-    toggleRegion('studentAccountSummary', accountReady);
-    toggleRegion('studentAccountStepBody', !accountReady);
+    toggleRegion('studentAccountSummary', accountReady && activeStep !== 0);
+    toggleRegion('studentAccountStepBody', activeStep === 0);
     if (accountReady) {
       $('studentAccountSummaryTitle').textContent = s.selectedAccount.username || '(未命名学生)';
       $('studentAccountSummaryMeta').textContent = [s.selectedAccount.account, s.selectedAccount.tenantName].filter(Boolean).join(' / ');
@@ -1894,8 +1998,11 @@
     );
     renderAccountUsers();
     renderStudentRelationShell();
-    if (s.selectedClassId) renderRelationTeachers(s.selectedClassId);
-    else if (!s.selectedStudent) clearRelationTeacherResult('请选择学生或班级');
+    if (activeStep === 1) {
+      if (s.selectedClassId) renderRelationTeachers(s.selectedClassId);
+      else if (!s.selectedStudent) clearRelationTeacherResult('请选择学生或班级');
+    }
+    renderProgress();
     persistStateSoon();
   }
 
@@ -1988,6 +2095,7 @@
     s.matchedBy = '';
     s.selectedStudent = null;
     s.selectedClassId = '';
+    s.editingRelationSelection = false;
     clearRelationTeacherResult('正在加载班级与教师关系…');
     renderStudentRelationShell();
     try {
@@ -2047,6 +2155,7 @@
     s.selectedStudent = student;
     const matchedClass = tenant.findStudentClass(student, s.classes);
     s.selectedClassId = matchedClass?.id || '';
+    s.editingRelationSelection = false;
     renderMatchedStudents();
     if (!matchedClass) {
       clearRelationTeacherResult((student.name || '该学生') + '的班级无法唯一识别');
@@ -2059,8 +2168,15 @@
 
   function switchRelationMode(mode) {
     const s = state.student;
+    const nextMode = mode === 'class' ? 'class' : 'student';
+    if (nextMode === s.relationMode) {
+      s.editingRelationSelection = true;
+      renderStudentRelationShell();
+      return;
+    }
     invalidateRelationTeacherResolution();
-    s.relationMode = mode === 'class' ? 'class' : 'student';
+    s.relationMode = nextMode;
+    s.editingRelationSelection = true;
     if (s.relationMode === 'class') {
       s.selectedStudent = null;
       s.selectedClassId = '';
@@ -2301,50 +2417,24 @@
   }
 
   function changeTeacherTenant() {
-    const t = state.teacher;
-    t.selectedTenant = null;
-    t.tenantKeyword = '';
-    t.userKeyword = '';
-    t.userPage = resetPage();
-    clearTeacherSession();
-    $('tenantSearch').value = '';
-    $('userSearch').value = '';
-    clearList('tenantList', 'tenantEmpty', '请输入租户条件');
-    renderTeacherShell();
-    focusControl('tenantSearch');
+    navigateToStep('teacher', 0);
   }
 
   function changeTeacherUser() {
-    clearTeacherSession();
-    renderTeacherShell();
-    focusControl('userSearch');
+    navigateToStep('teacher', 1);
   }
 
   function changeTeacherIdentity() {
-    const t = state.teacher;
-    t.selectedTeacher = null;
-    t.teacherDetailRequestId += 1;
-    t.studentRequestId += 1;
-    t.studentPage = resetPage();
-    t.classIds = [];
-    t.loadingDuties = false;
-    t.loadingStudents = false;
-    renderTeacherShell();
-    focusControl('teacherNameSearch');
+    navigateToStep('teacher', 2);
   }
 
   function changeStudentAccount() {
-    clearStudentSession(false);
-    renderStudentShell();
-    focusControl('accountSearch');
+    navigateToStep('student', 0);
   }
 
   function changeRelationSelection() {
     const s = state.student;
-    invalidateRelationTeacherResolution();
-    s.selectedStudent = null;
-    s.selectedClassId = '';
-    clearRelationTeacherResult(s.relationMode === 'class' ? '请选择班级' : '请选择学生');
+    s.editingRelationSelection = true;
     renderStudentRelationShell();
     focusControl(s.relationMode === 'class' ? 'lookupClassSelect' : 'lookupByStudentBtn');
   }
@@ -2588,10 +2678,24 @@
       return;
     }
     list.innerHTML = '';
-    records = records.slice(0, 10);
-    if (count) count.textContent = records.length + ' 条';
-    if (!records.length) {
+    const allRecords = records.slice(0, 10);
+    records = allRecords.filter((record) => {
+      if (state.recentRoleFilter && record.role !== state.recentRoleFilter) return false;
+      if (state.recentEnvFilter && normalizeEnv(record.env) !== state.recentEnvFilter) return false;
+      return true;
+    });
+    if (count) {
+      count.textContent = records.length === allRecords.length
+        ? `${allRecords.length} 条`
+        : `${records.length}/${allRecords.length} 条`;
+    }
+    if (!allRecords.length) {
       list.innerHTML = '<div class="recent-empty">暂无最近登录记录</div>';
+      list.removeAttribute('aria-busy');
+      return;
+    }
+    if (!records.length) {
+      list.innerHTML = '<div class="recent-empty">暂无符合筛选条件的记录</div>';
       list.removeAttribute('aria-busy');
       return;
     }
@@ -2807,6 +2911,7 @@
     }
     $('modeTeacherBtn')?.addEventListener('click', () => switchMode('teacher'));
     $('modeStudentBtn')?.addEventListener('click', () => switchMode('student'));
+    $('quickStepProgressTrack')?.addEventListener('click', onProgressClick);
     document.querySelector('.quick-mode-switcher')?.addEventListener('keydown', (event) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
@@ -2970,6 +3075,7 @@
       invalidateRelationTeacherResolution();
       state.student.selectedStudent = null;
       state.student.selectedClassId = String(event.target.value || '');
+      state.student.editingRelationSelection = !state.student.selectedClassId;
       if (state.student.selectedClassId) renderRelationTeachers(state.student.selectedClassId);
       else clearRelationTeacherResult('请选择班级');
       renderRelationClasses();
@@ -2983,6 +3089,16 @@
     $('recentList')?.addEventListener('click', onRecentClick);
     $('recentList')?.addEventListener('input', (event) => onRecentPortInput(event, false));
     $('recentList')?.addEventListener('change', (event) => onRecentPortInput(event, true));
+    $('quickHistoryRoleFilter')?.addEventListener('change', (event) => {
+      state.recentRoleFilter = event.target.value || '';
+      state.recentExpanded = false;
+      renderRecent();
+    });
+    $('quickHistoryEnvFilter')?.addEventListener('change', (event) => {
+      state.recentEnvFilter = event.target.value || '';
+      state.recentExpanded = false;
+      renderRecent();
+    });
     if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       chrome.storage.onChanged.addListener((changes, areaName) => {
         if (areaName !== 'local' || !Object.keys(changes).some((key) => key.startsWith('adminToken:'))) return;
@@ -3041,6 +3157,8 @@
       buildStudentAppLoginPayload,
       createDebouncedSearch,
       createPersistedState,
+      getStudentReachableStep,
+      getTeacherReachableStep,
       normalizeAppSiteUrl,
       renderTeacherUsers,
       restorePersistedState,

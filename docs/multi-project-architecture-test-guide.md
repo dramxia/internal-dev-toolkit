@@ -18,10 +18,10 @@
 - ✅ `src/content/api-token.js` - 多项目 host 匹配
 
 ### Phase 3: UI 层 ✅
-- ✅ 新建 `src/popup/project-switcher-ui.js` - 项目切换器
-- ✅ 修改 `popup.html` - 插入切换器 DOM + pill 样式
-- ✅ 修改 `src/popup/index.js` - 加载项目、初始化切换器、根据 enabledFeatures 隐藏功能卡
-- ✅ 修改 `src/popup/quick-login-ui.js` - envBadge 显示项目名
+- ✅ 新建 `src/popup/workspace-ui.js` - 任务坞、跨项目路由和独立工具屏
+- ✅ 修改 `popup.html` - 使用顶部上下文栏、专注工作区和底部任务坞
+- ✅ 修改 `src/popup/index.js` - 加载项目并初始化任务工作台
+- ✅ 修改 `src/popup/quick-login-ui.js` - 使用双向查询步骤画布
 
 ### Phase 4: 验证与清理 ✅
 - ✅ 更新 README.md - 说明多项目架构和配置方法
@@ -54,9 +54,9 @@ npm run build
 ### 3. 基本功能测试
 
 **当前只有一个项目时**：
-1. 打开 popup，顶部「项目」区域显示一个 pill：`GPT后台-预发布`（高亮状态）
-2. 输入账号密码，点击「登录」，token 应该保存到 `adminToken:gpt-admin-pre`
-3. 快捷登录功能正常工作
+1. 打开侧边栏，底部任务坞只显示该项目启用的任务
+2. 进入「后台」任务，输入账号密码并点击「登录并保存」，token 应保存到 `adminToken:gpt-admin-pre`
+3. 「关系」任务可正常恢复查询状态和最近使用记录
 
 ### 4. 多项目切换测试
 
@@ -84,12 +84,12 @@ npm run build
 运行 `npm run build`，重新加载插件。
 
 **测试步骤**：
-1. 打开 popup，顶部应显示两个 pill：`GPT后台-预发布`（高亮）、`测试后台`
-2. 在「GPT后台-预发布」中登录，输入框有内容
-3. 点击「测试后台」pill，popup reload
+1. 打开侧边栏，底部任务坞应显示两个项目启用的任务
+2. 在默认项目的「后台」任务中登录，输入框有内容
+3. 点击测试项目对应任务，侧边栏 reload 并切换 `currentProjectId`
 4. 输入框变空（独立登录态）
-5. 「一键快捷登录」卡片消失（该项目未启用 quickLogin）
-6. 点击回「GPT后台-预发布」，输入框恢复之前的账号
+5. 测试项目未启用 `quickLogin` 时，不生成对应的「关系」任务
+6. 点击默认项目的「后台」任务，输入框恢复之前的账号
 
 ### 5. manifest.json 自动生成测试
 
@@ -99,17 +99,15 @@ cat manifest.json | grep -A 5 host_permissions
 ```
 
 应该包含：
-- `https://gpt-admin-pre.hwzxs.com/*`
-- `https://*.hwzxs.com/*`
-- `http://localhost/*` （如果添加了 test-backend）
+- `<all_urls>`（当前构建统一允许在任意页面和 localhost 开发环境注入）
 
 ## 验证清单
 
 - [ ] 构建无错误（`npm run check`）
 - [ ] manifest.json 自动生成正确
 - [ ] 旧数据自动迁移（Console 有迁移日志）
-- [ ] 项目切换器显示正常
-- [ ] 切换项目时 popup reload
+- [ ] 任务工作台显示正常
+- [ ] 切换跨项目任务时侧边栏 reload
 - [ ] 不同项目独立的登录态
 - [ ] enabledFeatures 控制功能卡显示
 - [ ] 快捷登录记录按项目隔离

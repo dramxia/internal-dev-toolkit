@@ -6,7 +6,8 @@
 
 ## 功能
 
-- **多项目架构**：通过 `src/common/projects.js` 静态注册多个后台项目，侧边栏顶部切换器快速切换，每个项目独立存储 token/账号密码/最近登录记录
+- **任务优先工作台**：浏览器侧边栏以固定任务坞直接进入后台账号、师生关系、高校直达和 APP 登录；历史、Token 与域名使用独立工具屏，返回后保留原任务状态
+- **多项目架构**：通过 `src/common/projects.js` 静态注册多个后台项目，任务入口自动映射到所属项目，每个项目独立存储 token/账号密码/最近登录记录
 - **页面就绪标记**：在匹配域名页面右下角注入「内部工具箱已就绪」标记
 - **浏览器侧边栏**：点击扩展图标后在浏览器右侧打开工具箱，可在浏览页面时持续使用
 - **设置持久化**：账号密码、Token 与最近登录记录通过 `chrome.storage.local` 保存（按项目命名空间隔离）
@@ -59,9 +60,9 @@ npm run build   # 打包 content.js / popup.js / background.js 并输出到 dist
 
 运行 `npm run build` 后，`manifest.json` 的 `host_permissions` 和 `content_scripts.matches` 会自动生成。
 
-### 切换项目
+### 切换任务与项目
 
-点击扩展图标打开右侧栏，顶部「项目」区域显示所有已注册项目的 pill 按钮。点击切换后，每个项目使用独立的登录态和最近登录记录。
+点击扩展图标打开右侧栏，底部任务坞显示当前注册的业务任务。点击任务即可切换；当目标任务属于其他项目时，插件会同步切换 `currentProjectId` 并刷新侧边栏上下文。侧边栏重新打开后会恢复上次使用的主任务，但不会恢复临时打开的历史、Token 或域名工具屏。
 
 ### 禁用某功能
 
@@ -107,8 +108,10 @@ internal-dev-toolkit/
 │   │   ├── mock-hook.js         # 页面主上下文 fetch/XHR hook（按需注入）
 │   │   └── api-proxy.js         # 页面侧代理请求（备用链路）
 │   └── popup/
+│       ├── ui.js                # Toast、行操作压缩与更多菜单
+│       ├── workspace-ui.js      # 任务坞、跨项目路由与独立工具屏
 │       ├── index.js             # popup 主逻辑
-│       └── quick-login-ui.js    # 双向查询快捷登录面板 UI
+│       └── quick-login-ui.js    # 双向查询步骤画布与快捷登录 UI
 ├── scripts/
 │   ├── build.js                 # 零依赖构建脚本
 │   └── gen-icons.js             # 占位图标生成

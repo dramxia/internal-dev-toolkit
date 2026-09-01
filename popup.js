@@ -1354,53 +1354,577 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
-  ns.ui = { toast };
+  let menu = null;
+  let menuTrigger = null;
+  let observed = false;
+  let compactScheduled = false;
+
+  function ensureActionMenu() {
+    if (menu) return menu;
+    menu = document.createElement('div');
+    menu.className = 'action-menu';
+    menu.id = 'globalActionMenu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    document.body.appendChild(menu);
+    menu.addEventListener('click', (event) => {
+      const item = event.target.closest('[data-action-index]');
+      if (!item || item.disabled) return;
+      const sources = menu.__sources || [];
+      const source = sources[Number(item.dataset.actionIndex)];
+      const trigger = menuTrigger;
+      const scope = source?.closest('.utility-screen, .panel');
+      closeActionMenu(true);
+      source?.click();
+      const restoreFallback = () => {
+        const active = document.activeElement;
+        if (active && active !== document.body && active.isConnected) return;
+        const fallback = trigger?.isConnected
+          ? trigger
+          : scope?.querySelector('.action-overflow-btn, button, input, [contenteditable="true"]');
+        fallback?.focus?.({ preventScroll: true });
+      };
+      requestAnimationFrame(restoreFallback);
+      setTimeout(restoreFallback, 300);
+    });
+    menu.addEventListener('keydown', (event) => {
+      const items = [...menu.querySelectorAll('[role="menuitem"]:not(:disabled)')];
+      const index = items.indexOf(document.activeElement);
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        event.stopPropagation();
+        const delta = event.key === 'ArrowDown' ? 1 : -1;
+        items[(index + delta + items.length) % items.length]?.focus();
+      } else if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        event.stopPropagation();
+        items[event.key === 'Home' ? 0 : items.length - 1]?.focus();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeActionMenu();
+      }
+    });
+    return menu;
+  }
+
+  function actionLabel(button) {
+    return button.getAttribute('aria-label') || button.title || button.textContent.trim() || '执行操作';
+  }
+
+  function closeActionMenu(restoreFocus = true) {
+    if (!menu || menu.hidden) return;
+    const trigger = menuTrigger;
+    menu.hidden = true;
+    menu.innerHTML = '';
+    menu.__sources = [];
+    trigger?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) trigger?.focus?.({ preventScroll: true });
+    menuTrigger = null;
+  }
+
+  function openActionMenu(trigger, sources) {
+    const popup = ensureActionMenu();
+    const actions = sources.filter(Boolean);
+    if (!actions.length) return;
+    closeActionMenu(false);
+    menuTrigger = trigger;
+    trigger.setAttribute('aria-expanded', 'true');
+    popup.__sources = actions;
+    popup.innerHTML = actions.map((button, index) => {
+      const danger = button.classList.contains('danger') || button.dataset.action === 'delete';
+      return `<button type="button" role="menuitem" data-action-index="${index}"` +
+        `${button.disabled ? ' disabled' : ''} class="${danger ? 'danger' : ''}">` +
+        `${actionLabel(button)}</button>`;
+    }).join('');
+    popup.hidden = false;
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(220, window.innerWidth - 16);
+    popup.style.width = `${width}px`;
+    popup.style.left = `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`;
+    const measuredHeight = popup.offsetHeight;
+    const below = rect.bottom + 6;
+    const top = below + measuredHeight <= window.innerHeight - 8
+      ? below
+      : Math.max(8, rect.top - measuredHeight - 6);
+    popup.style.top = `${top}px`;
+    requestAnimationFrame(() => popup.querySelector('[role="menuitem"]:not(:disabled)')?.focus({ preventScroll: true }));
+  }
+
+  function compactRowActions(row) {
+    const sources = [...row.querySelectorAll(
+      '.action-btn:not(.action-overflow-btn), .recent-action-btn:not(.action-overflow-btn), ' +
+      '.student-app-login-btn, .student-copy-btn'
+    )];
+    if (sources.length < 2) return;
+    const signature = sources.map((button) => `${button.dataset.action || button.className}:${actionLabel(button)}`).join('|');
+    if (row.dataset.compactSignature === signature && row.querySelector('.action-overflow-btn')) return;
+
+    row.querySelectorAll('.action-overflow-btn').forEach((button) => button.remove());
+    sources.forEach((button) => {
+      button.hidden = false;
+      button.dataset.compactedAction = '';
+    });
+    const primary = sources.find((button) =>
+      ['open', 'login', 'enter'].includes(button.dataset.action) ||
+      button.classList.contains('student-app-login-btn') ||
+      button.classList.contains('primary')
+    ) || sources[0];
+    const secondary = sources.filter((button) => button !== primary);
+    secondary.forEach((button) => {
+      button.hidden = true;
+      button.dataset.compactedAction = 'true';
+    });
+    const group = primary.closest('.list-item-actions, .recent-item-actions, .student-item-actions') || primary.parentElement;
+    if (!group) return;
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'action-overflow-btn';
+    more.title = '更多操作';
+    more.setAttribute('aria-label', '更多操作');
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-controls', 'globalActionMenu');
+    more.setAttribute('aria-expanded', 'false');
+    more.textContent = '...';
+    more.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openActionMenu(more, secondary);
+    });
+    group.appendChild(more);
+    row.querySelectorAll('.recent-item-actions').forEach((container) => {
+      if (!container.querySelector('button:not([hidden])')) container.hidden = true;
+    });
+    row.dataset.compactSignature = signature;
+  }
+
+  function compactActions(root = document) {
+    root.querySelectorAll(
+      '.recent-item, .list-item, .quick-action-row, .student-item, .quick-stage-summary, .lookup-teacher-item'
+    ).forEach(compactRowActions);
+  }
+
+  function observeActions() {
+    if (observed || typeof MutationObserver === 'undefined') return;
+    observed = true;
+    const observer = new MutationObserver(() => {
+      if (compactScheduled) return;
+      compactScheduled = true;
+      requestAnimationFrame(() => {
+        compactScheduled = false;
+        compactActions();
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    compactActions();
+    document.addEventListener('pointerdown', (event) => {
+      if (!menu?.hidden && !menu.contains(event.target) && event.target !== menuTrigger) closeActionMenu(false);
+    });
+    window.addEventListener('resize', () => closeActionMenu(false));
+    document.addEventListener('scroll', () => closeActionMenu(false), true);
+  }
+
+  ns.ui = { toast, compactActions, observeActions, closeActionMenu };
 })();
 
 
-/* ===== src/popup/project-switcher-ui.js ===== */
-/* ===== src/popup/project-switcher-ui.js ===== */
-// 项目切换器 UI：顶部 pill 导航
+/* ===== src/popup/workspace-ui.js ===== */
+/* 内部开发工具箱 — 侧边栏任务工作台与工具屏路由 */
+(() => {
+  'use strict';
 
-(function() {
-  const ns = globalThis.InternalDevToolkit;
+  const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
+  const STORAGE_KEY = 'sidePanelActiveWorkspace';
 
-  async function init() {
-    const currentId = await ns.currentProject.getCurrentProjectId();
-    const pillsContainer = document.getElementById('projectPills');
-    if (!pillsContainer) {
-      console.warn('[项目切换器] #projectPills 容器不存在');
-      return;
+  const FEATURE_META = Object.freeze({
+    adminPanel: {
+      id: 'admin',
+      label: '后台账号',
+      shortLabel: '后台',
+      panelId: 'panel-admin',
+      path: '后台登录',
+      utilities: { token: 'admin-token', domain: 'admin-domain' },
+    },
+    quickLogin: {
+      id: 'relations',
+      label: '师生关系',
+      shortLabel: '关系',
+      panelId: 'panel-quick',
+      path: '教师 -> 学生',
+      utilities: { history: 'quick-history', token: 'admin-token' },
+    },
+    otherLogin: {
+      id: 'higher',
+      label: '高校直达',
+      shortLabel: '高校',
+      panelId: 'panel-other',
+      path: '账号登入',
+      utilities: { history: 'other-history', token: 'other-token' },
+    },
+    appLogin: {
+      id: 'app',
+      label: 'APP 登录',
+      shortLabel: 'APP',
+      panelId: 'panel-app',
+      path: '学生登录',
+      utilities: { history: 'app-history', token: 'app-token' },
+    },
+  });
+
+  const UTILITY_META = Object.freeze({
+    'admin-token': { title: '后台 Token', sourceId: 'adminTokenSection' },
+    'admin-domain': { title: 'API 域名', sourceId: 'adminDomainSection' },
+    'quick-history': { title: '最近使用', sourceId: 'quickHistorySection' },
+    'other-history': { title: '高校登录历史', sourceId: 'otherHistorySection' },
+    'other-token': { title: '高校 Token', sourceId: 'otherTokenSection' },
+    'app-history': { title: 'APP 登录历史', sourceId: 'appHistorySection' },
+    'app-token': { title: 'APP Token', sourceId: 'appTokenSection' },
+  });
+
+  const ICONS = Object.freeze({
+    admin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3"/><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M12 14v3"/></svg>',
+    relations: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M9.5 8.5l5 7M17 7h-5a5 5 0 0 0-5 5v2"/></svg>',
+    higher: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/></svg>',
+    app: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 5h4M11 19h2"/></svg>',
+    history: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>',
+    token: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 4l4 4M14 6l4 4"/></svg>',
+    domain: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>',
+  });
+
+  let definitions = [];
+  let activeWorkspace = null;
+  let activeUtility = '';
+  let returnState = null;
+  const beforeLeave = new Map();
+
+  function createNavigationGate() {
+    let active = false;
+    return {
+      tryEnter() {
+        if (active) return false;
+        active = true;
+        return true;
+      },
+      leave() { active = false; },
+      isActive() { return active; },
+    };
+  }
+
+  const navigationGate = createNavigationGate();
+
+  const $ = (id) => document.getElementById(id);
+
+  function buildWorkspaceDefinitions(projects, featureMeta = FEATURE_META) {
+    const result = [];
+    for (const project of Array.isArray(projects) ? projects : []) {
+      for (const feature of project.enabledFeatures || []) {
+        const meta = featureMeta[feature];
+        if (!meta) continue;
+        result.push(Object.assign({}, meta, {
+          feature,
+          projectId: project.id,
+          projectName: project.name,
+          workspaceId: `${project.id}:${meta.id}`,
+        }));
+      }
     }
+    return result;
+  }
 
-    // 单项目时无需切换，隐藏整个 pill 容器
-    if (ns.projects.PROJECTS.length <= 1) {
-      pillsContainer.style.display = 'none';
-      return;
-    }
+  function selectInitialWorkspace(items, currentProjectId, storedWorkspaceId) {
+    const source = Array.isArray(items) ? items : [];
+    const stored = source.find((item) => item.workspaceId === storedWorkspaceId) || null;
+    if (stored?.projectId === currentProjectId) return stored;
+    return source.find((item) => item.projectId === currentProjectId) || source[0] || null;
+  }
 
-    const pills = ns.projects.PROJECTS.map(p => {
-      const isActive = p.id === currentId;
-      return `<div class="project-pill ${isActive ? 'active' : ''}" data-project-id="${p.id}">${p.name}</div>`;
-    }).join('');
+  async function readStoredWorkspace() {
+    const result = await chrome.storage.local.get(STORAGE_KEY);
+    return String(result?.[STORAGE_KEY] || '');
+  }
 
-    pillsContainer.innerHTML = pills;
+  async function storeWorkspace(workspaceId) {
+    await chrome.storage.local.set({ [STORAGE_KEY]: workspaceId });
+  }
 
-    // 点击切换项目
-    pillsContainer.addEventListener('click', async (e) => {
-      const pill = e.target.closest('.project-pill');
-      if (!pill || pill.classList.contains('active')) return;
+  function workspaceForId(workspaceId) {
+    return definitions.find((item) => item.workspaceId === workspaceId) || null;
+  }
 
-      const newId = pill.dataset.projectId;
-      await ns.currentProject.setCurrentProjectId(newId);
-      await ns.currentProject.loadCurrentProject();
+  function renderDock() {
+    const dock = $('workspaceDock');
+    if (!dock) return;
+    dock.innerHTML = definitions.map((item) => (
+      `<button class="workspace-dock-item" type="button" data-workspace-id="${item.workspaceId}" ` +
+      `aria-label="${item.projectName} / ${item.label}">` +
+      `<span class="workspace-dock-icon">${ICONS[item.id]}</span>` +
+      `<span>${item.shortLabel}</span></button>`
+    )).join('');
+    dock.classList.toggle('is-scrollable', definitions.length > 4);
+  }
 
-      // 刷新 popup（简单粗暴但有效）
-      location.reload();
+  function createUtilityScreens() {
+    const host = $('utilityHost');
+    if (!host) return;
+    Object.entries(UTILITY_META).forEach(([id, meta]) => {
+      const source = $(meta.sourceId);
+      if (!source) return;
+      const screen = document.createElement('section');
+      screen.className = 'utility-screen';
+      screen.id = `utility-${id}`;
+      screen.dataset.utilityId = id;
+      screen.hidden = true;
+      screen.appendChild(source);
+      host.appendChild(screen);
     });
   }
 
-  ns.projectSwitcherUi = { init };
+  function setHeaderAction(buttonId, utilityId) {
+    const button = $(buttonId);
+    if (!button) return;
+    const available = Boolean(utilityId && $(`utility-${utilityId}`));
+    button.hidden = !available;
+    button.dataset.utilityId = available ? utilityId : '';
+  }
+
+  function currentWorkspaceStatus() {
+    if (!activeWorkspace) return '';
+    if (activeWorkspace.feature === 'quickLogin') {
+      const notice = $('quickAuthNotice');
+      if (notice?.dataset.kind === 'warning') return '需要 Token';
+      if (notice?.dataset.kind === 'ready') return 'Token 就绪';
+      return '检查 Token';
+    }
+    const utilityId = activeWorkspace.utilities.token;
+    const screen = utilityId ? $(`utility-${utilityId}`) : null;
+    const shell = screen?.querySelector('.token-shell');
+    return shell && !shell.classList.contains('empty') ? 'Token 就绪' : '未登录';
+  }
+
+  function syncHeader() {
+    if (!activeWorkspace || activeUtility) return;
+    $('workspaceTitle').textContent = activeWorkspace.label;
+    $('workspaceProject').textContent = activeWorkspace.projectName;
+    $('workspacePath').textContent = activeWorkspace.path;
+    $('workspaceStatus').textContent = currentWorkspaceStatus();
+    setHeaderAction('workspaceHistoryBtn', activeWorkspace.utilities.history);
+    setHeaderAction('workspaceTokenBtn', activeWorkspace.utilities.token);
+    setHeaderAction('workspaceDomainBtn', activeWorkspace.utilities.domain);
+  }
+
+  function syncDock() {
+    document.querySelectorAll('.workspace-dock-item').forEach((button) => {
+      const selected = button.dataset.workspaceId === activeWorkspace?.workspaceId;
+      button.classList.toggle('active', selected);
+      if (selected) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    });
+  }
+
+  function activateWorkspace(workspace, options = {}) {
+    if (!workspace) return false;
+    activeWorkspace = workspace;
+    activeUtility = '';
+    document.body.classList.remove('utility-open');
+    $('workspaceBackBtn').hidden = true;
+    document.querySelectorAll('.utility-screen').forEach((screen) => { screen.hidden = true; });
+    document.querySelectorAll('.panel').forEach((panel) => {
+      panel.classList.toggle('active', panel.id === workspace.panelId);
+    });
+    syncHeader();
+    syncDock();
+    if (options.restoreScroll && $('workspaceMain')) {
+      requestAnimationFrame(() => { $('workspaceMain').scrollTop = options.restoreScroll; });
+    } else if ($('workspaceMain')) {
+      $('workspaceMain').scrollTop = 0;
+    }
+    return true;
+  }
+
+  async function runBeforeLeave(key) {
+    const handler = beforeLeave.get(key);
+    if (!handler) return true;
+    try {
+      return (await handler()) !== false;
+    } catch (error) {
+      ns.ui.toast(error?.message || '保存失败，请重试', 'err');
+      return false;
+    }
+  }
+
+  async function openUtility(utilityId, trigger = document.activeElement) {
+    const screen = $(`utility-${utilityId}`);
+    const meta = UTILITY_META[utilityId];
+    if (!screen || !meta || !activeWorkspace) return false;
+    if (activeUtility && !(await runBeforeLeave(activeUtility))) return false;
+    returnState = {
+      workspaceId: activeWorkspace.workspaceId,
+      scrollTop: $('workspaceMain')?.scrollTop || 0,
+      trigger,
+    };
+    activeUtility = utilityId;
+    document.body.classList.add('utility-open');
+    document.querySelectorAll('.panel').forEach((panel) => panel.classList.remove('active'));
+    document.querySelectorAll('.utility-screen').forEach((item) => { item.hidden = item !== screen; });
+    $('workspaceBackBtn').hidden = false;
+    $('workspaceTitle').textContent = meta.title;
+    $('workspaceProject').textContent = activeWorkspace.projectName;
+    $('workspacePath').textContent = '工具屏';
+    $('workspaceStatus').textContent = '';
+    ['workspaceHistoryBtn', 'workspaceTokenBtn', 'workspaceDomainBtn'].forEach((id) => { $(id).hidden = true; });
+    if ($('workspaceMain')) $('workspaceMain').scrollTop = 0;
+    requestAnimationFrame(() => screen.querySelector('button, input, [contenteditable="true"]')?.focus({ preventScroll: true }));
+    return true;
+  }
+
+  async function back() {
+    if (!activeUtility || !returnState) return false;
+    if (!(await runBeforeLeave(activeUtility))) return false;
+    const previous = returnState;
+    const workspace = workspaceForId(previous.workspaceId) || activeWorkspace;
+    returnState = null;
+    activateWorkspace(workspace, { restoreScroll: previous.scrollTop });
+    requestAnimationFrame(() => previous.trigger?.focus?.({ preventScroll: true }));
+    return true;
+  }
+
+  function setDockBusy(active) {
+    const dock = $('workspaceDock');
+    if (dock) dock.setAttribute('aria-busy', String(active));
+    document.querySelectorAll('.workspace-dock-item').forEach((button) => {
+      button.disabled = active;
+    });
+  }
+
+  async function switchWorkspace(workspaceId) {
+    if (!navigationGate.tryEnter()) return;
+    const target = workspaceForId(workspaceId);
+    if (!target || target.workspaceId === activeWorkspace?.workspaceId) {
+      navigationGate.leave();
+      return;
+    }
+    setDockBusy(true);
+    let reloadScheduled = false;
+    try {
+      if (activeUtility && !(await back())) return;
+      await storeWorkspace(target.workspaceId);
+      if (target.projectId !== ns.currentProject.getCachedProjectId()) {
+        await ns.currentProject.setCurrentProjectId(target.projectId);
+        location.reload();
+        reloadScheduled = true;
+        return;
+      }
+      activateWorkspace(target);
+    } catch (error) {
+      ns.ui.toast(`切换任务失败: ${error.message}`, 'err');
+    } finally {
+      if (!reloadScheduled) {
+        navigationGate.leave();
+        setDockBusy(false);
+      }
+    }
+  }
+
+  function switchOtherView(view) {
+    const teacherView = view === 'teachers';
+    const section = $('otherLoginSection');
+    const teacherSection = $('otherTeacherSection');
+    if (!section || !teacherSection) return;
+    section.classList.toggle('show-teachers', teacherView);
+    teacherSection.classList.toggle('hidden', !teacherView);
+    document.querySelectorAll('#otherSubviewNav [data-other-view]').forEach((button) => {
+      const active = button.dataset.otherView === (teacherView ? 'teachers' : 'account');
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    setPath(teacherView ? '教师直达' : '账号登入');
+  }
+
+  function bindEvents() {
+    $('workspaceDock')?.addEventListener('click', (event) => {
+      const button = event.target.closest('.workspace-dock-item');
+      if (button) switchWorkspace(button.dataset.workspaceId);
+    });
+    document.querySelector('.workspace-header-actions')?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-utility-id]');
+      if (button?.dataset.utilityId) openUtility(button.dataset.utilityId, button);
+    });
+    $('workspaceBackBtn')?.addEventListener('click', () => back());
+    $('otherSubviewNav')?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-other-view]');
+      if (button) switchOtherView(button.dataset.otherView);
+    });
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-open-utility]');
+      if (button) openUtility(button.dataset.openUtility, button);
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.defaultPrevented) return;
+      if (event.key === 'Escape' && activeUtility) {
+        event.preventDefault();
+        back();
+      }
+    });
+  }
+
+  function observeStatus() {
+    const observer = new MutationObserver(() => syncHeader());
+    ['quickAuthNotice', 'tokenWrap', 'otherTokenWrap', 'appTokenWrap'].forEach((id) => {
+      const element = $(id);
+      if (element) observer.observe(element, { attributes: true, childList: true, subtree: true });
+    });
+  }
+
+  function registerBeforeLeave(utilityId, handler) {
+    if (typeof handler === 'function') beforeLeave.set(utilityId, handler);
+  }
+
+  function setPath(path) {
+    if (!activeWorkspace || activeUtility) return;
+    activeWorkspace.path = String(path || '');
+    syncHeader();
+  }
+
+  async function init() {
+    definitions = buildWorkspaceDefinitions(ns.projects.PROJECTS);
+    renderDock();
+    createUtilityScreens();
+    bindEvents();
+
+    const currentProjectId = ns.currentProject.getCachedProjectId();
+    let storedWorkspaceId = '';
+    try {
+      storedWorkspaceId = await readStoredWorkspace();
+    } catch (_) {}
+    const workspace = selectInitialWorkspace(definitions, currentProjectId, storedWorkspaceId);
+    activateWorkspace(workspace);
+    if (workspace) {
+      try { await storeWorkspace(workspace.workspaceId); } catch (_) {}
+    }
+    observeStatus();
+  }
+
+  ns.workspaceUi = {
+    init,
+    back,
+    openUtility,
+    setPath,
+    switchWorkspace,
+    registerBeforeLeave,
+    syncHeader,
+    buildWorkspaceDefinitions,
+    selectInitialWorkspace,
+    createNavigationGate,
+  };
+
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = {
+      FEATURE_META,
+      buildWorkspaceDefinitions,
+      selectInitialWorkspace,
+      createNavigationGate,
+    };
+  }
 })();
 
 
@@ -1417,8 +1941,10 @@ if (typeof module !== 'undefined' && module.exports) {
   const DEFAULT_RECENT_VISIBLE = 3;
   const DEFAULT_STUDENT_PASSWORD = 'Xx@123456';
   const REQUIRED_QUICK_IDS = Object.freeze([
-    'quickLoginSection', 'quickLoginHeader', 'quickLoginBody',
+    'quickLoginSection', 'quickLoginHeader', 'quickLoginBody', 'quickHistorySection',
     'quickAuthNotice', 'quickActionStatus', 'recentList', 'quickRecentCount', 'quickRecentHeading',
+    'quickHistoryFilters', 'quickHistoryRoleFilter', 'quickHistoryEnvFilter',
+    'quickStepProgress', 'quickStepProgressTrack', 'quickProgressCompact',
     'modeTeacherBtn', 'modeStudentBtn', 'teacherModePanel', 'studentModePanel',
     'teacherTenantStep', 'teacherTenantState', 'teacherTenantSummary',
     'teacherTenantSummaryTitle', 'teacherTenantSummaryMeta', 'changeTeacherTenantBtn',
@@ -1467,8 +1993,11 @@ if (typeof module !== 'undefined' && module.exports) {
     mode: 'teacher',
     loadingLogin: false,
     recentExpanded: false,
+    recentRoleFilter: '',
+    recentEnvFilter: '',
     adminTokenAvailable: null,
     teacher: {
+      activeStep: 0,
       selectedTenant: null,
       tenantKeyword: '',
       tenantRecords: [],
@@ -1501,6 +2030,8 @@ if (typeof module !== 'undefined' && module.exports) {
       studentPage: { current: 1, size: 10, total: 0, records: [] },
     },
     student: {
+      activeStep: 0,
+      editingRelationSelection: false,
       field: 'username',
       keyword: '',
       accountRequestId: 0,
@@ -1570,11 +2101,13 @@ if (typeof module !== 'undefined' && module.exports) {
     setInlineStatus('quickActionStatus', text, kind);
   }
 
-  function setStageState(stepId, stateId, { visible = true, complete = false, status = '' } = {}) {
+  function setStageState(stepId, stateId, { visible = true, complete = false, current, status = '' } = {}) {
     const step = $(stepId);
     if (!step) return;
+    const isCurrent = current == null ? visible && !complete : Boolean(current);
     step.classList.toggle('hidden', !visible);
     step.classList.toggle('is-complete', complete);
+    step.classList.toggle('is-current', isCurrent);
     step.setAttribute('aria-busy', String(/中$/.test(status)));
     const stateEl = $(stateId);
     if (stateEl) stateEl.textContent = status;
@@ -1616,6 +2149,22 @@ if (typeof module !== 'undefined' && module.exports) {
     return { current: 1, size, total: 0, records: [] };
   }
 
+  function boundedStep(value, max) {
+    const step = Number(value);
+    return Number.isInteger(step) ? Math.max(0, Math.min(step, max)) : 0;
+  }
+
+  function getTeacherReachableStep(teacherState = state.teacher) {
+    if (!teacherState.selectedTenant) return 0;
+    if (!teacherState.selectedUser) return 1;
+    if (!teacherState.selectedTeacher) return 2;
+    return 3;
+  }
+
+  function getStudentReachableStep(studentState = state.student) {
+    return studentState.selectedAccount?.session ? 1 : 0;
+  }
+
   function pageSnapshot(page, fallbackSize = 10) {
     return {
       current: Number(page?.current) || 1,
@@ -1642,6 +2191,7 @@ if (typeof module !== 'undefined' && module.exports) {
     return {
       mode: source.mode === 'student' ? 'student' : 'teacher',
       teacher: {
+        activeStep: boundedStep(t.activeStep, 3),
         selectedTenant: t.selectedTenant,
         tenantKeyword: t.tenantKeyword,
         tenantRecords: Array.isArray(t.tenantRecords) ? t.tenantRecords : [],
@@ -1658,6 +2208,7 @@ if (typeof module !== 'undefined' && module.exports) {
         studentPage: pageSnapshot(t.studentPage),
       },
       student: {
+        activeStep: boundedStep(s.activeStep, 1),
         field: ['username', 'account', 'tenantName'].includes(s.field) ? s.field : 'username',
         keyword: s.keyword,
         accountPage: pageSnapshot(s.accountPage),
@@ -1699,6 +2250,9 @@ if (typeof module !== 'undefined' && module.exports) {
       state.teacher.studentNameKeyword = typeof t.studentNameKeyword === 'string' ? t.studentNameKeyword : '';
       state.teacher.studentCodeKeyword = typeof t.studentCodeKeyword === 'string' ? t.studentCodeKeyword : '';
       state.teacher.studentPage = pageSnapshot(t.studentPage);
+      state.teacher.activeStep = Number.isInteger(t.activeStep)
+        ? boundedStep(t.activeStep, getTeacherReachableStep(state.teacher))
+        : getTeacherReachableStep(state.teacher);
     }
     const s = snapshot.student;
     if (s && typeof s === 'object') {
@@ -1720,6 +2274,9 @@ if (typeof module !== 'undefined' && module.exports) {
         ? s.regularAccountsByTenant : {};
       state.student.relationTeacherCache = s.relationTeacherCache && typeof s.relationTeacherCache === 'object'
         ? s.relationTeacherCache : {};
+      state.student.activeStep = Number.isInteger(s.activeStep)
+        ? boundedStep(s.activeStep, getStudentReachableStep(state.student))
+        : getStudentReachableStep(state.student);
     }
     return true;
   }
@@ -1900,6 +2457,7 @@ if (typeof module !== 'undefined' && module.exports) {
     s.relationLoading = false;
     s.resolvingTeachers = false;
     s.relationError = '';
+    s.editingRelationSelection = false;
   }
 
   function switchMode(mode) {
@@ -1936,6 +2494,61 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     if (teacherPanel) teacherPanel.classList.toggle('hidden', state.mode !== 'teacher');
     if (studentPanel) studentPanel.classList.toggle('hidden', state.mode !== 'student');
+    renderProgress();
+  }
+
+  function navigateToStep(mode, index) {
+    const studentMode = mode === 'student';
+    const targetState = studentMode ? state.student : state.teacher;
+    const maxStep = studentMode ? getStudentReachableStep(targetState) : getTeacherReachableStep(targetState);
+    const requestedStep = Number(index);
+    if (!Number.isInteger(requestedStep) || requestedStep < 0 || requestedStep > maxStep) return;
+    targetState.activeStep = requestedStep;
+    if (studentMode) renderStudentShell();
+    else renderTeacherShell();
+    const focusIds = studentMode
+      ? ['accountSearch', 'lookupByStudentBtn']
+      : ['tenantSearch', 'userSearch', 'teacherNameSearch', 'studentNameSearch'];
+    focusControl(focusIds[requestedStep]);
+  }
+
+  function renderProgress() {
+    const track = $('quickStepProgressTrack');
+    const compact = $('quickProgressCompact');
+    if (!track || !compact) return;
+    const teacherMode = state.mode === 'teacher';
+    const targetState = teacherMode ? state.teacher : state.student;
+    const maxStep = teacherMode ? getTeacherReachableStep(targetState) : getStudentReachableStep(targetState);
+    targetState.activeStep = boundedStep(targetState.activeStep, maxStep);
+    const activeStep = targetState.activeStep;
+    const steps = teacherMode
+      ? [
+        { label: '租户', complete: Boolean(state.teacher.selectedTenant) },
+        { label: '账号', complete: Boolean(state.teacher.selectedUser) },
+        { label: '教师', complete: Boolean(state.teacher.selectedTeacher) },
+        { label: '学生', complete: Boolean(state.teacher.selectedTeacher) },
+      ]
+      : [
+        { label: '学生账号', complete: Boolean(state.student.selectedAccount?.session) },
+        { label: '关联教师', complete: Boolean(state.student.selectedClassId) },
+      ];
+    track.style.setProperty('--step-count', String(steps.length));
+    track.innerHTML = steps.map((step, index) => {
+      const stateClass = index === activeStep ? ' current' : (step.complete ? ' complete' : '');
+      const interactive = index <= maxStep;
+      return `<button class="quick-progress-step${stateClass}" type="button" data-step-index="${index}" ` +
+        `aria-current="${index === activeStep ? 'step' : 'false'}"${interactive ? '' : ' disabled'}>` +
+        `${index + 1} ${step.label}</button>`;
+    }).join('');
+    compact.textContent = `步骤 ${activeStep + 1}/${steps.length} · ${steps[activeStep].label}`;
+    ns.workspaceUi?.setPath(teacherMode ? '教师 -> 学生' : '学生 -> 教师');
+  }
+
+  function onProgressClick(event) {
+    const button = event.target.closest('.quick-progress-step');
+    if (!button || button.disabled) return;
+    const index = Number(button.dataset.stepIndex);
+    navigateToStep(state.mode, index);
   }
 
   function renderShell() {
@@ -2286,6 +2899,7 @@ if (typeof module !== 'undefined' && module.exports) {
   async function selectTeacherTenant(item) {
     const t = state.teacher;
     t.selectedTenant = item;
+    t.activeStep = 1;
     t.userKeyword = '';
     t.userPage = resetPage();
     clearTeacherSession();
@@ -2458,6 +3072,7 @@ if (typeof module !== 'undefined' && module.exports) {
         env: normalizeEnv(row?.dataset.env),
         localPort: normalizePort(row?.dataset.localPort),
       };
+      t.activeStep = 2;
       t.sessionError = '';
       t.loadingSession = false;
       t.teacherNameKeyword = String(t.selectedUser.userName || '').trim();
@@ -2589,6 +3204,7 @@ if (typeof module !== 'undefined' && module.exports) {
       return;
     }
     t.selectedTeacher = teacherItem;
+    t.activeStep = 3;
     t.studentPage = resetPage();
     t.classIds = [];
     renderTeacherShell();
@@ -2892,14 +3508,17 @@ if (typeof module !== 'undefined' && module.exports) {
     const tenantReady = Boolean(t.selectedTenant);
     const userReady = Boolean(t.selectedUser);
     const teacherReady = Boolean(t.selectedTeacher);
+    t.activeStep = boundedStep(t.activeStep, getTeacherReachableStep(t));
+    const activeStep = t.activeStep;
 
     setStageState('teacherTenantStep', 'teacherTenantState', {
       visible: true,
       complete: tenantReady,
+      current: activeStep === 0,
       status: t.loadingTenants ? '搜索中' : (tenantReady ? '已选择' : '当前'),
     });
-    toggleRegion('teacherTenantSummary', tenantReady);
-    toggleRegion('teacherTenantStepBody', !tenantReady);
+    toggleRegion('teacherTenantSummary', tenantReady && activeStep !== 0);
+    toggleRegion('teacherTenantStepBody', activeStep === 0);
     if (tenantReady) {
       $('teacherTenantSummaryTitle').textContent = t.selectedTenant.tenantName || '(未命名租户)';
       $('teacherTenantSummaryMeta').textContent = t.selectedTenant.domain || t.selectedTenant.contactPhone || t.selectedTenant.tenantId;
@@ -2908,10 +3527,11 @@ if (typeof module !== 'undefined' && module.exports) {
     setStageState('teacherUserStep', 'teacherUserState', {
       visible: tenantReady,
       complete: userReady,
+      current: activeStep === 1,
       status: t.loadingSession ? '连接中' : (t.loadingUsers ? '加载中' : (userReady ? '已选择' : '当前')),
     });
-    toggleRegion('teacherUserSummary', userReady);
-    toggleRegion('teacherUserStepBody', tenantReady && !userReady);
+    toggleRegion('teacherUserSummary', userReady && activeStep !== 1);
+    toggleRegion('teacherUserStepBody', tenantReady && activeStep === 1);
     if (userReady) {
       $('teacherUserSummaryTitle').textContent = t.selectedUser.userName || '(未命名账号)';
       $('teacherUserSummaryMeta').textContent = [t.selectedUser.account, t.selectedUser.tenantName].filter(Boolean).join(' / ');
@@ -2949,19 +3569,21 @@ if (typeof module !== 'undefined' && module.exports) {
     setStageState('teacherIdentityStep', 'teacherIdentityState', {
       visible: userReady,
       complete: teacherReady,
+      current: activeStep === 2,
       status: t.loadingTeachers ? '加载中' : (t.loadingDuties ? '读取中' : (teacherReady ? '已选择' : '当前')),
     });
-    toggleRegion('teacherIdentitySummary', teacherReady);
-    toggleRegion('teacherIdentityStepBody', userReady && !teacherReady);
+    toggleRegion('teacherIdentitySummary', teacherReady && activeStep !== 2);
+    toggleRegion('teacherIdentityStepBody', userReady && activeStep === 2);
     if (teacherReady) {
       $('teacherIdentitySummaryTitle').textContent = t.selectedTeacher.name || '(未命名教师)';
       $('teacherIdentitySummaryMeta').textContent = [t.selectedTeacher.account, t.selectedTeacher.statusText].filter(Boolean).join(' / ');
     }
 
-    toggleRegion('studentSection', teacherReady);
+    toggleRegion('studentSection', teacherReady && activeStep === 3);
     renderTeacherUsers();
     renderTeachers();
     renderTeacherDuties();
+    renderProgress();
     persistStateSoon();
   }
 
@@ -3105,6 +3727,8 @@ if (typeof module !== 'undefined' && module.exports) {
           aiToken: result.aiToken,
         },
       });
+      s.activeStep = 1;
+      s.editingRelationSelection = false;
       s.loadingSession = false;
       renderStudentShell();
       await loadStudentRelationData();
@@ -3225,7 +3849,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const panel = $('studentRelationPanel');
     if (!panel) return;
     const ready = Boolean(s.selectedAccount?.session);
-    panel.classList.toggle('hidden', !ready);
+    panel.classList.toggle('hidden', !ready || s.activeStep !== 1);
     updateRelationBusy();
     const byStudent = $('lookupByStudentBtn');
     const byClass = $('lookupByClassBtn');
@@ -3235,9 +3859,10 @@ if (typeof module !== 'undefined' && module.exports) {
     byClass?.setAttribute('aria-pressed', String(s.relationMode === 'class'));
     const selectedClass = s.classes.find((item) => String(item.id) === String(s.selectedClassId));
     const selectionComplete = Boolean(selectedClass && (s.relationMode === 'class' || s.selectedStudent));
-    toggleRegion('relationSelectionSummary', selectionComplete);
-    toggleRegion('lookupStudentPanel', s.relationMode === 'student' && !selectionComplete);
-    toggleRegion('lookupClassPanel', s.relationMode === 'class' && !selectionComplete);
+    const showingSelection = !selectionComplete || s.editingRelationSelection;
+    toggleRegion('relationSelectionSummary', selectionComplete && !s.editingRelationSelection);
+    toggleRegion('lookupStudentPanel', s.relationMode === 'student' && showingSelection);
+    toggleRegion('lookupClassPanel', s.relationMode === 'class' && showingSelection);
     if (selectionComplete) {
       const semester = s.semesters.find((item) => String(item.id) === String(s.semesterId));
       $('relationSelectionSummaryTitle').textContent = s.selectedStudent?.name || selectedClass.label || selectedClass.name || selectedClass.id;
@@ -3260,13 +3885,16 @@ if (typeof module !== 'undefined' && module.exports) {
   function renderStudentShell() {
     const s = state.student;
     const accountReady = Boolean(s.selectedAccount?.session);
+    s.activeStep = boundedStep(s.activeStep, getStudentReachableStep(s));
+    const activeStep = s.activeStep;
     setStageState('studentAccountStep', 'studentAccountState', {
       visible: true,
       complete: accountReady,
+      current: activeStep === 0,
       status: s.loadingAccounts ? '搜索中' : (s.loadingSession ? '连接中' : (accountReady ? '已选择' : '当前')),
     });
-    toggleRegion('studentAccountSummary', accountReady);
-    toggleRegion('studentAccountStepBody', !accountReady);
+    toggleRegion('studentAccountSummary', accountReady && activeStep !== 0);
+    toggleRegion('studentAccountStepBody', activeStep === 0);
     if (accountReady) {
       $('studentAccountSummaryTitle').textContent = s.selectedAccount.username || '(未命名学生)';
       $('studentAccountSummaryMeta').textContent = [s.selectedAccount.account, s.selectedAccount.tenantName].filter(Boolean).join(' / ');
@@ -3301,8 +3929,11 @@ if (typeof module !== 'undefined' && module.exports) {
     );
     renderAccountUsers();
     renderStudentRelationShell();
-    if (s.selectedClassId) renderRelationTeachers(s.selectedClassId);
-    else if (!s.selectedStudent) clearRelationTeacherResult('请选择学生或班级');
+    if (activeStep === 1) {
+      if (s.selectedClassId) renderRelationTeachers(s.selectedClassId);
+      else if (!s.selectedStudent) clearRelationTeacherResult('请选择学生或班级');
+    }
+    renderProgress();
     persistStateSoon();
   }
 
@@ -3395,6 +4026,7 @@ if (typeof module !== 'undefined' && module.exports) {
     s.matchedBy = '';
     s.selectedStudent = null;
     s.selectedClassId = '';
+    s.editingRelationSelection = false;
     clearRelationTeacherResult('正在加载班级与教师关系…');
     renderStudentRelationShell();
     try {
@@ -3454,6 +4086,7 @@ if (typeof module !== 'undefined' && module.exports) {
     s.selectedStudent = student;
     const matchedClass = tenant.findStudentClass(student, s.classes);
     s.selectedClassId = matchedClass?.id || '';
+    s.editingRelationSelection = false;
     renderMatchedStudents();
     if (!matchedClass) {
       clearRelationTeacherResult((student.name || '该学生') + '的班级无法唯一识别');
@@ -3466,8 +4099,15 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function switchRelationMode(mode) {
     const s = state.student;
+    const nextMode = mode === 'class' ? 'class' : 'student';
+    if (nextMode === s.relationMode) {
+      s.editingRelationSelection = true;
+      renderStudentRelationShell();
+      return;
+    }
     invalidateRelationTeacherResolution();
-    s.relationMode = mode === 'class' ? 'class' : 'student';
+    s.relationMode = nextMode;
+    s.editingRelationSelection = true;
     if (s.relationMode === 'class') {
       s.selectedStudent = null;
       s.selectedClassId = '';
@@ -3708,50 +4348,24 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   function changeTeacherTenant() {
-    const t = state.teacher;
-    t.selectedTenant = null;
-    t.tenantKeyword = '';
-    t.userKeyword = '';
-    t.userPage = resetPage();
-    clearTeacherSession();
-    $('tenantSearch').value = '';
-    $('userSearch').value = '';
-    clearList('tenantList', 'tenantEmpty', '请输入租户条件');
-    renderTeacherShell();
-    focusControl('tenantSearch');
+    navigateToStep('teacher', 0);
   }
 
   function changeTeacherUser() {
-    clearTeacherSession();
-    renderTeacherShell();
-    focusControl('userSearch');
+    navigateToStep('teacher', 1);
   }
 
   function changeTeacherIdentity() {
-    const t = state.teacher;
-    t.selectedTeacher = null;
-    t.teacherDetailRequestId += 1;
-    t.studentRequestId += 1;
-    t.studentPage = resetPage();
-    t.classIds = [];
-    t.loadingDuties = false;
-    t.loadingStudents = false;
-    renderTeacherShell();
-    focusControl('teacherNameSearch');
+    navigateToStep('teacher', 2);
   }
 
   function changeStudentAccount() {
-    clearStudentSession(false);
-    renderStudentShell();
-    focusControl('accountSearch');
+    navigateToStep('student', 0);
   }
 
   function changeRelationSelection() {
     const s = state.student;
-    invalidateRelationTeacherResolution();
-    s.selectedStudent = null;
-    s.selectedClassId = '';
-    clearRelationTeacherResult(s.relationMode === 'class' ? '请选择班级' : '请选择学生');
+    s.editingRelationSelection = true;
     renderStudentRelationShell();
     focusControl(s.relationMode === 'class' ? 'lookupClassSelect' : 'lookupByStudentBtn');
   }
@@ -3995,10 +4609,24 @@ if (typeof module !== 'undefined' && module.exports) {
       return;
     }
     list.innerHTML = '';
-    records = records.slice(0, 10);
-    if (count) count.textContent = records.length + ' 条';
-    if (!records.length) {
+    const allRecords = records.slice(0, 10);
+    records = allRecords.filter((record) => {
+      if (state.recentRoleFilter && record.role !== state.recentRoleFilter) return false;
+      if (state.recentEnvFilter && normalizeEnv(record.env) !== state.recentEnvFilter) return false;
+      return true;
+    });
+    if (count) {
+      count.textContent = records.length === allRecords.length
+        ? `${allRecords.length} 条`
+        : `${records.length}/${allRecords.length} 条`;
+    }
+    if (!allRecords.length) {
       list.innerHTML = '<div class="recent-empty">暂无最近登录记录</div>';
+      list.removeAttribute('aria-busy');
+      return;
+    }
+    if (!records.length) {
+      list.innerHTML = '<div class="recent-empty">暂无符合筛选条件的记录</div>';
       list.removeAttribute('aria-busy');
       return;
     }
@@ -4214,6 +4842,7 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     $('modeTeacherBtn')?.addEventListener('click', () => switchMode('teacher'));
     $('modeStudentBtn')?.addEventListener('click', () => switchMode('student'));
+    $('quickStepProgressTrack')?.addEventListener('click', onProgressClick);
     document.querySelector('.quick-mode-switcher')?.addEventListener('keydown', (event) => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
@@ -4377,6 +5006,7 @@ if (typeof module !== 'undefined' && module.exports) {
       invalidateRelationTeacherResolution();
       state.student.selectedStudent = null;
       state.student.selectedClassId = String(event.target.value || '');
+      state.student.editingRelationSelection = !state.student.selectedClassId;
       if (state.student.selectedClassId) renderRelationTeachers(state.student.selectedClassId);
       else clearRelationTeacherResult('请选择班级');
       renderRelationClasses();
@@ -4390,6 +5020,16 @@ if (typeof module !== 'undefined' && module.exports) {
     $('recentList')?.addEventListener('click', onRecentClick);
     $('recentList')?.addEventListener('input', (event) => onRecentPortInput(event, false));
     $('recentList')?.addEventListener('change', (event) => onRecentPortInput(event, true));
+    $('quickHistoryRoleFilter')?.addEventListener('change', (event) => {
+      state.recentRoleFilter = event.target.value || '';
+      state.recentExpanded = false;
+      renderRecent();
+    });
+    $('quickHistoryEnvFilter')?.addEventListener('change', (event) => {
+      state.recentEnvFilter = event.target.value || '';
+      state.recentExpanded = false;
+      renderRecent();
+    });
     if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       chrome.storage.onChanged.addListener((changes, areaName) => {
         if (areaName !== 'local' || !Object.keys(changes).some((key) => key.startsWith('adminToken:'))) return;
@@ -4448,6 +5088,8 @@ if (typeof module !== 'undefined' && module.exports) {
       buildStudentAppLoginPayload,
       createDebouncedSearch,
       createPersistedState,
+      getStudentReachableStep,
+      getTeacherReachableStep,
       normalizeAppSiteUrl,
       renderTeacherUsers,
       restorePersistedState,
@@ -4571,9 +5213,9 @@ if (typeof module !== 'undefined' && module.exports) {
     const enterBtn = $('enterBtn');
     const zhiqueBtn = $('zhiqueBtn');
     const labels = {
-      login: '登录',
+      login: '仅获取 Token',
       enter: '一键登入',
-      zhique: '知雀',
+      zhique: '知雀 SSO',
     };
     const loadingLabels = {
       login: '登录中...',
@@ -4660,7 +5302,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const next = getEditableText(tokenEl).trim();
     if (next === lastSavedToken) {
       await renderToken();
-      return;
+      return true;
     }
     try {
       if (!next) {
@@ -4674,8 +5316,10 @@ if (typeof module !== 'undefined' && module.exports) {
         setStatus('Token 已保存', 'ok');
       }
       await renderToken();
+      return true;
     } catch (err) {
       setStatus(`保存失败: ${err.message}`, 'err');
+      return false;
     }
   }
 
@@ -5103,6 +5747,16 @@ if (typeof module !== 'undefined' && module.exports) {
         setStatus(`复制失败: ${err.message}`, 'err');
       }
     });
+    $('otherClearTokenToolBtn')?.addEventListener('click', async () => {
+      try {
+        await messages.sendToBackground({ type: 'OTHER_CLEAR_TOKEN' });
+        await renderToken();
+        resetTeacherState();
+        setStatus('Token 已清空', 'ok');
+      } catch (err) {
+        setStatus(`清除失败: ${err.message}`, 'err');
+      }
+    });
 
     const tokenEl = $('tokenValue');
     const tokenWrap = $('tokenWrap');
@@ -5116,6 +5770,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   async function init() {
     bindEvents();
+    ns.workspaceUi?.registerBeforeLeave('other-token', onTokenBlur);
     await renderCredentials();
     await renderToken();
     await renderHistory();
@@ -5356,7 +6011,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const next = getEditableText(tokenEl).trim();
     if (next === lastSavedToken) {
       await renderToken();
-      return;
+      return true;
     }
     try {
       if (!next) {
@@ -5370,8 +6025,10 @@ if (typeof module !== 'undefined' && module.exports) {
         setStatus('Token 已保存', 'ok');
       }
       await renderToken();
+      return true;
     } catch (err) {
       setStatus(`保存失败: ${err.message}`, 'err');
+      return false;
     }
   }
 
@@ -5891,6 +6548,15 @@ if (typeof module !== 'undefined' && module.exports) {
         setStatus(`复制失败: ${err.message}`, 'err');
       }
     });
+    $('appClearTokenToolBtn')?.addEventListener('click', async () => {
+      try {
+        await messages.sendToBackground({ type: 'APP_CLEAR_TOKEN' });
+        await renderToken();
+        setStatus('Token 已清空', 'ok');
+      } catch (err) {
+        setStatus(`清除失败: ${err.message}`, 'err');
+      }
+    });
 
     const tokenEl = $('tokenValue');
     const tokenWrap = $('tokenWrap');
@@ -5904,6 +6570,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   async function init() {
     bindEvents();
+    ns.workspaceUi?.registerBeforeLeave('app-token', onTokenBlur);
     await renderCredentials();
     await renderToken();
     await renderHistory();
@@ -5994,7 +6661,7 @@ if (typeof module !== 'undefined' && module.exports) {
     // 内容未变化，仅刷新显示态
     if (next === lastSavedToken) {
       await renderToken();
-      return;
+      return true;
     }
     if (!next) {
       // 清空了 token
@@ -6003,17 +6670,20 @@ if (typeof module !== 'undefined' && module.exports) {
         await renderToken();
         setLoginStatus('Token 已清除', 'ok');
         ns.messages.sendToActiveTab({ type: 'CLEAR_TOKEN' }).catch(() => {});
+        return true;
       } catch (err) {
         setLoginStatus(`清除失败: ${err.message}`, 'err');
+        return false;
       }
-      return;
     }
     try {
       await ns.token.saveToken(next);
       await renderToken();
       setLoginStatus('Token 已保存', 'ok');
+      return true;
     } catch (err) {
       setLoginStatus(`保存失败: ${err.message}`, 'err');
+      return false;
     }
   }
 
@@ -6050,6 +6720,11 @@ if (typeof module !== 'undefined' && module.exports) {
     // 提示当前默认域名（便于用户参考）
     const hint = $('domainDefaultHint');
     if (hint) hint.textContent = defaultUrl;
+    const summary = $('domainSummaryValue');
+    if (summary) {
+      summary.textContent = effective || '未配置';
+      summary.title = effective || '未配置';
+    }
   }
 
   // 点击即编辑、失焦自动保存：与 token 交互一致。
@@ -6066,7 +6741,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (normalizedNext === lastSavedDomain) {
       // 内容未实质变化，仅刷新显示态
       await renderDomain();
-      return;
+      return true;
     }
     try {
       if (normalizedNext) {
@@ -6079,8 +6754,10 @@ if (typeof module !== 'undefined' && module.exports) {
       await renderDomain();
       // 通知 background 刷新内存缓存（getBaseUrl 同步读取该缓存）
       ns.messages.sendToBackground({ type: 'REFRESH_BASE_URL' }).catch(() => {});
+      return true;
     } catch (err) {
       setLoginStatus(`保存失败: ${err.message}`, 'err');
+      return false;
     }
   }
 
@@ -6187,6 +6864,16 @@ if (typeof module !== 'undefined' && module.exports) {
       const tokenState = await ns.token.getToken();
       await copyToClipboard(tokenState.token, 'Token 已复制');
     });
+    $('clearTokenToolBtn')?.addEventListener('click', async () => {
+      try {
+        await ns.token.clearToken();
+        await renderToken();
+        setLoginStatus('Token 已清空', 'ok');
+        ns.messages.sendToActiveTab({ type: 'CLEAR_TOKEN' }).catch(() => {});
+      } catch (err) {
+        setLoginStatus(`清除失败: ${err.message}`, 'err');
+      }
+    });
 
     // 点击即编辑、失焦自动保存并注入（无需编辑/保存按钮）
     bindEditableField('tokenValue', onTokenBlur);
@@ -6198,6 +6885,16 @@ if (typeof module !== 'undefined' && module.exports) {
       const state = await ns.customDomain.getDomain();
       const url = state.baseUrl || getDefaultBaseUrl();
       await copyToClipboard(url, '域名已复制');
+    });
+    $('restoreDomainBtn')?.addEventListener('click', async () => {
+      try {
+        await ns.customDomain.clearDomain();
+        await renderDomain();
+        ns.messages.sendToBackground({ type: 'REFRESH_BASE_URL' }).catch(() => {});
+        setLoginStatus('已恢复项目默认域名', 'ok');
+      } catch (err) {
+        setLoginStatus(`恢复失败: ${err.message}`, 'err');
+      }
     });
   }
 
@@ -6211,114 +6908,23 @@ if (typeof module !== 'undefined' && module.exports) {
     });
   }
 
-  // Tab 切换：原写在 popup.html 的内联 <script> 里，但 MV3 的 CSP
-  // (script-src 'self') 会拦截内联脚本，导致 tab 按钮绑不上事件、切不过去。
-  // 这里改由外部 popup.js 绑定，CSP 允许 'self'。
-  function bindTabSwitcher() {
-    const tabs = document.querySelectorAll('.tab-btn');
-    const panels = {
-      admin: $('panel-admin'),
-      quick: $('panel-quick'),
-      app: $('panel-app'),
-    };
-    tabs.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const key = btn.dataset.tab;
-        if (!key || !panels[key]) return;
-        tabs.forEach((t) => t.classList.remove('active'));
-        btn.classList.add('active');
-        Object.keys(panels).forEach((k) => {
-          panels[k]?.classList.toggle('active', k === key);
-        });
-      });
-    });
-  }
-
   async function init() {
-    // 加载当前项目
     await ns.currentProject.loadCurrentProject();
-
-    // 初始化项目切换器
-    if (ns.projectSwitcherUi) {
-      await ns.projectSwitcherUi.init();
-    }
-
-    // 根据当前项目的 enabledFeatures 显示/隐藏功能卡
     const enabledFeatures = ns.currentProject.getEnabledFeatures();
-    if (!enabledFeatures.includes('adminPanel')) {
-      const adminPanelSection = $('adminPanelSection');
-      if (adminPanelSection) adminPanelSection.style.display = 'none';
-    }
-    if (!enabledFeatures.includes('quickLogin')) {
-      const quickLoginSection = $('quickLoginSection');
-      if (quickLoginSection) quickLoginSection.style.display = 'none';
+
+    if (ns.workspaceUi) {
+      await ns.workspaceUi.init();
     }
 
-    // 按项目功能控制 tab 显隐：未启用的 tab 隐藏。
-    // 仅一个可见 tab 时隐藏整个 tab-rail（无切换需求）。
-    const featureTabs = [
-      { tab: 'admin', feature: 'adminPanel', panel: 'panel-admin' },
-      { tab: 'quick', feature: 'quickLogin', panel: 'panel-quick' },
-      // 高校是顶部项目，不再对应内层 tab；仍通过 feature 激活原功能面板。
-      { tab: null, feature: 'otherLogin', panel: 'panel-other' },
-      { tab: 'app', feature: 'appLogin', panel: 'panel-app' },
-    ];
-    const allTabs = document.querySelectorAll('.tab-btn');
-    const visibleTabs = [];
-    allTabs.forEach((btn) => {
-      const key = btn.dataset.tab;
-      const ft = featureTabs.find((f) => f.tab === key);
-      const visible = ft ? enabledFeatures.includes(ft.feature) : false;
-      btn.style.display = visible ? '' : 'none';
-      if (visible) visibleTabs.push(btn);
-    });
-    const tabRail = document.querySelector('.tab-rail');
-    const panelsEl = document.querySelector('.panels');
-
-    // 无任何功能：隐藏整个 tab 栏 + 功能区，仅显示空占位
-    const isEmptyProject = enabledFeatures.length === 0;
-    if (isEmptyProject) {
-      if (tabRail) tabRail.style.display = 'none';
-      if (panelsEl) panelsEl.style.display = 'none';
-      let emptyEl = $('projectEmptyState');
-      if (!emptyEl) {
-        emptyEl = document.createElement('div');
-        emptyEl.id = 'projectEmptyState';
-        emptyEl.className = 'list-empty';
-        emptyEl.style.padding = '60px 20px';
-        emptyEl.textContent = '「' + ns.currentProject.getName() + '」相关功能开发中，敬请期待';
-        panelsEl?.parentNode?.insertBefore(emptyEl, panelsEl.nextSibling);
-      }
-      return;
+    if (enabledFeatures.includes('adminPanel')) {
+      await renderCredentials();
+      await renderToken();
+      await renderDomain();
+      bindCredentials();
+      bindAdminPanelToggle();
+      ns.workspaceUi?.registerBeforeLeave('admin-token', onTokenBlur);
+      ns.workspaceUi?.registerBeforeLeave('admin-domain', onDomainBlur);
     }
-    // 恢复正常显示（从空项目切回时）；tab-rail 显隐由可见 tab 数量决定
-    if (panelsEl) panelsEl.style.display = '';
-    if (tabRail) {
-      tabRail.style.display = visibleTabs.length <= 1 ? 'none' : '';
-      tabRail.style.gridTemplateColumns = `repeat(${Math.max(visibleTabs.length, 1)}, minmax(0, 1fr))`;
-    }
-    const emptyState = $('projectEmptyState');
-    if (emptyState) emptyState.remove();
-
-    // 默认激活该项目首个可用 tab（修正 active 状态，避免隐藏 tab 仍激活）
-    const firstAvailable = featureTabs.find((f) => enabledFeatures.includes(f.feature));
-    if (firstAvailable) {
-      allTabs.forEach((t) => t.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
-      const firstTabBtn = firstAvailable.tab
-        ? document.querySelector(`.tab-btn[data-tab="${firstAvailable.tab}"]`)
-        : null;
-      const firstPanel = $(firstAvailable.panel);
-      if (firstTabBtn) firstTabBtn.classList.add('active');
-      if (firstPanel) firstPanel.classList.add('active');
-    }
-
-    await renderCredentials();
-    await renderToken();
-    await renderDomain();
-    bindCredentials();
-    bindAdminPanelToggle();
-    bindTabSwitcher();
     if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
       await ns.quickLoginUi.init();
     }
@@ -6328,6 +6934,8 @@ if (typeof module !== 'undefined' && module.exports) {
     if (ns.appLoginUi && enabledFeatures.includes('appLogin')) {
       await ns.appLoginUi.init();
     }
+    ns.ui.observeActions?.();
+    ns.workspaceUi?.syncHeader();
   }
 
   init().catch((err) => {

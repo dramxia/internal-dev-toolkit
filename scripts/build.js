@@ -34,7 +34,7 @@ const popupFiles = [
   'src/common/quick-login-state.js',
   'src/content/messages.js',
   'src/popup/ui.js',
-  'src/popup/project-switcher-ui.js',
+  'src/popup/workspace-ui.js',
   'src/popup/quick-login-ui.js',
   'src/popup/other-login-ui.js',
   'src/popup/app-login-ui.js',

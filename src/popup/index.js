@@ -59,7 +59,7 @@
     // 内容未变化，仅刷新显示态
     if (next === lastSavedToken) {
       await renderToken();
-      return;
+      return true;
     }
     if (!next) {
       // 清空了 token
@@ -68,17 +68,20 @@
         await renderToken();
         setLoginStatus('Token 已清除', 'ok');
         ns.messages.sendToActiveTab({ type: 'CLEAR_TOKEN' }).catch(() => {});
+        return true;
       } catch (err) {
         setLoginStatus(`清除失败: ${err.message}`, 'err');
+        return false;
       }
-      return;
     }
     try {
       await ns.token.saveToken(next);
       await renderToken();
       setLoginStatus('Token 已保存', 'ok');
+      return true;
     } catch (err) {
       setLoginStatus(`保存失败: ${err.message}`, 'err');
+      return false;
     }
   }
 
@@ -115,6 +118,11 @@
     // 提示当前默认域名（便于用户参考）
     const hint = $('domainDefaultHint');
     if (hint) hint.textContent = defaultUrl;
+    const summary = $('domainSummaryValue');
+    if (summary) {
+      summary.textContent = effective || '未配置';
+      summary.title = effective || '未配置';
+    }
   }
 
   // 点击即编辑、失焦自动保存：与 token 交互一致。
@@ -131,7 +139,7 @@
     if (normalizedNext === lastSavedDomain) {
       // 内容未实质变化，仅刷新显示态
       await renderDomain();
-      return;
+      return true;
     }
     try {
       if (normalizedNext) {
@@ -144,8 +152,10 @@
       await renderDomain();
       // 通知 background 刷新内存缓存（getBaseUrl 同步读取该缓存）
       ns.messages.sendToBackground({ type: 'REFRESH_BASE_URL' }).catch(() => {});
+      return true;
     } catch (err) {
       setLoginStatus(`保存失败: ${err.message}`, 'err');
+      return false;
     }
   }
 
@@ -252,6 +262,16 @@
       const tokenState = await ns.token.getToken();
       await copyToClipboard(tokenState.token, 'Token 已复制');
     });
+    $('clearTokenToolBtn')?.addEventListener('click', async () => {
+      try {
+        await ns.token.clearToken();
+        await renderToken();
+        setLoginStatus('Token 已清空', 'ok');
+        ns.messages.sendToActiveTab({ type: 'CLEAR_TOKEN' }).catch(() => {});
+      } catch (err) {
+        setLoginStatus(`清除失败: ${err.message}`, 'err');
+      }
+    });
 
     // 点击即编辑、失焦自动保存并注入（无需编辑/保存按钮）
     bindEditableField('tokenValue', onTokenBlur);
@@ -263,6 +283,16 @@
       const state = await ns.customDomain.getDomain();
       const url = state.baseUrl || getDefaultBaseUrl();
       await copyToClipboard(url, '域名已复制');
+    });
+    $('restoreDomainBtn')?.addEventListener('click', async () => {
+      try {
+        await ns.customDomain.clearDomain();
+        await renderDomain();
+        ns.messages.sendToBackground({ type: 'REFRESH_BASE_URL' }).catch(() => {});
+        setLoginStatus('已恢复项目默认域名', 'ok');
+      } catch (err) {
+        setLoginStatus(`恢复失败: ${err.message}`, 'err');
+      }
     });
   }
 
@@ -276,114 +306,23 @@
     });
   }
 
-  // Tab 切换：原写在 popup.html 的内联 <script> 里，但 MV3 的 CSP
-  // (script-src 'self') 会拦截内联脚本，导致 tab 按钮绑不上事件、切不过去。
-  // 这里改由外部 popup.js 绑定，CSP 允许 'self'。
-  function bindTabSwitcher() {
-    const tabs = document.querySelectorAll('.tab-btn');
-    const panels = {
-      admin: $('panel-admin'),
-      quick: $('panel-quick'),
-      app: $('panel-app'),
-    };
-    tabs.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const key = btn.dataset.tab;
-        if (!key || !panels[key]) return;
-        tabs.forEach((t) => t.classList.remove('active'));
-        btn.classList.add('active');
-        Object.keys(panels).forEach((k) => {
-          panels[k]?.classList.toggle('active', k === key);
-        });
-      });
-    });
-  }
-
   async function init() {
-    // 加载当前项目
     await ns.currentProject.loadCurrentProject();
-
-    // 初始化项目切换器
-    if (ns.projectSwitcherUi) {
-      await ns.projectSwitcherUi.init();
-    }
-
-    // 根据当前项目的 enabledFeatures 显示/隐藏功能卡
     const enabledFeatures = ns.currentProject.getEnabledFeatures();
-    if (!enabledFeatures.includes('adminPanel')) {
-      const adminPanelSection = $('adminPanelSection');
-      if (adminPanelSection) adminPanelSection.style.display = 'none';
-    }
-    if (!enabledFeatures.includes('quickLogin')) {
-      const quickLoginSection = $('quickLoginSection');
-      if (quickLoginSection) quickLoginSection.style.display = 'none';
+
+    if (ns.workspaceUi) {
+      await ns.workspaceUi.init();
     }
 
-    // 按项目功能控制 tab 显隐：未启用的 tab 隐藏。
-    // 仅一个可见 tab 时隐藏整个 tab-rail（无切换需求）。
-    const featureTabs = [
-      { tab: 'admin', feature: 'adminPanel', panel: 'panel-admin' },
-      { tab: 'quick', feature: 'quickLogin', panel: 'panel-quick' },
-      // 高校是顶部项目，不再对应内层 tab；仍通过 feature 激活原功能面板。
-      { tab: null, feature: 'otherLogin', panel: 'panel-other' },
-      { tab: 'app', feature: 'appLogin', panel: 'panel-app' },
-    ];
-    const allTabs = document.querySelectorAll('.tab-btn');
-    const visibleTabs = [];
-    allTabs.forEach((btn) => {
-      const key = btn.dataset.tab;
-      const ft = featureTabs.find((f) => f.tab === key);
-      const visible = ft ? enabledFeatures.includes(ft.feature) : false;
-      btn.style.display = visible ? '' : 'none';
-      if (visible) visibleTabs.push(btn);
-    });
-    const tabRail = document.querySelector('.tab-rail');
-    const panelsEl = document.querySelector('.panels');
-
-    // 无任何功能：隐藏整个 tab 栏 + 功能区，仅显示空占位
-    const isEmptyProject = enabledFeatures.length === 0;
-    if (isEmptyProject) {
-      if (tabRail) tabRail.style.display = 'none';
-      if (panelsEl) panelsEl.style.display = 'none';
-      let emptyEl = $('projectEmptyState');
-      if (!emptyEl) {
-        emptyEl = document.createElement('div');
-        emptyEl.id = 'projectEmptyState';
-        emptyEl.className = 'list-empty';
-        emptyEl.style.padding = '60px 20px';
-        emptyEl.textContent = '「' + ns.currentProject.getName() + '」相关功能开发中，敬请期待';
-        panelsEl?.parentNode?.insertBefore(emptyEl, panelsEl.nextSibling);
-      }
-      return;
+    if (enabledFeatures.includes('adminPanel')) {
+      await renderCredentials();
+      await renderToken();
+      await renderDomain();
+      bindCredentials();
+      bindAdminPanelToggle();
+      ns.workspaceUi?.registerBeforeLeave('admin-token', onTokenBlur);
+      ns.workspaceUi?.registerBeforeLeave('admin-domain', onDomainBlur);
     }
-    // 恢复正常显示（从空项目切回时）；tab-rail 显隐由可见 tab 数量决定
-    if (panelsEl) panelsEl.style.display = '';
-    if (tabRail) {
-      tabRail.style.display = visibleTabs.length <= 1 ? 'none' : '';
-      tabRail.style.gridTemplateColumns = `repeat(${Math.max(visibleTabs.length, 1)}, minmax(0, 1fr))`;
-    }
-    const emptyState = $('projectEmptyState');
-    if (emptyState) emptyState.remove();
-
-    // 默认激活该项目首个可用 tab（修正 active 状态，避免隐藏 tab 仍激活）
-    const firstAvailable = featureTabs.find((f) => enabledFeatures.includes(f.feature));
-    if (firstAvailable) {
-      allTabs.forEach((t) => t.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
-      const firstTabBtn = firstAvailable.tab
-        ? document.querySelector(`.tab-btn[data-tab="${firstAvailable.tab}"]`)
-        : null;
-      const firstPanel = $(firstAvailable.panel);
-      if (firstTabBtn) firstTabBtn.classList.add('active');
-      if (firstPanel) firstPanel.classList.add('active');
-    }
-
-    await renderCredentials();
-    await renderToken();
-    await renderDomain();
-    bindCredentials();
-    bindAdminPanelToggle();
-    bindTabSwitcher();
     if (ns.quickLoginUi && enabledFeatures.includes('quickLogin')) {
       await ns.quickLoginUi.init();
     }
@@ -393,6 +332,8 @@
     if (ns.appLoginUi && enabledFeatures.includes('appLogin')) {
       await ns.appLoginUi.init();
     }
+    ns.ui.observeActions?.();
+    ns.workspaceUi?.syncHeader();
   }
 
   init().catch((err) => {

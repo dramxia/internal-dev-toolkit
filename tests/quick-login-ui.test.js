@@ -19,6 +19,8 @@ const {
   buildStudentAppLoginPayload,
   buildStudentCredentialsText,
   createPersistedState,
+  getStudentReachableStep,
+  getTeacherReachableStep,
   normalizeAppSiteUrl,
   state: quickUiState,
 } = require(quickUiModulePath);
@@ -29,8 +31,10 @@ globalThis.InternalDevToolkit = namespaceBeforeFormatTest;
 const panelMatch = popupHtml.match(/<div class="panel" id="panel-quick">([\s\S]*?)<div class="panel" id="panel-other">/);
 assert.ok(panelMatch, '应能提取 #panel-quick 静态结构');
 const panel = panelMatch[1];
-assert.match(popupHtml, /data-tab="quick"[\s\S]*?师生查询[\s\S]*?<\/button>/, '快捷查询 Tab 应使用模块级名称“师生查询”');
-assert.match(panel, /section-header-title">师生关联查询<\/span>/, '快捷查询面板应使用能力名称“师生关联查询”');
+assert.doesNotMatch(popupHtml, /class="tab-btn|data-tab=/, '任务工作台不应继续渲染旧功能 Tab');
+assert.match(popupHtml, /id="workspaceDock"[^>]*aria-label="工具任务"/, '侧边栏应提供固定任务坞');
+assert.match(panel, /id="quickStepProgress"[^>]*aria-label="查询步骤"/, '师生关系应使用步骤画布');
+assert.match(panel, /section-header-title">师生关联查询<\/span>/, '快捷查询面板应保留能力名称供辅助状态使用');
 assert.doesNotMatch(popupHtml, />一键快捷登录<\//, '“一键快捷登录”不得继续作为模块标题');
 
 const legacyIds = [
@@ -77,6 +81,16 @@ assert.equal(Object.hasOwn(persistedWithoutGlobalTarget, 'env'), false, '旧全�
 assert.equal(Object.hasOwn(persistedWithoutGlobalTarget, 'devPort'), false, '旧全局端口字段不得继续写入查询快照');
 assert.equal(actionMeta({ dataset: {} }).env, 'online', '未设置记录级环境时应默认线上');
 assert.equal(actionMeta({ dataset: {} }).localPort, '8088', '未设置记录级端口时应保留本地默认端口');
+assert.equal(getTeacherReachableStep({}), 0, '未选择租户时只能停留在教师流程第一步');
+assert.equal(getTeacherReachableStep({ selectedTenant: {} }), 1, '选择租户后应解锁账号步骤');
+assert.equal(getTeacherReachableStep({ selectedTenant: {}, selectedUser: {} }), 2, '选择账号后应解锁教师步骤');
+assert.equal(
+  getTeacherReachableStep({ selectedTenant: {}, selectedUser: {}, selectedTeacher: {} }),
+  3,
+  '选择教师后应解锁学生步骤',
+);
+assert.equal(getStudentReachableStep({ selectedAccount: {} }), 0, '学生账号没有会话时不得进入关联教师步骤');
+assert.equal(getStudentReachableStep({ selectedAccount: { session: {} } }), 1, '学生账号会话就绪后应解锁关联教师步骤');
 
 const renderShell = quickUi.match(/function renderShell\(\) \{([\s\S]*?)\n  \}\n\n  async function hasAdminToken/);
 assert.ok(renderShell, '应保留 renderShell 初始化入口');
@@ -91,6 +105,28 @@ assert.doesNotMatch(
   /clearAllSessions\(\)|clearTeacherSession\(\)|clearStudentSession\(/,
   '教师查学生与学生查教师的查询状态应在模式切换后同时保留',
 );
+const progressNavigation = quickUi.match(/function onProgressClick\(event\) \{([\s\S]*?)\n  \}\n\n  function renderShell/);
+assert.ok(progressNavigation, '应能提取步骤导航点击逻辑');
+assert.match(progressNavigation[1], /navigateToStep\(state\.mode, index\)/, '点击步骤只应切换当前展开步骤');
+assert.doesNotMatch(
+  progressNavigation[1],
+  /changeTeacher|changeStudent|clearTeacherSession|clearStudentSession/,
+  '步骤导航不得复用会清空选择的修改流程',
+);
+const changeStepHandlers = quickUi.match(/function changeTeacherTenant\(\) \{([\s\S]*?)\n  \}\n\n  \/\/ ── 登录操作/);
+assert.ok(changeStepHandlers, '应能提取步骤汇总条的更换逻辑');
+assert.match(changeStepHandlers[0], /navigateToStep\('teacher', 0\)/);
+assert.match(changeStepHandlers[0], /navigateToStep\('teacher', 1\)/);
+assert.match(changeStepHandlers[0], /navigateToStep\('teacher', 2\)/);
+assert.match(changeStepHandlers[0], /navigateToStep\('student', 0\)/);
+assert.doesNotMatch(
+  changeStepHandlers[0],
+  /selected(?:Tenant|User|Teacher|Account|Student)\s*=\s*null|clearTeacherSession|clearStudentSession/,
+  '点击已完成步骤或“更换”只应展开原数据，不应清空任何已选项',
+);
+assert.match(quickUi, /activeStep: boundedStep\(t\.activeStep, 3\)/, '教师流程当前步骤应写入查询快照');
+assert.match(quickUi, /activeStep: boundedStep\(s\.activeStep, 1\)/, '学生流程当前步骤应写入查询快照');
+assert.match(quickUi, /const interactive = index <= maxStep;/, '所有已解锁步骤都应可以反复切换');
 assert.match(buildScript, /'src\/common\/quick-login-state\.js'[\s\S]*'src\/popup\/quick-login-ui\.js'/, '查询状态存储模块应先于 UI 打包');
 assert.match(quickUi, /await loadPersistedState\(\);[\s\S]*renderShell\(\);[\s\S]*bindEvents\(\);/, '首次渲染前应恢复查询快照');
 assert.match(quickUi, /teacher:\s*\{[\s\S]*student:\s*\{/, '同一个快照应同时保存教师与学生查询状态');
@@ -119,7 +155,8 @@ assert.match(panel, /id="teacherIdentitySummary"/);
 assert.match(panel, /id="studentAccountSummary"/);
 assert.match(panel, /id="relationSelectionSummary"/);
 assert.match(quickUi, /const DEFAULT_RECENT_VISIBLE = 3;/, '最近登录默认应只展示 3 条');
-assert.match(quickUi, /records = records\.slice\(0, 10\)/, '最近登录仍应限制为最多 10 条');
+assert.match(quickUi, /const allRecords = records\.slice\(0, 10\)/, '最近登录仍应限制为最多 10 条');
+assert.match(quickUi, /recentRoleFilter[\s\S]*recentEnvFilter/, '最近使用工具屏应支持角色与环境过滤');
 assert.match(quickUi, /function recentTargetControls\([\s\S]*data-recent-env="online"[\s\S]*data-recent-env="local"/);
 assert.match(quickUi, /recentActionButton\('apply',[\s\S]*'应用到教师查学生'\)/, '最近登录项应渲染应用图标');
 assert.match(
@@ -313,12 +350,12 @@ assert.match(popupHtml, /\.quick-tenant-user-row\.active:hover\s*\{\s*background
 const visiblePanelText = panel.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, ' ');
 assert.doesNotMatch(visiblePanelText, /[—–]/, '目标面板可见文本不得包含长破折号或分隔用短破折号');
 
-assert.match(popupHtml, /--sage-500:\s*#4A8C3F/);
-assert.match(popupHtml, /--mint-400:\s*#34C98A/);
+assert.match(popupHtml, /--sage-500:\s*#4A7C59/);
+assert.match(popupHtml, /--mint-400:\s*#6E8C7F/);
 assert.match(popupHtml, /font-family:\s*'Inter', -apple-system, BlinkMacSystemFont, sans-serif/);
-assert.match(popupHtml, /--radius-sm:\s*8px/);
-assert.match(popupHtml, /--radius-md:\s*14px/);
-assert.match(popupHtml, /--radius-lg:\s*20px/);
+assert.match(popupHtml, /--radius-sm:\s*10px/);
+assert.match(popupHtml, /--radius-md:\s*16px/);
+assert.match(popupHtml, /--radius-lg:\s*22px/);
 assert.match(popupHtml, /--radius-xl:\s*28px/);
 
 async function testImmediateInvalidationBeforeDebouncedLoad() {

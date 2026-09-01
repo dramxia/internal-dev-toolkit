@@ -4,57 +4,80 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const { PROJECTS } = require('../src/common/projects.js');
+const { FEATURE_META, buildWorkspaceDefinitions } = require('../src/popup/workspace-ui.js');
 
 const aiPlatform = PROJECTS.find((project) => project.name === 'AI平台');
 const higherEducation = PROJECTS.find((project) => project.name === '高校');
 const app = PROJECTS.find((project) => project.name === 'APP');
 
-assert.ok(aiPlatform, '顶部项目中应保留「AI平台」');
-assert.ok(higherEducation, '顶部项目中应新增与「AI平台」同级的「高校」');
-assert.ok(app, '顶部项目中应保留「APP」');
-assert.ok(
-  PROJECTS.indexOf(higherEducation) > PROJECTS.indexOf(aiPlatform),
-  '「高校」应排列在「AI平台」之后',
-);
-assert.ok(
-  PROJECTS.indexOf(higherEducation) < PROJECTS.indexOf(app),
-  '「高校」应排列在「APP」之前',
-);
+assert.ok(aiPlatform, '项目注册表应保留 AI平台');
+assert.ok(higherEducation, '项目注册表应保留高校');
+assert.ok(app, '项目注册表应保留 APP');
+assert.deepEqual(aiPlatform.enabledFeatures, ['adminPanel', 'quickLogin']);
+assert.deepEqual(higherEducation.enabledFeatures, ['otherLogin']);
+assert.deepEqual(app.enabledFeatures, ['appLogin']);
 
 assert.deepEqual(
-  aiPlatform.enabledFeatures,
-  ['adminPanel', 'quickLogin'],
-  '「AI平台」不应再包含原「其它」功能',
-);
-assert.deepEqual(
-  higherEducation.enabledFeatures,
-  ['otherLogin'],
-  '原「其它」内容应由「高校」独占承载',
-);
-assert.deepEqual(
-  PROJECTS.filter((project) => project.enabledFeatures.includes('otherLogin')),
-  [higherEducation],
-  'otherLogin 不应同时归属其它顶部项目',
+  Object.keys(FEATURE_META),
+  ['adminPanel', 'quickLogin', 'otherLogin', 'appLogin'],
+  '任务工作台应覆盖当前全部 feature',
 );
 
-const popupIndex = fs.readFileSync(path.join(root, 'src/popup/index.js'), 'utf8');
-assert.match(
-  popupIndex,
-  /ns\.otherLoginUi\s*&&\s*enabledFeatures\.includes\('otherLogin'\)/,
-  '原「其它」UI 只应在当前项目启用 otherLogin 时初始化',
+const workspaces = buildWorkspaceDefinitions(PROJECTS);
+assert.deepEqual(
+  workspaces.map((item) => item.workspaceId),
+  [
+    'gpt-admin-pre:admin',
+    'gpt-admin-pre:relations',
+    'higher-education:higher',
+    'app:app',
+  ],
+  '任务坞应按项目 feature 生成四个稳定任务',
 );
-assert.match(
-  popupIndex,
-  /\{\s*tab:\s*null,\s*feature:\s*'otherLogin',\s*panel:\s*'panel-other'\s*\}/,
-  '「高校」应直接激活原功能面板，不应再映射到内层 tab',
+assert.deepEqual(
+  workspaces.map((item) => item.shortLabel),
+  ['后台', '关系', '高校', 'APP'],
 );
+assert.equal(workspaces[1].utilities.history, 'quick-history');
+assert.equal(workspaces[1].utilities.token, 'admin-token');
+assert.equal(workspaces[2].utilities.token, 'other-token');
+assert.equal(workspaces[3].utilities.history, 'app-history');
 
 const popupHtml = fs.readFileSync(path.join(root, 'popup.html'), 'utf8');
-assert.doesNotMatch(
-  popupHtml,
-  /data-tab=["']other["']/,
-  '迁移后不应再保留内层「其它」tab',
-);
+const popupIndex = fs.readFileSync(path.join(root, 'src/popup/index.js'), 'utf8');
+const workspaceUi = fs.readFileSync(path.join(root, 'src/popup/workspace-ui.js'), 'utf8');
+const buildScript = fs.readFileSync(path.join(root, 'scripts/build.js'), 'utf8');
+
+assert.match(popupHtml, /class="workspace-header"/);
+assert.match(popupHtml, /id="workspaceDock"[^>]*aria-label="工具任务"/);
+assert.match(popupHtml, /id="workspaceMain"/);
+assert.match(popupHtml, /id="utilityHost"/);
+assert.doesNotMatch(popupHtml, /id="projectPills"|class="project-pill|class="tab-rail|class="tab-btn/);
+assert.doesNotMatch(popupHtml, /<header class="app-header"/);
+
+for (const sourceId of [
+  'adminTokenSection',
+  'adminDomainSection',
+  'quickHistorySection',
+  'otherHistorySection',
+  'otherTokenSection',
+  'appHistorySection',
+  'appTokenSection',
+]) {
+  assert.match(popupHtml, new RegExp(`id=["']${sourceId}["']`), `应保留工具屏来源 #${sourceId}`);
+}
+
+assert.match(workspaceUi, /const STORAGE_KEY = 'sidePanelActiveWorkspace'/);
+assert.match(workspaceUi, /await ns\.currentProject\.setCurrentProjectId\(target\.projectId\)/);
+assert.match(workspaceUi, /location\.reload\(\)/, '跨项目任务切换后应刷新侧栏上下文');
+assert.match(workspaceUi, /registerBeforeLeave/);
+assert.match(workspaceUi, /scrollTop: \$\('workspaceMain'\)\?\.scrollTop/);
+assert.match(workspaceUi, /event\.key === 'Escape' && activeUtility/);
+assert.match(popupIndex, /await ns\.workspaceUi\.init\(\)/);
+assert.doesNotMatch(popupIndex, /projectSwitcherUi|bindTabSwitcher|featureTabs/);
+assert.match(buildScript, /'src\/popup\/workspace-ui\.js'/);
+assert.doesNotMatch(buildScript, /'src\/popup\/project-switcher-ui\.js'/);
+
 for (const elementId of [
   'otherLoginSection',
   'otherSiteUrl',
@@ -67,11 +90,7 @@ for (const elementId of [
   'otherTeacherList',
   'otherTokenValue',
 ]) {
-  assert.match(
-    popupHtml,
-    new RegExp(`id=["']${elementId}["']`),
-    `迁移后仍应保留原有控件 #${elementId}`,
-  );
+  assert.match(popupHtml, new RegExp(`id=["']${elementId}["']`), `重构后仍应保留 #${elementId}`);
 }
 
 const popupModule = fs.readFileSync(path.join(root, 'src/popup/other-login-ui.js'), 'utf8');
@@ -92,13 +111,8 @@ for (const messageType of [
   assert.ok(popupModule.includes(messageType), `Popup 应继续发送 ${messageType}`);
   assert.ok(backgroundIndex.includes(messageType), `后台应继续处理 ${messageType}`);
 }
-
-for (const storageKey of [
-  'otherLoginCredentials',
-  'otherLoginToken',
-  'otherLoginHistory',
-]) {
+for (const storageKey of ['otherLoginCredentials', 'otherLoginToken', 'otherLoginHistory']) {
   assert.ok(backgroundModule.includes(storageKey), `后台应继续使用原存储键 ${storageKey}`);
 }
 
-console.log('project feature navigation tests passed');
+console.log('task workspace navigation tests passed');

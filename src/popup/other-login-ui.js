@@ -111,9 +111,9 @@
     const enterBtn = $('enterBtn');
     const zhiqueBtn = $('zhiqueBtn');
     const labels = {
-      login: '登录',
+      login: '仅获取 Token',
       enter: '一键登入',
-      zhique: '知雀',
+      zhique: '知雀 SSO',
     };
     const loadingLabels = {
       login: '登录中...',
@@ -200,7 +200,7 @@
     const next = getEditableText(tokenEl).trim();
     if (next === lastSavedToken) {
       await renderToken();
-      return;
+      return true;
     }
     try {
       if (!next) {
@@ -214,8 +214,10 @@
         setStatus('Token 已保存', 'ok');
       }
       await renderToken();
+      return true;
     } catch (err) {
       setStatus(`保存失败: ${err.message}`, 'err');
+      return false;
     }
   }
 
@@ -643,6 +645,16 @@
         setStatus(`复制失败: ${err.message}`, 'err');
       }
     });
+    $('otherClearTokenToolBtn')?.addEventListener('click', async () => {
+      try {
+        await messages.sendToBackground({ type: 'OTHER_CLEAR_TOKEN' });
+        await renderToken();
+        resetTeacherState();
+        setStatus('Token 已清空', 'ok');
+      } catch (err) {
+        setStatus(`清除失败: ${err.message}`, 'err');
+      }
+    });
 
     const tokenEl = $('tokenValue');
     const tokenWrap = $('tokenWrap');
@@ -656,6 +668,7 @@
 
   async function init() {
     bindEvents();
+    ns.workspaceUi?.registerBeforeLeave('other-token', onTokenBlur);
     await renderCredentials();
     await renderToken();
     await renderHistory();
