@@ -15,6 +15,7 @@ delete require.cache[tenantModulePath];
 require(tenantModulePath);
 const {
   actionMeta,
+  buildAiReviewUrl,
   buildRecentTeacherSelection,
   buildStudentAppLoginPayload,
   buildStudentCredentialsText,
@@ -81,6 +82,34 @@ assert.equal(Object.hasOwn(persistedWithoutGlobalTarget, 'env'), false, '旧全�
 assert.equal(Object.hasOwn(persistedWithoutGlobalTarget, 'devPort'), false, '旧全局端口字段不得继续写入查询快照');
 assert.equal(actionMeta({ dataset: {} }).env, 'online', '未设置记录级环境时应默认线上');
 assert.equal(actionMeta({ dataset: {} }).localPort, '8088', '未设置记录级端口时应保留本地默认端口');
+const reviewToken = 'Bearer demo+token/with=symbols';
+const reviewLoginUrl = 'https://tenant.example.test/newHome?token=' + encodeURIComponent(reviewToken);
+const reviewApps = { code: 200, data: [
+  { name: '其他应用', linkUrl: 'https://other.example.test/' },
+  { name: 'AI评价系统', linkUrl: 'https://review.example.test/evaluate?school=1&token=old#home' },
+] };
+const reviewUrl = new URL(buildAiReviewUrl(reviewLoginUrl, reviewApps));
+assert.equal(reviewUrl.origin, 'https://review.example.test', '线上应打开 AI评价系统配置的域名');
+assert.equal(reviewUrl.pathname, '/evaluate');
+assert.equal(reviewUrl.searchParams.get('school'), '1', '应保留应用链接已有参数');
+assert.deepEqual(reviewUrl.searchParams.getAll('token'), [reviewToken], '应使用当前账号完整 token 替换旧 token，且不重复编码');
+assert.equal(reviewUrl.hash, '#home');
+const localReviewUrl = new URL(buildAiReviewUrl(reviewLoginUrl, reviewApps, '5173'));
+assert.equal(localReviewUrl.origin, 'http://localhost:5173', '本地模式应使用当前行的端口');
+assert.equal(localReviewUrl.pathname, reviewUrl.pathname);
+assert.equal(localReviewUrl.search, reviewUrl.search);
+assert.equal(localReviewUrl.hash, reviewUrl.hash);
+const relativeReviewUrl = new URL(buildAiReviewUrl(reviewLoginUrl, [{ name: 'AI评价系统', linkUrl: '/ai-review' }]));
+assert.equal(relativeReviewUrl.origin, 'https://tenant.example.test', '应用使用相对地址时应基于租户域名');
+assert.equal(relativeReviewUrl.pathname, '/ai-review');
+assert.throws(() => buildAiReviewUrl(reviewLoginUrl, { data: [] }), /未配置 AI评价系统链接/);
+assert.throws(() => buildAiReviewUrl('https://tenant.example.test', reviewApps), /未找到 AI 平台 token/);
+assert.throws(() => buildAiReviewUrl('invalid', reviewApps), /AI 平台登录地址无效/);
+assert.throws(
+  () => buildAiReviewUrl(reviewLoginUrl, [{ name: 'AI评价系统', linkUrl: 'javascript:alert(1)' }], '5173'),
+  /必须是 HTTP\(S\) 地址/,
+  '切换本地环境前也必须验证应用链接协议',
+);
 assert.equal(getTeacherReachableStep({}), 0, '未选择租户时只能停留在教师流程第一步');
 assert.equal(getTeacherReachableStep({ selectedTenant: {} }), 1, '选择租户后应解锁账号步骤');
 assert.equal(getTeacherReachableStep({ selectedTenant: {}, selectedUser: {} }), 2, '选择账号后应解锁教师步骤');
@@ -295,7 +324,7 @@ function tagFor(id) {
 assert.match(tagFor('teacherLookupSemesterSelect'), /\bdisabled\b/);
 
 const expectedMessages = [
-  'DELETE_QUICK_LOGIN_RECENT', 'FETCH_ACCOUNT_USERS', 'FETCH_CLASS_TEACHERS',
+  'DELETE_QUICK_LOGIN_RECENT', 'FETCH_ACCOUNT_USERS', 'FETCH_CLASS_TEACHERS', 'FETCH_OTHER_APPS',
   'FETCH_SCHOOL_DEPT_TREE', 'FETCH_SEMESTERS', 'FETCH_STUDENTS',
   'FETCH_TEACHERS', 'FETCH_TEACHER_DETAIL', 'FETCH_TENANTS', 'FETCH_USERS',
   'GET_QUICK_LOGIN_RECENT', 'OPEN_LOGIN_URL', 'QUICK_LOGIN', 'RESOLVE_USER_SESSION',
@@ -661,8 +690,8 @@ async function testTenantUserRowRender() {
   assert.equal(portInput.getAttribute('aria-label'), '本地端口');
 
   const actionBtns = toolbar.querySelectorAll('.action-btn');
-  assert.equal(actionBtns.length, 4, '工具栏应有 4 个登录操作按钮');
-  ['open', 'copy', 'student', 'teacher'].forEach((action, index) => {
+  assert.equal(actionBtns.length, 5, '工具栏应包含 AI评价（前海港湾）等 5 个登录操作');
+  ['open', 'copy', 'student', 'aiReview', 'teacher'].forEach((action, index) => {
     assert.equal(actionBtns[index].dataset.action, action);
     assert.equal(actionBtns[index].dataset.env, 'online', '操作按钮应同步行环境');
     assert.equal(actionBtns[index].dataset.tenantId, 'tenant-1');

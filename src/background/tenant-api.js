@@ -183,6 +183,11 @@
     return json;
   }
 
+  // 外部应用列表：与 AI 平台侧边栏的 getOtherAppList 保持一致。
+  async function fetchOtherAppList({ origin, aiToken }) {
+    return fetchClientJson(origin, '/huayun-ai/client/other/app/list', {}, { aiToken });
+  }
+
   // 教师列表：/client/teacher/page
   async function fetchTeacherPage({ origin, aiToken, current = 1, size = 10, name = '', account = '', phone = '' }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
@@ -247,7 +252,7 @@
     fetchTenantPage, fetchDeptList, fetchUserPage, fetchAccountPage,
     fetchAccountUserPage: fetchAccountPage,
     quickLogin,
-    fetchTeacherPage, fetchStudentPage, fetchSemesterPage,
+    fetchOtherAppList, fetchTeacherPage, fetchStudentPage, fetchSemesterPage,
     fetchTeacherDetail, fetchSchoolDeptTree, fetchClassTeachers,
   };
 })();

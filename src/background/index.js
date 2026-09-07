@@ -140,6 +140,18 @@
       return true;
     }
 
+    if (msg.type === 'FETCH_OTHER_APPS') {
+      if (typeof ns.tenantApi?.fetchOtherAppList !== 'function') {
+        sendResponse({ ok: false, error: '外部应用列表接口模块未加载，请重新加载扩展' });
+        return false;
+      }
+      Promise.resolve()
+        .then(() => ns.tenantApi.fetchOtherAppList(msg.payload))
+        .then((res) => sendResponse({ ok: true, res }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     if (msg.type === 'FETCH_TEACHERS' && ns.tenantApi) {
       ns.tenantApi
         .fetchTeacherPage(msg.payload)

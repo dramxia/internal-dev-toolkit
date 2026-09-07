@@ -186,11 +186,17 @@
       button.classList.contains('student-app-login-btn') ||
       button.classList.contains('primary')
     ) || sources[0];
-    const secondary = sources.filter((button) => button !== primary);
+    const inlineActions = new Set([primary]);
+    if (primary.dataset.action === 'open') {
+      const copyToken = sources.find((button) => button.dataset.action === 'copy');
+      if (copyToken) inlineActions.add(copyToken);
+    }
+    const secondary = sources.filter((button) => !inlineActions.has(button));
     secondary.forEach((button) => {
       button.hidden = true;
       button.dataset.compactedAction = 'true';
     });
+    if (!secondary.length) return;
     const group = primary.closest('.list-item-actions, .recent-item-actions, .student-item-actions') || primary.parentElement;
     if (!group) return;
     const more = document.createElement('button');
@@ -234,7 +240,7 @@
     observer.observe(document.body, { childList: true, subtree: true });
     compactActions();
     document.addEventListener('pointerdown', (event) => {
-      if (!menu?.hidden && !menu.contains(event.target) && event.target !== menuTrigger) closeActionMenu(false);
+      if (menu && !menu.hidden && !menu.contains(event.target) && event.target !== menuTrigger) closeActionMenu(false);
     });
     window.addEventListener('resize', () => closeActionMenu(false));
     document.addEventListener('scroll', () => closeActionMenu(false), true);

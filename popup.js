@@ -1512,11 +1512,17 @@ if (typeof module !== 'undefined' && module.exports) {
       button.classList.contains('student-app-login-btn') ||
       button.classList.contains('primary')
     ) || sources[0];
-    const secondary = sources.filter((button) => button !== primary);
+    const inlineActions = new Set([primary]);
+    if (primary.dataset.action === 'open') {
+      const copyToken = sources.find((button) => button.dataset.action === 'copy');
+      if (copyToken) inlineActions.add(copyToken);
+    }
+    const secondary = sources.filter((button) => !inlineActions.has(button));
     secondary.forEach((button) => {
       button.hidden = true;
       button.dataset.compactedAction = 'true';
     });
+    if (!secondary.length) return;
     const group = primary.closest('.list-item-actions, .recent-item-actions, .student-item-actions') || primary.parentElement;
     if (!group) return;
     const more = document.createElement('button');
@@ -1560,7 +1566,7 @@ if (typeof module !== 'undefined' && module.exports) {
     observer.observe(document.body, { childList: true, subtree: true });
     compactActions();
     document.addEventListener('pointerdown', (event) => {
-      if (!menu?.hidden && !menu.contains(event.target) && event.target !== menuTrigger) closeActionMenu(false);
+      if (menu && !menu.hidden && !menu.contains(event.target) && event.target !== menuTrigger) closeActionMenu(false);
     });
     window.addEventListener('resize', () => closeActionMenu(false));
     document.addEventListener('scroll', () => closeActionMenu(false), true);
@@ -2789,8 +2795,9 @@ if (typeof module !== 'undefined' && module.exports) {
     const suffix = unavailable ? ' disabled aria-disabled="true"' : '';
     return '<div class="list-item-actions">' +
       '<button class="action-btn quick-action-btn primary" type="button" data-action="open" ' + attrs + suffix + ' title="打开 AI 平台" aria-label="打开 AI 平台">' + icons.open + '</button>' +
-      '<button class="action-btn quick-action-btn" type="button" data-action="copy" ' + attrs + suffix + ' title="复制 AI 平台 Token query" aria-label="复制 AI 平台 Token query">' + icons.copy + '</button>' +
+      '<button class="action-btn quick-action-btn" type="button" data-action="copy" ' + attrs + suffix + ' title="复制 token" aria-label="复制 token">' + icons.copy + '</button>' +
       '<button class="action-btn quick-action-btn" type="button" data-action="student" ' + attrs + suffix + ' title="学生评价" aria-label="学生评价">' + icons.student + '</button>' +
+      '<button class="action-btn quick-action-btn" type="button" data-action="aiReview" ' + attrs + suffix + ' title="AI评价（前海港湾）" aria-label="AI评价（前海港湾）">' + icons.student + '</button>' +
       '<button class="action-btn quick-action-btn" type="button" data-action="teacher" ' + attrs + suffix + ' title="教师评价" aria-label="教师评价">' + icons.teacher + '</button>' +
       '</div>';
   }
@@ -2839,6 +2846,29 @@ if (typeof module !== 'undefined' && module.exports) {
     } catch (_) {
       return String(url).replace(/[?#].*$/, '') + path + query;
     }
+  }
+
+  function buildAiReviewUrl(loginUrl, response, localPort = '') {
+    let login;
+    try {
+      login = new URL(String(loginUrl));
+    } catch (_) {
+      throw new Error('AI 平台登录地址无效');
+    }
+    // 保留登录链接中的完整 token，与 AI 平台 getToken() 的跳转参数一致。
+    const token = login.searchParams.get('token');
+    if (!token?.trim()) throw new Error('登录链接中未找到 AI 平台 token');
+    const app = tenant.extractListData(response).find((item) => item?.name === 'AI评价系统');
+    if (typeof app?.linkUrl !== 'string' || !app.linkUrl.trim()) throw new Error('当前账号未配置 AI评价系统链接');
+    let target;
+    try {
+      target = new URL(app.linkUrl, login.origin);
+    } catch (_) {
+      throw new Error('AI评价系统链接无效');
+    }
+    if (!['http:', 'https:'].includes(target.protocol)) throw new Error('AI评价系统链接必须是 HTTP(S) 地址');
+    target.searchParams.set('token', token);
+    return buildDirectUrl(target.toString(), localPort);
   }
 
   async function copyToClipboard(value) {
@@ -4660,7 +4690,12 @@ if (typeof module !== 'undefined' && module.exports) {
       let target = url;
       if (action === 'student') target = buildEvaluateUrl(url, '/student-evaluate', targetLocalPort);
       else if (action === 'teacher') target = buildEvaluateUrl(url, '/teacher-evaluate', targetLocalPort);
-      else target = buildDirectUrl(url, targetLocalPort);
+      else if (action === 'aiReview') {
+        const session = tenant.parseVirtualLoginUrl(url);
+        if (!session.origin || !session.token) throw new Error('未能从登录链接中解析 AI 平台会话');
+        const apps = await request('FETCH_OTHER_APPS', { origin: session.origin, aiToken: session.token });
+        target = buildAiReviewUrl(url, apps, targetLocalPort);
+      } else target = buildDirectUrl(url, targetLocalPort);
       await request('OPEN_LOGIN_URL', { url: target });
       const successText = action === 'open' ? '已打开 AI 平台' : '已打开评价页面';
       setActionStatus(successText, 'success');
@@ -4877,8 +4912,9 @@ if (typeof module !== 'undefined' && module.exports) {
         '</div><div class="recent-item-time">' + escapeHtml(record.at ? new Date(record.at).toLocaleString() : '') + '</div></div>' +
         '<div class="recent-item-actions quick-recent-actions-main">' +
         recentActionButton('open', record, env, localPort, '打开 AI 平台') +
-        recentActionButton('copy', record, env, localPort, '复制 AI 平台 Token query') +
+        recentActionButton('copy', record, env, localPort, '复制 token') +
         recentActionButton('student', record, env, localPort, '学生评价') +
+        recentActionButton('aiReview', record, env, localPort, 'AI评价（前海港湾）') +
         recentActionButton('teacher', record, env, localPort, '教师评价') +
         '</div>' +
         recentTargetControls(record, env, localPort) +
@@ -4924,7 +4960,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const disabled = unavailable ? ' disabled aria-disabled="true"' : '';
     const primary = action === 'open' ? ' quick-recent-action-primary' : '';
     const apply = action === 'apply' ? ' quick-recent-action-apply' : '';
-    return '<button class="recent-action-btn quick-recent-action' + primary + apply + (danger ? ' danger' : '') + '" type="button" ' + attrs + disabled + ' title="' + escapeHtml(title) + '" aria-label="' + escapeHtml(title) + '">' + icons[action === 'delete' ? 'delete' : action] + '</button>';
+    return '<button class="recent-action-btn quick-recent-action' + primary + apply + (danger ? ' danger' : '') + '" type="button" ' + attrs + disabled + ' title="' + escapeHtml(title) + '" aria-label="' + escapeHtml(title) + '">' + icons[action === 'aiReview' ? 'student' : action] + '</button>';
   }
 
   async function applyRecentToTeacherLookup(meta, button, row) {
@@ -5329,6 +5365,7 @@ if (typeof module !== 'undefined' && module.exports) {
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       actionMeta,
+      buildAiReviewUrl,
       buildRecentTeacherSelection,
       buildStudentCredentialsText,
       buildStudentAppLoginPayload,

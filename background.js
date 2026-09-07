@@ -2416,6 +2416,11 @@ if (typeof module !== 'undefined' && module.exports) {
     return json;
   }
 
+  // 外部应用列表：与 AI 平台侧边栏的 getOtherAppList 保持一致。
+  async function fetchOtherAppList({ origin, aiToken }) {
+    return fetchClientJson(origin, '/huayun-ai/client/other/app/list', {}, { aiToken });
+  }
+
   // 教师列表：/client/teacher/page
   async function fetchTeacherPage({ origin, aiToken, current = 1, size = 10, name = '', account = '', phone = '' }) {
     const helpers = (ns.tenant || globalThis.InternalDevToolkit?.tenant);
@@ -2480,7 +2485,7 @@ if (typeof module !== 'undefined' && module.exports) {
     fetchTenantPage, fetchDeptList, fetchUserPage, fetchAccountPage,
     fetchAccountUserPage: fetchAccountPage,
     quickLogin,
-    fetchTeacherPage, fetchStudentPage, fetchSemesterPage,
+    fetchOtherAppList, fetchTeacherPage, fetchStudentPage, fetchSemesterPage,
     fetchTeacherDetail, fetchSchoolDeptTree, fetchClassTeachers,
   };
 })();
@@ -4749,6 +4754,18 @@ if (typeof module !== 'undefined' && module.exports) {
       ns.quickLogin
         .resolveUserSession(msg.payload)
         .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'FETCH_OTHER_APPS') {
+      if (typeof ns.tenantApi?.fetchOtherAppList !== 'function') {
+        sendResponse({ ok: false, error: '外部应用列表接口模块未加载，请重新加载扩展' });
+        return false;
+      }
+      Promise.resolve()
+        .then(() => ns.tenantApi.fetchOtherAppList(msg.payload))
+        .then((res) => sendResponse({ ok: true, res }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }

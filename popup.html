@@ -989,6 +989,7 @@
     .action-btn.primary:hover:not(:disabled) {
       background: var(--sage-600);
       border-color: var(--sage-600);
+      color: var(--text-inv);
       box-shadow: 0 8px 18px rgba(74, 124, 89, .28);
     }
     .action-btn:disabled { opacity: .4; cursor: not-allowed; }
@@ -2375,6 +2376,9 @@
       border-radius: 9px;
       background: var(--panel);
     }
+
+    [data-compacted-action="true"],
+    .recent-item-actions[hidden] { display: none !important; }
 
     .action-overflow-btn {
       display: inline-flex;
