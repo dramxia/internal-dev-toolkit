@@ -291,9 +291,9 @@ if (typeof module !== 'undefined' && module.exports) {
 
   const namespace = (globalThis.InternalDevToolkit = globalThis.InternalDevToolkit || {});
 
-  const KEY_PREFIX = 'adminToken'; // { token: string, updatedAt: number }
+  const KEY_PREFIX = 'adminToken'; // Token、来源网站及登录接口返回的用户信息
 
-  const EMPTY = Object.freeze({ token: '', updatedAt: 0 });
+  const EMPTY = Object.freeze({ token: '', updatedAt: 0, origin: '', siteToken: '', userInfo: null });
 
   function hasChromeStorage() {
     return typeof chrome !== 'undefined' && Boolean(chrome.storage?.local);
@@ -303,17 +303,21 @@ if (typeof module !== 'undefined' && module.exports) {
     return {
       token: typeof value.token === 'string' ? value.token : '',
       updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : 0,
+      origin: typeof value.origin === 'string' ? value.origin : '',
+      siteToken: typeof value.siteToken === 'string' ? value.siteToken : '',
+      userInfo: value.userInfo && typeof value.userInfo === 'object' && !Array.isArray(value.userInfo)
+        ? value.userInfo : null,
     };
   }
 
-  async function getStorageKey() {
-    const projectId = await namespace.currentProject.getCurrentProjectId();
-    return `${KEY_PREFIX}:${projectId}`;
+  async function getStorageKey(projectId) {
+    const targetProjectId = projectId || await namespace.currentProject.getCurrentProjectId();
+    return `${KEY_PREFIX}:${targetProjectId}`;
   }
 
-  async function getToken() {
+  async function getToken(projectId) {
     if (!hasChromeStorage()) return normalize();
-    const key = await getStorageKey();
+    const key = await getStorageKey(projectId);
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (items) => {
         if (chrome.runtime?.lastError) {
@@ -329,10 +333,10 @@ if (typeof module !== 'undefined' && module.exports) {
     return getToken().then((t) => Boolean(t.token));
   }
 
-  async function saveToken(token) {
-    const next = { token: String(token || ''), updatedAt: Date.now() };
+  async function saveToken(token, projectId, details = {}) {
+    const next = normalize({ ...details, token: String(token || ''), updatedAt: Date.now() });
     if (!hasChromeStorage()) return next;
-    const key = await getStorageKey();
+    const key = await getStorageKey(projectId);
     return new Promise((resolve, reject) => {
       chrome.storage.local.set({ [key]: next }, () => {
         if (chrome.runtime?.lastError) {
@@ -2024,10 +2028,9 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   // 按目标 URL 读取 WAF Cookie（用于向租户域名发起 client API 请求）
-  async function getWafCookiesForUrl(targetUrl) {
+  async function getWafCookiesForUrl(targetUrl, cookieKeys = commonNs.currentProject.getCookieKeys()) {
     if (!hasCookiesApi()) return '';
     if (!targetUrl) return '';
-    const cookieKeys = commonNs.currentProject.getCookieKeys();
     const pairs = [];
     for (const name of cookieKeys) {
       try {
@@ -2046,6 +2049,104 @@ if (typeof module !== 'undefined' && module.exports) {
 })();
 
 
+/* ===== src/background/admin-token-injection.js ===== */
+/* 内部开发工具箱 — 后台账号 Token 注入当前标签页 */
+(() => {
+  'use strict';
+
+  const ns = (globalThis.InternalDevToolkitBg = globalThis.InternalDevToolkitBg || {});
+  const commonNs = globalThis.InternalDevToolkit;
+
+  function httpOrigin(value) {
+    try {
+      const url = new URL(String(value || ''));
+      return ['http:', 'https:'].includes(url.protocol) ? url.origin : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  async function injectActiveTab({ token, siteToken, userInfo, origin }) {
+    const cleanToken = String(token || '').replace(/^Bearer\s+/i, '').trim();
+    if (!cleanToken) throw new Error('尚未获取后台 Token，请先登录或填写 Token');
+    const loginOrigin = httpOrigin(origin);
+    if (!loginOrigin) throw new Error('登录域名无效，请检查后台 API 地址');
+    if (!chrome.tabs?.query || !chrome.scripting?.executeScript) {
+      throw new Error('当前环境不支持向网站注入 Token');
+    }
+
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const tab = tabs.find((item) => item.id && item.active);
+    if (!tab) return { injected: false, reason: 'no-active-tab' };
+    const targetOrigin = httpOrigin(tab.pendingUrl || tab.url);
+    if (!targetOrigin) return { injected: false, reason: 'unsupported-page' };
+    if (targetOrigin !== loginOrigin) {
+      return { injected: false, reason: 'origin-mismatch', loginOrigin };
+    }
+
+    // 网站的请求拦截器直接读取 localStorage.token 作为 Authorization。
+    // 登录响应提供 accessToken 时保留原格式；旧记录和手填 Token 补上 Bearer 前缀。
+    const storedSiteToken = String(siteToken || '').trim();
+    const sessionToken = storedSiteToken.replace(/^Bearer\s+/i, '').trim() === cleanToken
+      ? storedSiteToken
+      : `Bearer ${cleanToken}`;
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      world: 'MAIN',
+      func: (expectedOrigin, sessionToken, cleanToken, userInfo) => {
+        // 查询标签页后可能发生导航，写入前必须在页面中再次确认域名。
+        if (window.location.origin !== expectedOrigin) {
+          return { injected: false, reason: 'page-changed' };
+        }
+        const previousToken = (localStorage.getItem('token') || '').replace(/^Bearer\s+/i, '').trim();
+        localStorage.setItem('token', sessionToken);
+        if (userInfo) {
+          localStorage.setItem('userInfo', JSON.stringify(userInfo));
+        } else if (previousToken !== cleanToken) {
+          // 手填或旧版本的 Token 没有用户信息，不能沿用另一个账号的信息。
+          localStorage.removeItem('userInfo');
+        }
+        window.location.assign(`${window.location.origin}/`);
+        return { injected: true };
+      },
+      args: [targetOrigin, sessionToken, cleanToken, userInfo || null],
+    });
+    const result = results?.find((item) => item.frameId === 0)?.result;
+    if (!result) throw new Error('网站未完成 Token 注入，请重试');
+    return { ...result, tabId: tab.id };
+  }
+
+  async function autoInject(state) {
+    try {
+      return await injectActiveTab(state);
+    } catch (error) {
+      // 登录和保存已完成，页面注入失败不应要求用户重新验证登录。
+      return { injected: false, error: error.message || '自动注入失败' };
+    }
+  }
+
+  async function injectStoredToken({ projectId, baseUrl } = {}) {
+    const state = await commonNs.token.getToken(projectId);
+    const result = await injectActiveTab({
+      ...state,
+      origin: state.origin || baseUrl || commonNs.currentProject.getBaseUrl(),
+    });
+    if (!result.injected) {
+      const errors = {
+        'no-active-tab': '未找到当前激活的网站',
+        'unsupported-page': '当前页面不支持注入，请打开 HTTP(S) 网站',
+        'origin-mismatch': `当前网站与登录域名不一致，请切换到 ${result.loginOrigin} 后重试`,
+        'page-changed': '当前网站已发生跳转，请确认页面后重试',
+      };
+      throw new Error(errors[result.reason] || 'Token 注入失败');
+    }
+    return result;
+  }
+
+  ns.adminTokenInjection = { autoInject, injectStoredToken };
+})();
+
+
 /* ===== src/background/api.js ===== */
 /* 内部开发工具箱 — Background API 登录 */
 /* 跨域调用后台登录接口，负责：验证码获取、密码加密、登录、token 解析与保存。 */
@@ -2054,8 +2155,6 @@ if (typeof module !== 'undefined' && module.exports) {
 
   const ns = (globalThis.InternalDevToolkitBg = globalThis.InternalDevToolkitBg || {});
   const commonNs = globalThis.InternalDevToolkit;
-
-  const VALID_CODE = '123'; // /valid 接口的验证码，后台校验宽松时可任意数字
 
   // 默认密码加密：SHA-256（64 位小写 hex）。
   // 若后台使用其他算法（如加盐、MD5、RSA、SM3 等），请替换此函数。
@@ -2068,11 +2167,19 @@ if (typeof module !== 'undefined' && module.exports) {
       .join('');
   }
 
-  async function postJson(path, body) {
-    const baseUrl = commonNs.currentProject.getBaseUrl();
-    const authPath = commonNs.currentProject.getAuthPath();
+  function getLoginContext() {
+    return {
+      projectId: commonNs.currentProject.getCachedProjectId(),
+      baseUrl: commonNs.currentProject.getBaseUrl(),
+      authPath: commonNs.currentProject.getAuthPath(),
+      cookieKeys: [...commonNs.currentProject.getCookieKeys()],
+    };
+  }
+
+  async function postJson(path, body, context = getLoginContext()) {
+    const { baseUrl, authPath, cookieKeys } = context;
     const url = `${baseUrl}${authPath}${path}`;
-    const cookieHeader = await ns.cookies.getWafCookies();
+    const cookieHeader = await ns.cookies.getWafCookiesForUrl(baseUrl, cookieKeys);
     const headers = {
       Accept: 'application/json, text/plain, */*',
       'Content-Type': 'application/json',
@@ -2104,10 +2211,9 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   }
 
-  // 获取验证码。后台对 moveLength 校验较宽松，任意数字均可；
-  // 这里优先取 getCaptcha 返回的 data.blockX，缺失时回退到 212。
-  async function getCaptcha() {
-    return postJson('/getCaptcha', {});
+  // 优先取 getCaptcha 返回的 data.blockX，缺失时沿用兼容值 212。
+  async function getCaptcha(context) {
+    return postJson('/getCaptcha', {}, context);
   }
 
   function extractTicket(captcha) {
@@ -2122,7 +2228,7 @@ if (typeof module !== 'undefined' && module.exports) {
     return data?.blockX ?? data?.moveLength ?? data?.width ?? data?.x ?? data?.offset ?? fallback;
   }
 
-  async function login(account, passwordHash, captcha) {
+  async function login(account, passwordHash, captcha, context) {
     const ticket = extractTicket(captcha);
     const moveLength = extractMoveLength(captcha);
 
@@ -2133,32 +2239,37 @@ if (typeof module !== 'undefined' && module.exports) {
       password: passwordHash,
     };
 
-    return postJson('/login', body);
+    return postJson('/login', body, context);
   }
 
-  async function valid(account, passwordHash, code) {
+  async function valid(account, passwordHash, code, context) {
     const body = {
       mobile: String(account),
       code: String(code),
       password: passwordHash,
     };
-    return postJson('/valid', body);
+    return postJson('/valid', body, context);
+  }
+
+  function assertResponseSuccess(response, fallback) {
+    if (!response || typeof response !== 'object' || response._raw != null) {
+      throw new Error(fallback);
+    }
+    const failed = [false, 0, '0', 'false'].includes(response.success);
+    const code = response.code == null ? null : Number(response.code);
+    const codeFailed = code != null && code !== 0 && !(code >= 200 && code < 400);
+    if (failed || codeFailed) {
+      throw new Error(extractErrorMessage(response) || fallback);
+    }
   }
 
   function isCodeSent(response) {
     if (!response || typeof response !== 'object') return false;
-    // 如果 login 返回成功但没 token，大概率是验证码已下发，需要走 /valid
-    if (response.code === 200 || response.success === true) return true;
-    const msg = extractErrorMessage(response) || '';
-    return (
-      msg.includes('验证码') ||
-      msg.includes('驗證碼') ||
-      msg.includes('已发送') ||
-      msg.includes('已發送') ||
-      msg.includes('已下发') ||
-      msg.includes('send') ||
-      msg.includes('code')
-    );
+    // /login 成功但没有 Token 时，让面板等待用户输入验证码。
+    if (Number(response.code) === 200 || response.code === 0 ||
+        [true, 1, '1', 'true'].includes(response.success)) return true;
+    const msg = extractErrorMessage(response) || (typeof response.data === 'string' ? response.data : '');
+    return /已发送|已發送|已下发|请输入.*验证码|請輸入.*驗證碼|code.*sent|sent.*code/i.test(msg);
   }
   // 兼容常见 token 返回结构，并去除可能自带的 Bearer 前缀
   function extractToken(response) {
@@ -2166,7 +2277,11 @@ if (typeof module !== 'undefined' && module.exports) {
     const data = response.data ?? response.result ?? response;
     let token = '';
     if (typeof data === 'string') {
-      token = data;
+      // 普通字符串可能是“验证码已发送”，不能因此跳过验证码步骤。
+      // 纯字符串仅兼容明确的 Bearer 凭证或三段式 JWT。
+      if (/^(?:Bearer\s+\S+|[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i.test(data.trim())) {
+        token = data;
+      }
     } else {
       token = (
         data?.token ||
@@ -2177,44 +2292,59 @@ if (typeof module !== 'undefined' && module.exports) {
         ''
       );
     }
-    return token.replace(/^Bearer\s+/i, '').trim();
+    return typeof token === 'string' ? token.replace(/^Bearer\s+/i, '').trim() : '';
   }
 
   function extractErrorMessage(response) {
     if (!response || typeof response !== 'object') return '';
-    return response.msg || response.message || response.error || response.errorMessage || '';
+    return String(response.msg || response.message || response.error || response.errorMessage || '');
   }
 
   // 通过公共 token 模块写入命名空间键 adminToken:${projectId}，
   // 与 popup/content/tenant-api 的读写键保持一致。
   // 注意：旧实现直接写非命名空间键 adminToken，会导致非默认项目的 token 丢失、
   // 且 popup 在 SW 重启迁移前看不到新 token。
-  async function saveToken(token) {
-    return commonNs.token.saveToken(token);
+  async function saveToken(token, projectId, details) {
+    return commonNs.token.saveToken(token, projectId, details);
   }
 
-  async function doLogin({ account, password }) {
+  async function completeLogin(token, response, context) {
+    const data = response.data ?? response.result ?? response;
+    const userInfo = data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+    const siteToken = typeof userInfo?.accessToken === 'string'
+      ? userInfo.accessToken.trim()
+      : `Bearer ${token}`;
+    const state = await saveToken(token, context.projectId, {
+      origin: new URL(context.baseUrl).origin,
+      siteToken,
+      userInfo,
+    });
+    const injection = await ns.adminTokenInjection.autoInject(state);
+    return { token, injection };
+  }
+
+  async function doLogin({ account, password } = {}) {
     if (!account || !password) {
       throw new Error('请输入账号和密码');
     }
 
-    const captcha = await getCaptcha();
+    const context = getLoginContext();
+    const captcha = await getCaptcha(context);
+    assertResponseSuccess(captcha, '获取验证码失败');
+    if (!extractTicket(captcha)) throw new Error('getCaptcha 未返回 ticket');
     const passwordHash = await encryptPassword(password);
 
     // 1. 调 /login 触发验证码下发
-    const loginRes = await login(account, passwordHash, captcha);
-    let token = extractToken(loginRes);
+    const loginRes = await login(account, passwordHash, captcha, context);
+    assertResponseSuccess(loginRes, '登录失败');
+    const token = extractToken(loginRes);
 
-    // 2. 若 /login 未返回 token 但提示验证码已发送，自动调 /valid 换取 token
+    // 2. 返回本次登录的信息，由面板弹窗收集验证码；不持久化待验证信息。
     if (!token && isCodeSent(loginRes)) {
-      const validRes = await valid(account, passwordHash, VALID_CODE);
-      token = extractToken(validRes);
-      if (!token) {
-        const msg = extractErrorMessage(validRes);
-        throw new Error(msg ? `验证失败: ${msg}` : 'valid 接口未返回 token');
-      }
-      await saveToken(token);
-      return { token, captcha, loginRes, validRes };
+      return {
+        requiresVerification: true,
+        verification: { ...context, account: String(account), passwordHash },
+      };
     }
 
     if (!token) {
@@ -2222,11 +2352,24 @@ if (typeof module !== 'undefined' && module.exports) {
       throw new Error(msg ? `登录失败: ${msg}` : '登录接口未返回 token');
     }
 
-    await saveToken(token);
-    return { token, captcha, loginRes };
+    return completeLogin(token, loginRes, context);
   }
 
-  ns.api = { doLogin, encryptPassword, getCaptcha, login, valid, extractToken, saveToken };
+  async function verifyLogin({ verification, code } = {}) {
+    const inputCode = String(code || '').trim();
+    if (!inputCode) throw new Error('请输入验证码');
+    if (!verification?.account || !verification.passwordHash || !verification.projectId ||
+        !verification.baseUrl || !verification.authPath || !Array.isArray(verification.cookieKeys)) {
+      throw new Error('登录信息已失效，请重新登录');
+    }
+    const validRes = await valid(verification.account, verification.passwordHash, inputCode, verification);
+    assertResponseSuccess(validRes, '验证码验证失败');
+    const token = extractToken(validRes);
+    if (!token) throw new Error(extractErrorMessage(validRes) || '验证接口未返回 Token');
+    return completeLogin(token, validRes, verification);
+  }
+
+  ns.api = { doLogin, verifyLogin, encryptPassword, getCaptcha, login, valid, extractToken, saveToken };
 })();
 
 
@@ -4694,6 +4837,22 @@ if (typeof module !== 'undefined' && module.exports) {
     if (msg.type === 'LOGIN_API' && ns.api) {
       ns.api
         .doLogin(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'VERIFY_LOGIN_API' && ns.api) {
+      ns.api
+        .verifyLogin(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'INJECT_ADMIN_TOKEN' && ns.adminTokenInjection) {
+      ns.adminTokenInjection
+        .injectStoredToken(msg.payload)
         .then((result) => sendResponse({ ok: true, ...result }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;

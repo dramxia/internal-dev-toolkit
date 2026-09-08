@@ -16,6 +16,8 @@
   // 记录最近一次从存储读到的自定义域名覆盖；空串表示未覆盖（使用项目默认）
   let lastSavedDomain = '';
   let adminInitialized = false;
+  let adminLoginPending = false;
+  let adminInjectionPending = false;
 
   function getEditableText(el) {
     return (el.textContent || '').replace(/ /g, ' ');
@@ -50,9 +52,10 @@
       $('tokenUpdated').textContent = '';
       $('copyTokenBtn').disabled = true;
     }
+    syncAdminButtons();
   }
 
-  // 点击即编辑、失焦自动保存并注入：
+  // 点击即编辑、失焦自动保存；向网站注入由登录成功或手动按钮触发。
   // 可编辑内容区会随内容自然增高，无需 textarea 与显式「编辑/保存」按钮。
   async function onTokenBlur() {
     const tokenEl = $('tokenValue');
@@ -191,6 +194,151 @@
     }
   }
 
+  function syncAdminButtons() {
+    const busy = adminLoginPending || adminInjectionPending;
+    for (const id of ['account', 'password', 'saveBtn', 'clearBtn', 'apiLoginBtn', 'clearTokenToolBtn']) {
+      $(id).disabled = busy;
+    }
+    for (const id of ['injectAdminTokenBtn', 'injectAdminTokenToolBtn']) {
+      const button = $(id);
+      button.disabled = busy || !lastSavedToken.trim();
+      button.textContent = adminInjectionPending ? '正在注入…' : '一键注入当前网站';
+    }
+  }
+
+  function setAdminLoginPending(pending) {
+    adminLoginPending = pending;
+    syncAdminButtons();
+    $('apiLoginBtn').textContent = pending ? '正在登录…' : '登录并保存';
+  }
+
+  async function injectAdminToken() {
+    if (adminLoginPending || adminInjectionPending) return;
+    adminInjectionPending = true;
+    syncAdminButtons();
+    try {
+      // 用户可能刚在 Token 工具屏中编辑内容，先完成保存，再读取最新凭证。
+      if (!(await onTokenBlur())) return;
+      const response = await ns.messages.sendToBackground({
+        type: 'INJECT_ADMIN_TOKEN',
+        payload: {
+          projectId: ns.currentProject.getCachedProjectId(),
+          baseUrl: ns.currentProject.getBaseUrl(),
+        },
+      });
+      if (!response?.ok || !response.injected) throw new Error(response?.error || 'Token 注入失败');
+      setLoginStatus('已注入当前网站并跳转到根目录', 'ok');
+    } catch (error) {
+      setLoginStatus(`注入失败: ${error.message}`, 'err');
+    } finally {
+      adminInjectionPending = false;
+      syncAdminButtons();
+    }
+  }
+
+  function requestAdminVerification(verification) {
+    const dialog = $('adminVerificationDialog');
+    const form = $('adminVerificationForm');
+    const input = $('adminVerificationCode');
+    const errorEl = $('adminVerificationError');
+    const confirmBtn = $('adminVerificationConfirm');
+    const cancelBtn = $('adminVerificationCancel');
+    let submitting = false;
+    let result = null;
+
+    function showError(message = '') {
+      errorEl.textContent = message;
+      errorEl.hidden = !message;
+      input.setAttribute('aria-invalid', String(Boolean(message)));
+    }
+
+    function setSubmitting(value) {
+      submitting = value;
+      input.disabled = value;
+      confirmBtn.disabled = value;
+      cancelBtn.disabled = value;
+      confirmBtn.textContent = value ? '验证中…' : '确定';
+      form.setAttribute('aria-busy', String(value));
+    }
+
+    form.reset();
+    showError();
+    setSubmitting(false);
+    setLoginStatus('', '');
+    $('apiLoginBtn').textContent = '等待验证码…';
+
+    return new Promise((resolve, reject) => {
+      async function onSubmit(event) {
+        event.preventDefault();
+        if (submitting) return;
+        const code = input.value.trim();
+        if (!code) {
+          showError('请输入验证码');
+          input.focus();
+          return;
+        }
+        showError();
+        setSubmitting(true);
+        try {
+          const response = await ns.messages.sendToBackground({
+            type: 'VERIFY_LOGIN_API',
+            payload: { verification, code },
+          });
+          if (!response?.ok || !response.token) throw new Error(response?.error || '验证失败，请重试');
+          result = response;
+          dialog.close();
+        } catch (err) {
+          showError(err.message || '验证失败，请重试');
+        } finally {
+          setSubmitting(false);
+          if (dialog.open) {
+            input.focus();
+            input.select();
+          }
+        }
+      }
+
+      function onCancel(event) {
+        event.preventDefault();
+        if (!submitting) dialog.close();
+      }
+
+      function onKeyDown(event) {
+        if (event.key !== 'Escape') return;
+        // 弹窗内的 Escape 只处理本次验证，不触发工作台返回。
+        event.stopPropagation();
+        if (submitting) event.preventDefault();
+      }
+
+      function cleanup() {
+        form.removeEventListener('submit', onSubmit);
+        cancelBtn.removeEventListener('click', onCancel);
+        dialog.removeEventListener('cancel', onCancel);
+        dialog.removeEventListener('keydown', onKeyDown);
+        dialog.removeEventListener('close', onClose);
+        form.reset();
+      }
+
+      function onClose() {
+        cleanup();
+        resolve(result);
+      }
+
+      form.addEventListener('submit', onSubmit);
+      cancelBtn.addEventListener('click', onCancel);
+      dialog.addEventListener('cancel', onCancel);
+      dialog.addEventListener('keydown', onKeyDown);
+      dialog.addEventListener('close', onClose);
+      try {
+        dialog.showModal();
+        input.focus();
+      } catch (err) {
+        cleanup();
+        reject(err);
+      }
+    });
+  }
+
   function bindCredentials() {
     $('pwdToggle').addEventListener('click', () => {
       const input = $('password');
@@ -228,6 +376,7 @@
     });
 
     $('apiLoginBtn').addEventListener('click', async () => {
+      if (adminLoginPending || adminInjectionPending) return;
       const account = $('account').value.trim();
       const password = $('password').value;
       if (!account || !password) {
@@ -235,29 +384,41 @@
         return;
       }
 
+      setAdminLoginPending(true);
       setLoginStatus('正在登录...', '');
       try {
         await ns.credentials.saveCredentials({ account, password });
-      } catch (err) {
-        setLoginStatus(`保存失败: ${err.message}`, 'err');
-        return;
-      }
-
-      try {
-        const res = await ns.messages.sendToBackground({
+        let res = await ns.messages.sendToBackground({
           type: 'LOGIN_API',
           payload: { account, password },
         });
-        if (res && res.ok) {
-          await renderToken();
-          setLoginStatus('登录成功，token 已保存', 'ok');
+        if (!res?.ok) throw new Error(res?.error || '登录失败');
+        if (res.requiresVerification) {
+          res = await requestAdminVerification(res.verification);
+          if (!res) {
+            setLoginStatus('已取消登录', '');
+            return;
+          }
+        } else if (!res.token) {
+          throw new Error('登录接口未返回 Token');
+        }
+        await renderToken();
+        if (res.injection?.injected) {
+          setLoginStatus('登录成功，已注入当前网站并跳转到根目录', 'ok');
+        } else if (res.injection?.error) {
+          setLoginStatus(`登录成功，Token 已保存；自动注入失败: ${res.injection.error}`, 'err');
         } else {
-          setLoginStatus(res?.error || '登录失败', 'err');
+          setLoginStatus('登录成功，Token 已保存', 'ok');
         }
       } catch (err) {
         setLoginStatus(`登录失败: ${err.message}`, 'err');
+      } finally {
+        setAdminLoginPending(false);
       }
     });
+
+    $('injectAdminTokenBtn').addEventListener('click', injectAdminToken);
+    $('injectAdminTokenToolBtn').addEventListener('click', injectAdminToken);
 
     $('copyTokenBtn').addEventListener('click', async () => {
       const tokenState = await ns.token.getToken();
@@ -274,7 +435,7 @@
       }
     });
 
-    // 点击即编辑、失焦自动保存并注入（无需编辑/保存按钮）
+    // 点击即编辑、失焦自动保存（无需编辑/保存按钮）
     bindEditableField('tokenValue', onTokenBlur);
 
     // 域名地址：点击即编辑、失焦自动保存（与 token 交互一致）

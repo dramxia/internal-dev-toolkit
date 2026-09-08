@@ -81,6 +81,22 @@
       return true;
     }
 
+    if (msg.type === 'VERIFY_LOGIN_API' && ns.api) {
+      ns.api
+        .verifyLogin(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'INJECT_ADMIN_TOKEN' && ns.adminTokenInjection) {
+      ns.adminTokenInjection
+        .injectStoredToken(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
     // popup 保存自定义域名后通知 background 刷新内存缓存
     // （getBaseUrl 同步读取该缓存，所有后台请求会立即使用新域名）
     if (msg.type === 'REFRESH_BASE_URL') {

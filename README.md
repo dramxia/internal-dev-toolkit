@@ -12,7 +12,7 @@
 - **浏览器侧边栏**：点击扩展图标后在浏览器右侧打开工具箱，可在浏览页面时持续使用
 - **设置持久化**：账号密码、Token 与最近登录记录通过 `chrome.storage.local` 保存（按项目命名空间隔离）
 - **消息通信**：side panel ↔ content ↔ background 三方消息链路示例
-- **后台 API 登录**：通过账号密码跨域调用后台登录接口，获取 admin token 并保存到插件存储（不注入任何页面）
+- **后台 API 登录**：通过账号密码跨域调用后台登录接口，按需弹窗输入验证码后保存 admin token；当前激活网站与登录地址同源时，自动注入登录态并跳转到网站根目录，也可点击「一键注入当前网站」使用已保存的 Token
 - **师生关联查询**：在已获取后台 admin token 的前提下，面板提供「教师查学生」与「学生查教师」两条路径，并在查询结果上提供打开平台、复制 Token 和快捷登录等操作；学生路径通过后台学生账号分页定位租户，再用 AI 平台学生接口匹配班级并反查常规租户用户教师。
 - **查询状态持久化**：两条师生查询路径的搜索条件、分页结果和已选关系按项目同时保存，关闭并重新打开侧边栏后自动恢复；AI token 等运行时凭据不会写入查询快照。
 - **AI token 隔离**：`后台账号`只管理 admin token；`师生查询`通过 `virtualLogin` 在内存中使用 AI 平台 token，不写入存储，也不会回落使用 admin token。
@@ -142,9 +142,16 @@ internal-dev-toolkit/
 
 1. `POST /getCaptcha` → 获取 ticket
 2. `POST /login` → 提交手机号、ticket、moveLength、加密后的密码，触发验证码下发
-3. `POST /valid` → 提交手机号、固定验证码、加密后的密码，换取 token
-4. 从 `/valid` 响应中解析 `token`（兼容 `data.token`、`data.accessToken`、`data.access_token` 等常见字段）
-5. 保存到 `chrome.storage.local`（仅插件内部使用，不注入任何页面）
+3. `/login` 成功但未返回 token 时，弹出验证码输入框，等待用户填写；不预填验证码，也不自动调用 `/valid`
+4. 用户点击「确定」后，`POST /valid` → 提交本次登录的手机号、用户输入的验证码和加密后的密码；验证失败时在弹窗内提示，可修改后重试，取消则结束本次登录
+5. 验证接口返回成功且包含 token 后，保存到 `chrome.storage.local`；若 `/login` 已直接返回 token，则直接保存，无需验证码
+6. 检查当前激活的标签页：与本次登录地址的协议、域名和端口一致时，写入网站的 `localStorage.token` 和登录接口返回的 `userInfo`，随后跳转到当前网站域名的根目录（如 `https://example.com/`），不保留原路径、查询参数或片段；地址不匹配时只保存插件 Token
+
+后台账号页和后台 Token 工具屏均提供「一键注入当前网站」，使用已保存的 Token，注入成功后同样跳转到网站根目录，不会重新调用登录接口。手动注入也要求当前网站与 Token 的登录来源地址一致；旧记录或手填 Token 没有来源地址时，使用当前配置的 API 地址进行检查。没有 Token 时按钮不可用。
+
+网站注入使用登录接口原始 `accessToken` 格式；旧记录或手填 Token 默认补齐 `Bearer ` 前缀。修改 Token 会清除它原有的用户信息和来源记录，避免把旧账号信息注入新会话。网站注入失败不会撤销已保存的 Token，可修正问题后点击按钮重试。
+
+等待验证码期间，本次登录的账号、密码摘要、项目和接口地址仅保留在面板内存中。关闭侧栏后需重新登录；验证码不会保存到插件存储。
 
 > **注意**：默认使用 SHA-256 对密码做摘要。若后台采用其他加密方式，请修改 `src/background/api.js` 中的 `encryptPassword`。若 `/getCaptcha` 返回结构或验证码逻辑与当前假设不符，请同步调整 `extractTicket` / `extractMoveLength`。
 
@@ -175,6 +182,6 @@ internal-dev-toolkit/
 
 | 键 | 类型 | 说明 |
 |---|---|---|
-| `adminToken:<projectId>` | `{ token, updatedAt }` | 后台 admin 登录 token |
+| `adminToken:<projectId>` | `{ token, updatedAt, origin, siteToken, userInfo }` | 后台 Token，以及用于网站注入的登录来源、原始凭证和用户信息；兼容旧记录 |
 | `adminCredentials:<projectId>` | `{ account, password }` | 后台登录账号密码（明文存储，仅供内部自用） |
 | `quickLoginRecent:<projectId>` | `Array<{ tenantId, tenantName, id, userName, role, env, localPort, at }>` | 最近登录元数据；不保存 token、URL 或 AI 会话 |

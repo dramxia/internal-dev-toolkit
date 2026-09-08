@@ -51,6 +51,7 @@ const backgroundFiles = [
   'src/common/mock-storage.js',
   'src/common/mock-generator.js',
   'src/background/cookies.js',
+  'src/background/admin-token-injection.js',
   'src/background/api.js',
   'src/background/tenant-api.js',
   'src/background/quick-login.js',

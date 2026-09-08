@@ -2162,6 +2162,8 @@
     #adminPanelSection #clearBtn,
     #otherLoginSection #otherLoginBtn,
     #otherLoginSection #otherZhiqueBtn { grid-row: 2; }
+    #adminPanelSection #injectAdminTokenBtn { grid-column: 1 / -1; grid-row: 3; }
+    #injectAdminTokenToolBtn { flex-basis: 100%; }
     #appLoginSection #appLoginBtn { min-height: 42px; }
     .workspace-note {
       margin-top: 12px;
@@ -2470,6 +2472,25 @@
       #panel-app #appLoginSection { padding-right: 12px; padding-left: 12px; }
     }
 
+    .admin-verification-dialog {
+      width: min(360px, calc(100vw - 32px));
+      max-height: calc(100dvh - 32px);
+      margin: auto;
+      padding: 24px;
+      overflow-y: auto;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-lg);
+      background: var(--panel);
+      color: var(--text-1);
+      box-shadow: var(--shadow-lg);
+    }
+    .admin-verification-dialog::backdrop { background: rgba(28, 46, 32, .35); }
+    .admin-verification-dialog h2 { font-size: 18px; font-weight: 600; }
+    .admin-verification-hint { margin: 8px 0 20px; color: var(--text-2); line-height: 1.7; }
+    .admin-verification-error { margin-top: 10px; color: var(--error); overflow-wrap: anywhere; }
+    .admin-verification-dialog .btn-row { margin-top: 20px; justify-content: flex-end; }
+    .admin-verification-dialog .field-input[aria-invalid="true"] { border-color: var(--error); }
+
     .hidden { display: none !important; }
 
     /* 动态列表直接更新；视图级过渡由 View Transition 统一处理。 */
@@ -2542,7 +2563,10 @@
               <button class="btn btn-ghost"   id="saveBtn">仅保存凭证</button>
               <button class="btn btn-danger"  id="clearBtn">清除凭证</button>
               <button class="btn btn-primary" id="apiLoginBtn">登录并保存</button>
+              <button class="btn btn-ghost" id="injectAdminTokenBtn" type="button" disabled>一键注入当前网站</button>
             </div>
+
+            <p class="workspace-note">当前网站与登录地址一致时，登录成功后会自动注入并跳转到网站根目录。</p>
 
             <div class="workspace-domain-summary">
               <span>当前 API</span>
@@ -2578,12 +2602,13 @@
           </div>
 
           <div class="utility-actions">
+            <button class="btn btn-primary" id="injectAdminTokenToolBtn" type="button" disabled>一键注入当前网站</button>
             <button class="btn btn-ghost" id="copyTokenBtn" disabled>复制后台 Token</button>
             <button class="btn btn-danger" id="clearTokenToolBtn" type="button">清空 Token</button>
           </div>
 
           <div class="callout">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4M6.6 6.6l2.1 2.1M15.3 15.3l2.1 2.1M6.6 17.4l2.1-2.1M15.3 8.7l2.1-2.1"/></svg> API 登录获取的是后台 admin token，仅用于后台接口；师生查询会另行获取 AI 平台 token，二者不会混用
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v4M12 16.5v4M3.5 12h4M16.5 12h4M6.6 6.6l2.1 2.1M15.3 15.3l2.1 2.1M6.6 17.4l2.1-2.1M15.3 8.7l2.1-2.1"/></svg> 后台 Token 用于后台接口和同域名网站登录；师生查询会另行获取 AI 平台 Token，二者不会混用
           </div>
 
         </div>
@@ -3089,6 +3114,20 @@
   </main>
 
   <nav class="workspace-dock" id="workspaceDock" aria-label="工具任务"></nav>
+
+  <dialog class="admin-verification-dialog" id="adminVerificationDialog" aria-labelledby="adminVerificationTitle" aria-describedby="adminVerificationHint">
+    <form id="adminVerificationForm" novalidate>
+      <h2 id="adminVerificationTitle">输入验证码</h2>
+      <p class="admin-verification-hint" id="adminVerificationHint">请输入登录验证码，验证通过后完成登录。</p>
+      <label class="field-label" for="adminVerificationCode">验证码</label>
+      <input class="field-input" id="adminVerificationCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入验证码" aria-describedby="adminVerificationError" required autofocus>
+      <p class="admin-verification-error" id="adminVerificationError" role="alert" hidden></p>
+      <div class="btn-row">
+        <button class="btn btn-ghost" id="adminVerificationCancel" type="button">取消</button>
+        <button class="btn btn-primary" id="adminVerificationConfirm" type="submit">确定</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="popup.js"></script>
 </body>
