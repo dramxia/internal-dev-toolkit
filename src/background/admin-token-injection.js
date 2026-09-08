@@ -47,13 +47,20 @@
           return { injected: false, reason: 'page-changed' };
         }
         const previousToken = (localStorage.getItem('token') || '').replace(/^Bearer\s+/i, '').trim();
-        localStorage.setItem('token', sessionToken);
-        if (userInfo) {
-          localStorage.setItem('userInfo', JSON.stringify(userInfo));
-        } else if (previousToken !== cleanToken) {
-          // 手填或旧版本的 Token 没有用户信息，不能沿用另一个账号的信息。
-          localStorage.removeItem('userInfo');
+        const hasUserInfo = (value) => value && typeof value === 'object' &&
+          !Array.isArray(value) && Object.keys(value).length > 0;
+        let sessionUserInfo = userInfo;
+        if (!hasUserInfo(sessionUserInfo) && previousToken === cleanToken) {
+          // 旧记录缺少用户信息时，只能复用网站上属于同一个 Token 的现有信息。
+          try {
+            sessionUserInfo = JSON.parse(localStorage.getItem('userInfo') || 'null');
+          } catch (_) {}
         }
+        // 网站的登录检查还会读取 userInfo。缺失时不能只写 Token 后误报成功，
+        // 也不能覆盖网站原有账号的登录状态。
+        if (!hasUserInfo(sessionUserInfo)) return { injected: false, reason: 'missing-user-info' };
+        localStorage.setItem('token', sessionToken);
+        localStorage.setItem('userInfo', JSON.stringify(sessionUserInfo));
         window.location.assign(`${window.location.origin}/`);
         return { injected: true };
       },
@@ -61,6 +68,9 @@
     });
     const result = results?.find((item) => item.frameId === 0)?.result;
     if (!result) throw new Error('网站未完成 Token 注入，请重试');
+    if (result.reason === 'missing-user-info') {
+      throw new Error('当前 Token 缺少用户信息，请先点击「登录并保存」重新登录，再注入网站');
+    }
     return { ...result, tabId: tab.id };
   }
 

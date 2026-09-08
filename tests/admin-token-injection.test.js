@@ -163,13 +163,43 @@ const manualPayload = { projectId: 'alpha', baseUrl: origin };
   await manual.token.saveToken('edited-token', 'alpha');
   assert.equal(manual.storage['adminToken:alpha'].userInfo, null, '手填 Token 必须清除旧账号元数据');
   assert.equal(manual.storage['adminToken:alpha'].origin, '');
-  assert.equal((await manual.send('INJECT_ADMIN_TOKEN', manualPayload)).injected, true);
-  assert.equal(manual.pageStorage.token, 'Bearer edited-token');
-  assert.equal(manual.pageStorage.userInfo, undefined, '不同 Token 没有用户信息时不能保留旧账号');
+  const operationsBeforeEditInjection = manual.operations.length;
+  const editedResult = await manual.send('INJECT_ADMIN_TOKEN', manualPayload);
+  assert.equal(editedResult.ok, false);
+  assert.match(editedResult.error, /缺少用户信息.*登录并保存/);
+  assert.equal(manual.operations.length, operationsBeforeEditInjection, '缺少用户信息时不能写入或跳转');
+  assert.equal(manual.pageStorage.token, 'Bearer saved-token', '不能破坏网站原有的登录状态');
+  assert.equal(JSON.parse(manual.pageStorage.userInfo).userId, 'saved-user');
   await manual.token.saveToken('', 'alpha');
   const count = manual.injections.length;
   assert.equal((await manual.send('INJECT_ADMIN_TOKEN', manualPayload)).ok, false);
   assert.equal(manual.injections.length, count, '没有 Token 时不得注入');
+
+  for (const pageInfo of [undefined, 'null', '{invalid', '[]', '{}', '"text"']) {
+    const legacy = createHarness();
+    legacy.storage['adminToken:alpha'] = { token: 'saved-token', updatedAt: 1 };
+    legacy.pageStorage.token = 'Bearer saved-token';
+    if (pageInfo === undefined) delete legacy.pageStorage.userInfo;
+    else legacy.pageStorage.userInfo = pageInfo;
+    const result = await legacy.send('INJECT_ADMIN_TOKEN', manualPayload);
+    assert.equal(result.ok, false, '旧 Token 缺少有效用户信息时不能误报注入成功');
+    assert.match(result.error, /缺少用户信息.*登录并保存/);
+    assert.deepEqual(legacy.operations, [], '用户信息不完整时不得写入或跳转');
+  }
+
+  const sameSession = createHarness();
+  sameSession.storage['adminToken:alpha'] = { token: 'old-token', updatedAt: 1 };
+  assert.equal((await sameSession.send('INJECT_ADMIN_TOKEN', manualPayload)).injected, true);
+  assert.equal(JSON.parse(sameSession.pageStorage.userInfo).userId, 'old-user', '同一个 Token 可以复用网站现有用户信息');
+  assert.equal(sameSession.operations.at(-1), `navigate:${origin}/`);
+
+  const tokenOnlyLogin = createHarness();
+  tokenOnlyLogin.responses.push(captcha, { code: 200, data: 'Bearer new-token' });
+  const tokenOnlyResult = await tokenOnlyLogin.send('LOGIN_API', credentials);
+  assert.equal(tokenOnlyResult.ok, true, '接口返回的有效 Token 仍应保存到插件');
+  assert.equal(tokenOnlyResult.injection.injected, false);
+  assert.match(tokenOnlyResult.injection.error, /缺少用户信息/);
+  assert.deepEqual(tokenOnlyLogin.operations, ['save'], '登录响应缺少用户信息时不得自动写入或跳转');
 
   const source = createHarness();
   const sourceResult = await source.send('INJECT_ADMIN_TOKEN', { ...manualPayload, baseUrl: 'https://changed.example.test' });
