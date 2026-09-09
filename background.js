@@ -465,6 +465,117 @@ if (typeof module !== 'undefined' && module.exports) {
 })();
 
 
+/* ===== src/common/admin-login-history.js ===== */
+/* 后台登录历史：账号与 API 地址共同标识一条记录。 */
+(() => {
+  'use strict';
+
+  const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
+  const KEY_PREFIX = 'adminLoginHistory';
+  const SESSION_KEY_PREFIX = 'adminSession';
+  let writeQueue = Promise.resolve();
+
+  function normalizeBaseUrl(value) {
+    const url = new URL(String(value || '').trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new Error('API 地址须为 HTTP 或 HTTPS 地址，不能包含账号、查询参数或片段');
+    }
+    return url.href.replace(/\/+$/, '');
+  }
+
+  function identity(account, baseUrl) {
+    return JSON.stringify([String(account || '').trim(), normalizeBaseUrl(baseUrl)]);
+  }
+
+  // 只读取 JWT 的过期时间；没有明确有效期的 Token 由后台接口验证。
+  function tokenExpiresAt(token) {
+    try {
+      const parts = String(token || '').replace(/^Bearer\s+/i, '').trim().split('.');
+      if (parts.length !== 3) return null;
+      const encoded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const payload = JSON.parse(atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=')));
+      return typeof payload.exp === 'number' && Number.isFinite(payload.exp) ? payload.exp * 1000 : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function read(key) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get(key, (items) => {
+        if (chrome.runtime?.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(items?.[key]);
+      });
+    });
+  }
+
+  function write(values) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set(values, () => {
+        if (chrome.runtime?.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+  }
+
+  async function getRecords(projectId = ns.currentProject.getCachedProjectId()) {
+    const records = await read(`${KEY_PREFIX}:${projectId}`);
+    return Array.isArray(records) ? records : [];
+  }
+
+  async function getRecord(id, projectId) {
+    const record = (await getRecords(projectId)).find((item) => item.id === id);
+    if (!record) throw new Error('登录历史记录不存在，请重新打开历史记录');
+    return record;
+  }
+
+  async function getSession(projectId = ns.currentProject.getCachedProjectId()) {
+    return await read(`${SESSION_KEY_PREFIX}:${projectId}`) || null;
+  }
+
+  function activate(record, projectId = ns.currentProject.getCachedProjectId()) {
+    const run = async () => {
+      const account = String(record.account || '').trim();
+      const password = String(record.password || '');
+      const token = String(record.token || '').replace(/^Bearer\s+/i, '').trim();
+      const baseUrl = normalizeBaseUrl(record.baseUrl);
+      if (!account || !password || !token) throw new Error('登录记录缺少账号、密码或 Token，请重新登录');
+      const now = Date.now();
+      const tokenState = {
+        token,
+        updatedAt: record.updatedAt || now,
+        origin: new URL(baseUrl).origin,
+        siteToken: record.siteToken || `Bearer ${token}`,
+        userInfo: record.userInfo || null,
+      };
+      const saved = {
+        ...tokenState, id: identity(account, baseUrl), account, password, baseUrl, lastUsedAt: now,
+      };
+      const records = await getRecords(projectId);
+      const session = { id: crypto.randomUUID(), account, baseUrl };
+      // 一次写入完整账号信息，避免新域名与旧 Token 混用。
+      await write({
+        [`${KEY_PREFIX}:${projectId}`]: [saved, ...records.filter((item) => item.id !== saved.id)],
+        [`${SESSION_KEY_PREFIX}:${projectId}`]: session,
+        [`adminCredentials:${projectId}`]: { account, password },
+        [`adminToken:${projectId}`]: tokenState,
+        [`customBaseUrl:${projectId}`]: { baseUrl, updatedAt: now },
+        [`quickLoginQueryState:${projectId}`]: null,
+        [`quickLoginRecent:${projectId}`]: [],
+      });
+      if (projectId === ns.currentProject.getCachedProjectId()) ns.customDomain?.setCachedOverride(baseUrl);
+      return { tokenState, session };
+    };
+    const result = writeQueue.then(run);
+    writeQueue = result.catch(() => {});
+    return result;
+  }
+
+  ns.adminLoginHistory = { KEY_PREFIX, SESSION_KEY_PREFIX, normalizeBaseUrl, identity, tokenExpiresAt, getRecords, getRecord, getSession, activate };
+  if (typeof module !== 'undefined' && module.exports) module.exports = ns.adminLoginHistory;
+})();
+
+
 /* ===== src/common/tenant.js ===== */
 /* 内部开发工具箱 — 租户/用户/部门接口数据模型与参数封装 */
 /* 仅包含纯函数，不发起实际网络请求。 */
@@ -526,13 +637,39 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
-  function normalizeDept(value = {}) {
+  function normalizeDept(value = {}, inheritedSource = DEFAULT_DEPT_SOURCE) {
     return {
       deptId: String(value.deptId ?? value.id ?? ''),
       deptName: String(value.deptName ?? value.name ?? ''),
-      deptSource: value.deptSource ?? DEFAULT_DEPT_SOURCE,
+      deptSource: value.deptSource ?? inheritedSource,
       children: Array.isArray(value.children) ? value.children : [],
     };
+  }
+
+  function flattenDeptOptions(response) {
+    const result = [];
+    const seen = new Set();
+    function visit(nodes, parents = [], source = DEFAULT_DEPT_SOURCE) {
+      for (const raw of nodes) {
+        if (!raw || typeof raw !== 'object' || Number(raw.isDeleted) === 1) continue;
+        const dept = normalizeDept(raw, source);
+        if (!dept.deptId || seen.has(dept.deptId)) continue;
+        seen.add(dept.deptId);
+        const names = [...parents, dept.deptName || '未命名组织'];
+        const count = raw.deptUserNum == null ? null : Number(raw.deptUserNum);
+        result.push({
+          deptId: dept.deptId,
+          deptName: names.at(-1),
+          deptSource: dept.deptSource,
+          depth: parents.length,
+          path: names.join(' / '),
+          userCount: Number.isFinite(count) && count >= 0 ? count : null,
+        });
+        visit(dept.children, names, dept.deptSource);
+      }
+    }
+    visit(extractListData(response));
+    return result;
   }
 
   function buildTenantPageBody({ current = 1, size = 10, keyword = '' }) {
@@ -544,13 +681,14 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
-  function buildUserPageBody({ tenantId, deptId = '', current = 1, size = 10, keyword = '' }) {
+  function buildUserPageBody({ tenantId, deptId = '', deptSource = DEFAULT_DEPT_SOURCE, current = 1, size = 10, keyword = '' }) {
     if (!tenantId) throw new Error('tenantId 不能为空');
     return {
       current: Number(current) || 1,
       size: Number(size) || 10,
       deptId: String(deptId || ''),
       tenantId: String(tenantId),
+      deptSource,
       searchKey: String(keyword || ''),
       searchType: 'username,phone',
     };
@@ -1107,6 +1245,7 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeUser,
     normalizeAccount,
     normalizeDept,
+    flattenDeptOptions,
     buildTenantPageBody,
     buildUserPageBody,
     buildAccountPageBody,
@@ -2121,7 +2260,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const result = results?.find((item) => item.frameId === 0)?.result;
     if (!result) throw new Error('网站未完成 Token 注入，请重试');
     if (result.reason === 'missing-user-info') {
-      throw new Error('当前 Token 缺少用户信息，请先点击「登录并保存」重新登录，再注入网站');
+      throw new Error('当前 Token 缺少用户信息，请先点击「登录」重新登录，再注入网站');
     }
     return { ...result, tabId: tab.id };
   }
@@ -2177,12 +2316,15 @@ if (typeof module !== 'undefined' && module.exports) {
       .join('');
   }
 
-  function getLoginContext() {
+  function getLoginContext(options = {}) {
+    const projectId = options.projectId || commonNs.currentProject.getCachedProjectId();
+    const project = commonNs.projects?.getById(projectId);
+    if (options.projectId && !project?.enabledFeatures.includes('adminPanel')) throw new Error('该项目不支持后台登录');
     return {
-      projectId: commonNs.currentProject.getCachedProjectId(),
-      baseUrl: commonNs.currentProject.getBaseUrl(),
-      authPath: commonNs.currentProject.getAuthPath(),
-      cookieKeys: [...commonNs.currentProject.getCookieKeys()],
+      projectId,
+      baseUrl: commonNs.adminLoginHistory.normalizeBaseUrl(options.baseUrl || commonNs.currentProject.getBaseUrl()),
+      authPath: project?.authPath || commonNs.currentProject.getAuthPath(),
+      cookieKeys: [...(project?.cookieKeys || commonNs.currentProject.getCookieKeys())],
     };
   }
 
@@ -2324,21 +2466,20 @@ if (typeof module !== 'undefined' && module.exports) {
     const siteToken = typeof userInfo?.accessToken === 'string'
       ? userInfo.accessToken.trim()
       : `Bearer ${token}`;
-    const state = await saveToken(token, context.projectId, {
-      origin: new URL(context.baseUrl).origin,
-      siteToken,
-      userInfo,
-    });
-    const injection = await ns.adminTokenInjection.autoInject(state);
-    return { token, injection };
+    const { tokenState, session } = await commonNs.adminLoginHistory.activate({
+      account: context.account, password: context.password, baseUrl: context.baseUrl,
+      token, siteToken, userInfo, updatedAt: Date.now(),
+    }, context.projectId);
+    const injection = await ns.adminTokenInjection.autoInject(tokenState);
+    return { token, injection, session };
   }
 
-  async function doLogin({ account, password } = {}) {
+  async function doLogin({ account, password, projectId, baseUrl } = {}) {
     if (!account || !password) {
       throw new Error('请输入账号和密码');
     }
 
-    const context = getLoginContext();
+    const context = { ...getLoginContext({ projectId, baseUrl }), account: String(account).trim(), password: String(password) };
     const captcha = await getCaptcha(context);
     assertResponseSuccess(captcha, '获取验证码失败');
     if (!extractTicket(captcha)) throw new Error('getCaptcha 未返回 ticket');
@@ -2368,7 +2509,7 @@ if (typeof module !== 'undefined' && module.exports) {
   async function verifyLogin({ verification, code } = {}) {
     const inputCode = String(code || '').trim();
     if (!inputCode) throw new Error('请输入验证码');
-    if (!verification?.account || !verification.passwordHash || !verification.projectId ||
+    if (!verification?.account || !verification.password || !verification.passwordHash || !verification.projectId ||
         !verification.baseUrl || !verification.authPath || !Array.isArray(verification.cookieKeys)) {
       throw new Error('登录信息已失效，请重新登录');
     }
@@ -2379,7 +2520,43 @@ if (typeof module !== 'undefined' && module.exports) {
     return completeLogin(token, validRes, verification);
   }
 
-  ns.api = { doLogin, verifyLogin, encryptPassword, getCaptcha, login, valid, extractToken, saveToken };
+  async function isHistoryTokenValid(record, context) {
+    const expiresAt = commonNs.adminLoginHistory.tokenExpiresAt(record.token);
+    if (expiresAt != null) return expiresAt > Date.now();
+    const paths = commonNs.projects?.getById(context.projectId)?.tenantApiPaths || commonNs.currentProject.getTenantApiPaths();
+    if (!paths.tenantPage) throw new Error('当前项目未配置 Token 验证接口');
+    const cookieHeader = await ns.cookies.getWafCookiesForUrl(context.baseUrl, context.cookieKeys);
+    const response = await fetch(`${context.baseUrl}${paths.tenantPage}`, {
+      method: 'POST', credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${record.token.replace(/^Bearer\s+/i, '').trim()}`,
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
+      body: JSON.stringify({ current: 1, size: 1 }),
+    });
+    if (response.status === 401) return false;
+    if (!response.ok) throw new Error(`无法验证 Token：HTTP ${response.status}，请稍后重试`);
+    let data;
+    try { data = JSON.parse(await response.text()); }
+    catch (_) { throw new Error('无法验证 Token：后台未返回有效数据，请检查 API 地址'); }
+    if (Number(data.code) === 401 || /token.*(?:过期|失效|无效)|(?:过期|失效|无效).*token|未登录|登录.*(?:过期|失效)|unauthorized|token.*expired/i.test(extractErrorMessage(data))) return false;
+    assertResponseSuccess(data, '无法验证 Token，请稍后重试');
+    if (data.code == null && data.success == null) throw new Error('无法验证 Token：后台未返回验证结果');
+    return true;
+  }
+
+  async function applyHistory({ id, projectId = commonNs.currentProject.getCachedProjectId() } = {}) {
+    const record = await commonNs.adminLoginHistory.getRecord(id, projectId);
+    const context = getLoginContext({ projectId, baseUrl: record.baseUrl });
+    if (!(await isHistoryTokenValid(record, context))) {
+      return doLogin({ account: record.account, password: record.password, projectId, baseUrl: record.baseUrl });
+    }
+    const { tokenState, session } = await commonNs.adminLoginHistory.activate(record, projectId);
+    return { token: tokenState.token, session, reused: true };
+  }
+
+  ns.api = { doLogin, verifyLogin, applyHistory, isHistoryTokenValid, encryptPassword, getCaptcha, login, valid, extractToken, saveToken };
 })();
 
 
@@ -2416,12 +2593,18 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function fetchAdminJson(path, body, { referer } = {}) {
+    const sessionId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
+    const baseUrl = commonNs.currentProject.getBaseUrl();
     const token = await getToken();
     if (!token) throw new Error('未获取 admin token，请先登录');
 
-    const baseUrl = commonNs.currentProject.getBaseUrl();
     const finalReferer = referer || `${baseUrl}/tenant`;
-    const cookieHeader = await ns.cookies.getWafCookies();
+    const cookieHeader = ns.cookies.getWafCookiesForUrl
+      ? await ns.cookies.getWafCookiesForUrl(baseUrl)
+      : await ns.cookies.getWafCookies();
+    if (sessionId !== ((await commonNs.adminLoginHistory?.getSession())?.id || '')) {
+      throw new Error('后台账号已切换，请重新查询');
+    }
     if (!cookieHeader) {
       console.warn(`[内部开发工具箱] 未读取到 WAF Cookie，请先在浏览器中打开 ${baseUrl} 完成一次登录`);
     }
@@ -2757,6 +2940,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!tenantId) throw new Error('缺少 tenantId');
     if (!ns.tenantApi) throw new Error('tenantApi 模块未加载');
 
+    const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
     const res = await ns.tenantApi.quickLogin({ tenantId, id, industry });
     const url = extractVirtualLoginUrl(res);
     if (!url || typeof url !== 'string') {
@@ -2766,7 +2950,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const normalizedEnv = normalizeEnv(env);
     const normalizedPort = normalizePort(normalizedEnv, localPort);
     const projectId = await commonNs.currentProject.getCurrentProjectId();
-    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId });
+    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId, ...(adminContextId ? { adminContextId } : {}) });
     return { ok: true, url, tenantId, id };
   }
 
@@ -2820,6 +3004,8 @@ if (typeof module !== 'undefined' && module.exports) {
     const initial = normalizeRecentRecord(item);
     const previous = records.find((record) => sameRecentIdentity(record, initial));
     const normalizedItem = normalizeRecentRecord(item, previous?.localPort);
+    const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
+    if ((item.adminContextId || '') !== adminContextId) throw new Error('后台账号已切换，请重新查询');
     const next = [
       { ...normalizedItem, at: Date.now() },
       ...records.filter((record) => !sameRecentIdentity(record, normalizedItem)),
@@ -2834,10 +3020,11 @@ if (typeof module !== 'undefined' && module.exports) {
 
   async function getRecent() {
     const key = await getStorageKey();
+    const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (items) => {
         const records = Array.isArray(items[key]) ? items[key] : [];
-        const cleaned = compactRecentRecords(records);
+        const cleaned = compactRecentRecords(records.filter((item) => (item.adminContextId || '') === adminContextId));
         // 读取时清理旧凭据，并把旧版按环境/端口拆分的同一身份合并成一条。
         if (JSON.stringify(cleaned) !== JSON.stringify(records)) {
           chrome.storage.local.set({ [key]: cleaned }, () => resolve(cleaned));
@@ -4827,7 +5014,7 @@ if (typeof module !== 'undefined' && module.exports) {
     }
   })();
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  function handleMessage(msg, _sender, sendResponse) {
     if (!msg || !msg.type) return false;
 
     if (msg.type === 'PING') {
@@ -4855,6 +5042,13 @@ if (typeof module !== 'undefined' && module.exports) {
     if (msg.type === 'VERIFY_LOGIN_API' && ns.api) {
       ns.api
         .verifyLogin(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APPLY_ADMIN_LOGIN_HISTORY' && ns.api) {
+      ns.api.applyHistory(msg.payload)
         .then((result) => sendResponse({ ok: true, ...result }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
@@ -5327,5 +5521,17 @@ if (typeof module !== 'undefined' && module.exports) {
     }
 
     return false;
+  }
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (typeof msg?.adminSessionId !== 'string') return handleMessage(msg, sender, sendResponse);
+    commonNs.adminLoginHistory.getSession().then((session) => {
+      if ((session?.id || '') !== msg.adminSessionId) {
+        sendResponse({ ok: false, error: '后台账号已切换，请重新查询' });
+        return;
+      }
+      if (!handleMessage(msg, sender, sendResponse)) sendResponse({ ok: false, error: '不支持的查询请求' });
+    }).catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
   });
 })();

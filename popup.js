@@ -465,6 +465,117 @@ if (typeof module !== 'undefined' && module.exports) {
 })();
 
 
+/* ===== src/common/admin-login-history.js ===== */
+/* 后台登录历史：账号与 API 地址共同标识一条记录。 */
+(() => {
+  'use strict';
+
+  const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
+  const KEY_PREFIX = 'adminLoginHistory';
+  const SESSION_KEY_PREFIX = 'adminSession';
+  let writeQueue = Promise.resolve();
+
+  function normalizeBaseUrl(value) {
+    const url = new URL(String(value || '').trim());
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new Error('API 地址须为 HTTP 或 HTTPS 地址，不能包含账号、查询参数或片段');
+    }
+    return url.href.replace(/\/+$/, '');
+  }
+
+  function identity(account, baseUrl) {
+    return JSON.stringify([String(account || '').trim(), normalizeBaseUrl(baseUrl)]);
+  }
+
+  // 只读取 JWT 的过期时间；没有明确有效期的 Token 由后台接口验证。
+  function tokenExpiresAt(token) {
+    try {
+      const parts = String(token || '').replace(/^Bearer\s+/i, '').trim().split('.');
+      if (parts.length !== 3) return null;
+      const encoded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const payload = JSON.parse(atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=')));
+      return typeof payload.exp === 'number' && Number.isFinite(payload.exp) ? payload.exp * 1000 : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function read(key) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get(key, (items) => {
+        if (chrome.runtime?.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(items?.[key]);
+      });
+    });
+  }
+
+  function write(values) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set(values, () => {
+        if (chrome.runtime?.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+  }
+
+  async function getRecords(projectId = ns.currentProject.getCachedProjectId()) {
+    const records = await read(`${KEY_PREFIX}:${projectId}`);
+    return Array.isArray(records) ? records : [];
+  }
+
+  async function getRecord(id, projectId) {
+    const record = (await getRecords(projectId)).find((item) => item.id === id);
+    if (!record) throw new Error('登录历史记录不存在，请重新打开历史记录');
+    return record;
+  }
+
+  async function getSession(projectId = ns.currentProject.getCachedProjectId()) {
+    return await read(`${SESSION_KEY_PREFIX}:${projectId}`) || null;
+  }
+
+  function activate(record, projectId = ns.currentProject.getCachedProjectId()) {
+    const run = async () => {
+      const account = String(record.account || '').trim();
+      const password = String(record.password || '');
+      const token = String(record.token || '').replace(/^Bearer\s+/i, '').trim();
+      const baseUrl = normalizeBaseUrl(record.baseUrl);
+      if (!account || !password || !token) throw new Error('登录记录缺少账号、密码或 Token，请重新登录');
+      const now = Date.now();
+      const tokenState = {
+        token,
+        updatedAt: record.updatedAt || now,
+        origin: new URL(baseUrl).origin,
+        siteToken: record.siteToken || `Bearer ${token}`,
+        userInfo: record.userInfo || null,
+      };
+      const saved = {
+        ...tokenState, id: identity(account, baseUrl), account, password, baseUrl, lastUsedAt: now,
+      };
+      const records = await getRecords(projectId);
+      const session = { id: crypto.randomUUID(), account, baseUrl };
+      // 一次写入完整账号信息，避免新域名与旧 Token 混用。
+      await write({
+        [`${KEY_PREFIX}:${projectId}`]: [saved, ...records.filter((item) => item.id !== saved.id)],
+        [`${SESSION_KEY_PREFIX}:${projectId}`]: session,
+        [`adminCredentials:${projectId}`]: { account, password },
+        [`adminToken:${projectId}`]: tokenState,
+        [`customBaseUrl:${projectId}`]: { baseUrl, updatedAt: now },
+        [`quickLoginQueryState:${projectId}`]: null,
+        [`quickLoginRecent:${projectId}`]: [],
+      });
+      if (projectId === ns.currentProject.getCachedProjectId()) ns.customDomain?.setCachedOverride(baseUrl);
+      return { tokenState, session };
+    };
+    const result = writeQueue.then(run);
+    writeQueue = result.catch(() => {});
+    return result;
+  }
+
+  ns.adminLoginHistory = { KEY_PREFIX, SESSION_KEY_PREFIX, normalizeBaseUrl, identity, tokenExpiresAt, getRecords, getRecord, getSession, activate };
+  if (typeof module !== 'undefined' && module.exports) module.exports = ns.adminLoginHistory;
+})();
+
+
 /* ===== src/common/tenant.js ===== */
 /* 内部开发工具箱 — 租户/用户/部门接口数据模型与参数封装 */
 /* 仅包含纯函数，不发起实际网络请求。 */
@@ -526,13 +637,39 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
-  function normalizeDept(value = {}) {
+  function normalizeDept(value = {}, inheritedSource = DEFAULT_DEPT_SOURCE) {
     return {
       deptId: String(value.deptId ?? value.id ?? ''),
       deptName: String(value.deptName ?? value.name ?? ''),
-      deptSource: value.deptSource ?? DEFAULT_DEPT_SOURCE,
+      deptSource: value.deptSource ?? inheritedSource,
       children: Array.isArray(value.children) ? value.children : [],
     };
+  }
+
+  function flattenDeptOptions(response) {
+    const result = [];
+    const seen = new Set();
+    function visit(nodes, parents = [], source = DEFAULT_DEPT_SOURCE) {
+      for (const raw of nodes) {
+        if (!raw || typeof raw !== 'object' || Number(raw.isDeleted) === 1) continue;
+        const dept = normalizeDept(raw, source);
+        if (!dept.deptId || seen.has(dept.deptId)) continue;
+        seen.add(dept.deptId);
+        const names = [...parents, dept.deptName || '未命名组织'];
+        const count = raw.deptUserNum == null ? null : Number(raw.deptUserNum);
+        result.push({
+          deptId: dept.deptId,
+          deptName: names.at(-1),
+          deptSource: dept.deptSource,
+          depth: parents.length,
+          path: names.join(' / '),
+          userCount: Number.isFinite(count) && count >= 0 ? count : null,
+        });
+        visit(dept.children, names, dept.deptSource);
+      }
+    }
+    visit(extractListData(response));
+    return result;
   }
 
   function buildTenantPageBody({ current = 1, size = 10, keyword = '' }) {
@@ -544,13 +681,14 @@ if (typeof module !== 'undefined' && module.exports) {
     };
   }
 
-  function buildUserPageBody({ tenantId, deptId = '', current = 1, size = 10, keyword = '' }) {
+  function buildUserPageBody({ tenantId, deptId = '', deptSource = DEFAULT_DEPT_SOURCE, current = 1, size = 10, keyword = '' }) {
     if (!tenantId) throw new Error('tenantId 不能为空');
     return {
       current: Number(current) || 1,
       size: Number(size) || 10,
       deptId: String(deptId || ''),
       tenantId: String(tenantId),
+      deptSource,
       searchKey: String(keyword || ''),
       searchType: 'username,phone',
     };
@@ -1107,6 +1245,7 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeUser,
     normalizeAccount,
     normalizeDept,
+    flattenDeptOptions,
     buildTenantPageBody,
     buildUserPageBody,
     buildAccountPageBody,
@@ -1201,7 +1340,7 @@ if (typeof module !== 'undefined' && module.exports) {
   async function load() {
     if (!hasChromeStorage()) return null;
     const key = await getStorageKey();
-    return new Promise((resolve) => {
+    const snapshot = await new Promise((resolve) => {
       chrome.storage.local.get(key, (items) => {
         if (chrome.runtime?.lastError) {
           resolve(null);
@@ -1215,6 +1354,11 @@ if (typeof module !== 'undefined' && module.exports) {
         resolve(stored.state);
       });
     });
+    if (namespace.adminLoginHistory) {
+      const session = await namespace.adminLoginHistory.getSession();
+      if ((snapshot?.adminSessionId || '') !== (session?.id || '')) return null;
+    }
+    return snapshot;
   }
 
   function saveToKey(key, state) {
@@ -1233,6 +1377,10 @@ if (typeof module !== 'undefined' && module.exports) {
   async function save(snapshot) {
     const state = sanitizeValue(snapshot);
     if (!hasChromeStorage()) return state;
+    if (namespace.adminLoginHistory) {
+      const session = await namespace.adminLoginHistory.getSession();
+      if ((snapshot?.adminSessionId || '') !== (session?.id || '')) return null;
+    }
     const cachedKey = getCachedStorageKey();
     if (cachedKey) return saveToKey(cachedKey, state);
     return saveToKey(await getStorageKey(), state);
@@ -1595,7 +1743,7 @@ if (typeof module !== 'undefined' && module.exports) {
       shortLabel: '后台',
       panelId: 'panel-admin',
       path: '后台登录',
-      utilities: { token: 'admin-token', domain: 'admin-domain' },
+      utilities: { history: 'admin-history', token: 'admin-token' },
       usesProjectContext: true,
     },
     quickLogin: {
@@ -1628,8 +1776,8 @@ if (typeof module !== 'undefined' && module.exports) {
   });
 
   const UTILITY_META = Object.freeze({
-    'admin-token': { title: '后台 Token', sourceId: 'adminTokenSection' },
-    'admin-domain': { title: 'API 域名', sourceId: 'adminDomainSection' },
+    'admin-history': { title: '后台登录历史', sourceId: 'adminHistorySection' },
+    'admin-token': { title: '后台 Token 与 API 域名', sourceIds: ['adminTokenSection', 'adminDomainSection'] },
     'quick-history': { title: '最近使用', sourceId: 'quickHistorySection' },
     'other-history': { title: '高校登录历史', sourceId: 'otherHistorySection' },
     'other-token': { title: '高校 Token', sourceId: 'otherTokenSection' },
@@ -1768,14 +1916,14 @@ if (typeof module !== 'undefined' && module.exports) {
     const host = $('utilityHost');
     if (!host) return;
     Object.entries(UTILITY_META).forEach(([id, meta]) => {
-      const source = $(meta.sourceId);
-      if (!source) return;
+      const sources = (meta.sourceIds || [meta.sourceId]).map($).filter(Boolean);
+      if (!sources.length) return;
       const screen = document.createElement('section');
-      screen.className = 'utility-screen';
+      screen.className = sources.length > 1 ? 'utility-screen utility-screen-grouped' : 'utility-screen';
       screen.id = `utility-${id}`;
       screen.dataset.utilityId = id;
       screen.hidden = true;
-      screen.appendChild(source);
+      sources.forEach((source) => screen.appendChild(source));
       host.appendChild(screen);
     });
   }
@@ -1786,6 +1934,10 @@ if (typeof module !== 'undefined' && module.exports) {
     const available = Boolean(utilityId && $(`utility-${utilityId}`));
     button.hidden = !available;
     button.dataset.utilityId = available ? utilityId : '';
+    if (available) {
+      button.title = UTILITY_META[utilityId].title;
+      button.setAttribute('aria-label', UTILITY_META[utilityId].title);
+    }
   }
 
   function currentWorkspaceStatus() {
@@ -1810,7 +1962,6 @@ if (typeof module !== 'undefined' && module.exports) {
     $('workspaceStatus').textContent = currentWorkspaceStatus();
     setHeaderAction('workspaceHistoryBtn', activeWorkspace.utilities.history);
     setHeaderAction('workspaceTokenBtn', activeWorkspace.utilities.token);
-    setHeaderAction('workspaceDomainBtn', activeWorkspace.utilities.domain);
   }
 
   function syncDock() {
@@ -1894,7 +2045,7 @@ if (typeof module !== 'undefined' && module.exports) {
     $('workspaceProject').textContent = activeWorkspace.projectName;
     $('workspacePath').textContent = '工具屏';
     $('workspaceStatus').textContent = '';
-    ['workspaceHistoryBtn', 'workspaceTokenBtn', 'workspaceDomainBtn'].forEach((id) => { $(id).hidden = true; });
+    ['workspaceHistoryBtn', 'workspaceTokenBtn'].forEach((id) => { $(id).hidden = true; });
     if ($('workspaceMain')) $('workspaceMain').scrollTop = 0;
     requestAnimationFrame(() => screen.querySelector('button, input, [contenteditable="true"]')?.focus({ preventScroll: true }));
     return true;
@@ -1994,9 +2145,10 @@ if (typeof module !== 'undefined' && module.exports) {
     if (typeof handler === 'function') beforeLeave.set(utilityId, handler);
   }
 
-  function setPath(path) {
-    if (!activeWorkspace || activeUtility) return;
-    activeWorkspace.path = String(path || '');
+  function setPath(path, feature) {
+    if (!activeWorkspace) return;
+    const targets = feature ? definitions.filter((item) => item.feature === feature) : [activeWorkspace];
+    targets.forEach((workspace) => { workspace.path = String(path || ''); });
     syncHeader();
   }
 
@@ -2077,6 +2229,7 @@ if (typeof module !== 'undefined' && module.exports) {
     'teacherIdentitySummaryTitle', 'teacherIdentitySummaryMeta', 'changeTeacherIdentityBtn',
     'teacherIdentityStepBody',
     'tenantSearch', 'tenantList', 'tenantEmpty', 'deptSelect',
+    'teacherDeptField', 'teacherDeptStatus', 'teacherDeptRetryBtn',
     'userSearch', 'userList', 'userEmpty', 'userPager',
     'teacherRefreshBtn', 'teacherNameSearch', 'teacherAccountSearch',
     'teacherList', 'teacherEmpty', 'teacherPager', 'studentSection',
@@ -2100,6 +2253,8 @@ if (typeof module !== 'undefined' && module.exports) {
   let persistenceReady = false;
   let persistenceTimer = 0;
   let lastPersistedSignature = '';
+  let adminSessionId = '';
+  let sessionEpoch = 0;
   const renderSignatures = new Map();
 
   const icons = {
@@ -2127,6 +2282,12 @@ if (typeof module !== 'undefined' && module.exports) {
       tenantRecords: [],
       tenantRequestId: 0,
       loadingTenants: false,
+      deptId: '',
+      deptOptions: [],
+      deptRequestId: 0,
+      loadingDepts: false,
+      deptLoaded: false,
+      deptError: '',
       userKeyword: '',
       userRequestId: 0,
       loadingUsers: false,
@@ -2184,6 +2345,8 @@ if (typeof module !== 'undefined' && module.exports) {
     },
   };
 
+  const initialState = JSON.stringify(state);
+
   function $(id) {
     return document.getElementById(id);
   }
@@ -2198,7 +2361,8 @@ if (typeof module !== 'undefined' && module.exports) {
     let timer = 0;
     return (...args) => {
       clearTimeout(timer);
-      timer = setTimeout(() => fn(...args), ms);
+      const epoch = sessionEpoch;
+      timer = setTimeout(() => { if (epoch === sessionEpoch) fn(...args); }, ms);
     };
   }
 
@@ -2329,12 +2493,15 @@ if (typeof module !== 'undefined' && module.exports) {
     const t = source.teacher;
     const s = source.student;
     return {
+      adminSessionId,
       mode: source.mode === 'student' ? 'student' : 'teacher',
       teacher: {
         activeStep: boundedStep(t.activeStep, 3),
         selectedTenant: t.selectedTenant,
         tenantKeyword: t.tenantKeyword,
         tenantRecords: Array.isArray(t.tenantRecords) ? t.tenantRecords : [],
+        deptId: t.deptId,
+        deptOptions: Array.isArray(t.deptOptions) ? t.deptOptions : [],
         userKeyword: t.userKeyword,
         userPage: pageSnapshot(t.userPage),
         selectedUser: withoutRuntimeToken(t.selectedUser),
@@ -2375,6 +2542,9 @@ if (typeof module !== 'undefined' && module.exports) {
       state.teacher.selectedTenant = t.selectedTenant && typeof t.selectedTenant === 'object' ? t.selectedTenant : null;
       state.teacher.tenantKeyword = typeof t.tenantKeyword === 'string' ? t.tenantKeyword : '';
       state.teacher.tenantRecords = Array.isArray(t.tenantRecords) ? t.tenantRecords : [];
+      state.teacher.deptOptions = Array.isArray(t.deptOptions) ? t.deptOptions : [];
+      state.teacher.deptId = state.teacher.deptOptions.some((dept) => dept.deptId === t.deptId) ? t.deptId : '';
+      state.teacher.deptLoaded = false;
       state.teacher.userKeyword = typeof t.userKeyword === 'string' ? t.userKeyword : '';
       state.teacher.userPage = pageSnapshot(t.userPage);
       state.teacher.selectedUser = withoutRuntimeToken(t.selectedUser);
@@ -2440,12 +2610,14 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function loadPersistedState() {
+    const epoch = sessionEpoch;
     if (!ns.quickLoginStateStorage) {
       persistenceReady = true;
       return false;
     }
     try {
-      const restored = restorePersistedState(await ns.quickLoginStateStorage.load());
+      const snapshot = await ns.quickLoginStateStorage.load();
+      const restored = epoch === sessionEpoch && restorePersistedState(snapshot);
       persistenceReady = true;
       return restored;
     } catch (error) {
@@ -2483,6 +2655,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   async function rehydratePersistedSessions() {
     if (!state.adminTokenAvailable) return;
+    const epoch = sessionEpoch;
     const tasks = [];
     const t = state.teacher;
     if (t.selectedUser && !t.selectedUser.aiToken && t.selectedUser.id && t.selectedUser.tenantId) {
@@ -2492,6 +2665,7 @@ if (typeof module !== 'undefined' && module.exports) {
         id: t.selectedUser.id,
         industry: t.selectedUser.industry,
       }).then((result) => {
+        if (epoch !== sessionEpoch) return;
         t.selectedUser = Object.assign({}, t.selectedUser, {
           origin: result.origin,
           aiToken: result.aiToken,
@@ -2500,8 +2674,9 @@ if (typeof module !== 'undefined' && module.exports) {
         });
         t.sessionError = '';
       }).catch((error) => {
+        if (epoch !== sessionEpoch) return;
         t.sessionError = '查询结果已恢复，会话重建失败：' + error.message;
-      }).finally(() => { t.loadingSession = false; }));
+      }).finally(() => { if (epoch === sessionEpoch) t.loadingSession = false; }));
     }
     const s = state.student;
     if (s.selectedAccount?.session && !s.selectedAccount.session.aiToken && s.selectedAccount.loginId && s.selectedAccount.tenantId) {
@@ -2511,6 +2686,7 @@ if (typeof module !== 'undefined' && module.exports) {
         id: s.selectedAccount.loginId,
         industry: s.selectedAccount.industry,
       }).then((result) => {
+        if (epoch !== sessionEpoch) return;
         s.selectedAccount = Object.assign({}, s.selectedAccount, {
           session: Object.assign({}, s.selectedAccount.session, {
             origin: result.origin,
@@ -2518,8 +2694,9 @@ if (typeof module !== 'undefined' && module.exports) {
           }),
         });
       }).catch((error) => {
+        if (epoch !== sessionEpoch) return;
         s.relationError = '查询结果已恢复，会话重建失败：' + error.message;
-      }).finally(() => { s.loadingSession = false; }));
+      }).finally(() => { if (epoch === sessionEpoch) s.loadingSession = false; }));
     }
     await Promise.all(tasks);
     persistStateSoon();
@@ -2708,7 +2885,7 @@ if (typeof module !== 'undefined' && module.exports) {
     });
     existing.slice(steps.length).forEach((button) => button.remove());
     compact.textContent = `步骤 ${activeStep + 1}/${steps.length} · ${steps[activeStep].label}`;
-    ns.workspaceUi?.setPath(teacherMode ? '教师 -> 学生' : '学生 -> 教师');
+    ns.workspaceUi?.setPath(teacherMode ? '教师 -> 学生' : '学生 -> 教师', 'quickLogin');
   }
 
   function onProgressClick(event) {
@@ -2729,14 +2906,18 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function hasAdminToken() {
+    const epoch = sessionEpoch;
     const tokenState = await ns.token.getToken();
+    if (epoch !== sessionEpoch) return false;
     state.adminTokenAvailable = Boolean(tokenState && tokenState.token);
     renderAuthAvailability();
     return state.adminTokenAvailable;
   }
 
   async function request(type, payload) {
-    const response = await messages.sendToBackground({ type, payload });
+    const epoch = sessionEpoch;
+    const response = await messages.sendToBackground({ type, payload, adminSessionId });
+    if (epoch !== sessionEpoch) throw new Error('后台账号已切换，已忽略原账号的查询结果');
     if (!response || !response.ok) throw new Error(response?.error || '请求失败');
     return response.res ?? response;
   }
@@ -2966,6 +3147,7 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function performStudentAppLogin(student, button, row) {
+    const epoch = sessionEpoch;
     if (state.loadingLogin || !button) return;
     let payload;
     try {
@@ -3001,10 +3183,12 @@ if (typeof module !== 'undefined' && module.exports) {
       const response = await messages.sendToBackground({ type: 'APP_LOGIN', payload });
       if (!response?.ok) throw new Error(response?.error || '登录失败');
     } catch (error) {
+      if (epoch !== sessionEpoch) return;
       const message = formatAppLoginError(error);
       setActionStatus(message, 'error');
       setStatus(message, 'err');
     } finally {
+      if (epoch !== sessionEpoch) return;
       state.loadingLogin = false;
       row?.removeAttribute('aria-busy');
       button.disabled = false;
@@ -3093,6 +3277,7 @@ if (typeof module !== 'undefined' && module.exports) {
     t.activeStep = 1;
     t.userKeyword = '';
     t.userPage = resetPage();
+    resetTeacherDepartments();
     clearTeacherSession();
     $('tenantSearch').value = item.tenantName || '';
     $('tenantList').classList.add('hidden');
@@ -3101,6 +3286,84 @@ if (typeof module !== 'undefined' && module.exports) {
     $('teacherAccountSearch').value = '';
     renderTeacherShell();
     focusControl('userSearch');
+    await Promise.all([loadTeacherDepartments(), loadTeacherUsers(true)]);
+  }
+
+  function resetTeacherDepartments() {
+    const t = state.teacher;
+    t.deptId = '';
+    t.deptOptions = [];
+    t.deptRequestId += 1;
+    t.loadingDepts = false;
+    t.deptLoaded = false;
+    t.deptError = '';
+  }
+
+  function renderTeacherDepartments() {
+    const t = state.teacher;
+    const select = $('deptSelect');
+    if (!select) return;
+    toggleRegion('teacherDeptField', Boolean(t.selectedTenant));
+    const options = '<option value="">全部账号（不指定部门）</option>' + t.deptOptions.map((dept) => {
+      const label = '　'.repeat(Math.min(dept.depth, 8)) + dept.deptName +
+        (dept.userCount == null ? '' : `（${dept.userCount} 人）`) + ` · 编号 ${dept.deptId}`;
+      return `<option value="${escapeHtml(dept.deptId)}">${escapeHtml(label)}</option>`;
+    }).join('');
+    setHtmlIfChanged(select, t.deptOptions, options);
+    select.value = t.deptId;
+    select.title = t.deptOptions.find((dept) => dept.deptId === t.deptId)?.path || '全部账号（不指定部门）';
+    select.disabled = !t.selectedTenant || t.loadingDepts || !t.deptOptions.length || state.loadingLogin || state.adminTokenAvailable === false;
+    setInlineStatus('teacherDeptStatus', t.loadingDepts ? '正在读取组织架构…' :
+      (t.deptError || (t.deptLoaded && !t.deptOptions.length ? '暂无组织架构，可查询全部账号' : '')), t.deptError ? 'error' : '');
+    toggleRegion('teacherDeptRetryBtn', Boolean(t.deptError) && !t.loadingDepts);
+  }
+
+  async function loadTeacherDepartments() {
+    const t = state.teacher;
+    if (!t.selectedTenant) return;
+    const selectedTenant = t.selectedTenant;
+    const requestId = ++t.deptRequestId;
+    t.loadingDepts = true;
+    t.deptError = '';
+    renderTeacherDepartments();
+    try {
+      if (!(await hasAdminToken())) throw new Error('请先在「后台账号」获取后台 Token');
+      if (requestId !== t.deptRequestId) return;
+      const response = await request('FETCH_DEPTS', {
+        tenantId: selectedTenant.tenantId, industry: selectedTenant.industry,
+      });
+      if (requestId !== t.deptRequestId) return;
+      t.deptOptions = tenant.flattenDeptOptions(response);
+      t.deptLoaded = true;
+      if (t.deptId && !t.deptOptions.some((dept) => dept.deptId === t.deptId)) {
+        await selectTeacherDepartment('');
+      }
+    } catch (error) {
+      if (requestId === t.deptRequestId) t.deptError = `组织架构读取失败：${error.message}`;
+    } finally {
+      if (requestId === t.deptRequestId) {
+        t.loadingDepts = false;
+        renderTeacherDepartments();
+        persistStateSoon();
+      }
+    }
+  }
+
+  async function selectTeacherDepartment(deptId) {
+    const t = state.teacher;
+    if (!t.selectedTenant || deptId === t.deptId || (deptId && !t.deptOptions.some((dept) => dept.deptId === deptId))) return;
+    t.deptId = deptId;
+    t.activeStep = 1;
+    t.userPage = resetPage();
+    t.userKeyword = '';
+    t.teacherNameKeyword = '';
+    t.teacherAccountKeyword = '';
+    t.studentNameKeyword = '';
+    t.studentCodeKeyword = '';
+    clearTeacherSession();
+    restoreFormValues();
+    renderTeacherShell();
+    renderTeacherStudents();
     await loadTeacherUsers(true);
   }
 
@@ -3113,16 +3376,21 @@ if (typeof module !== 'undefined' && module.exports) {
       clearList('userList', 'userEmpty', '正在加载租户用户...');
     }
     const requestId = ++t.userRequestId;
+    const selectedTenant = t.selectedTenant;
+    const deptId = t.deptId;
+    const deptSource = t.deptOptions.find((dept) => dept.deptId === deptId)?.deptSource || tenant.DEFAULT_DEPT_SOURCE;
     t.loadingUsers = true;
     t.userError = '';
     setInlineStatus('teacherSessionStatus', '正在加载租户用户...');
     setStageState('teacherUserStep', 'teacherUserState', { visible: true, status: '加载中' });
     try {
       if (!(await hasAdminToken())) throw new Error('请先在「后台账号」获取后台 Token');
+      if (requestId !== t.userRequestId) return;
       const response = await request('FETCH_USERS', {
-        tenantId: t.selectedTenant.tenantId,
-        deptId: '',
-        industry: t.selectedTenant.industry,
+        tenantId: selectedTenant.tenantId,
+        deptId,
+        deptSource,
+        industry: selectedTenant.industry,
         current: t.userPage.current,
         size: t.userPage.size,
         keyword: t.userKeyword,
@@ -3160,6 +3428,7 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!list || !empty) return;
     if (!deps && !shouldRender('teacher-users', {
       tenantId: t.selectedTenant?.tenantId,
+      deptId: t.deptId,
       selectedId: t.selectedUser?.id,
       selectedEnv: t.selectedUser?.env,
       selectedPort: t.selectedUser?.localPort,
@@ -3727,6 +3996,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function renderTeacherShell() {
     const t = state.teacher;
+    renderTeacherDepartments();
     const tenantReady = Boolean(t.selectedTenant);
     const userReady = Boolean(t.selectedUser);
     const teacherReady = Boolean(t.selectedTeacher);
@@ -4654,6 +4924,7 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function performLoginAction(meta, action, button, row) {
+    const epoch = sessionEpoch;
     if (!meta.id || !meta.tenantId || state.loadingLogin) return;
     const allActions = [...document.querySelectorAll('#quickLoginBody .action-btn, #quickLoginBody .recent-action-btn')];
     const disabledStates = new Map(allActions.map((item) => [item, item.disabled]));
@@ -4683,6 +4954,7 @@ if (typeof module !== 'undefined' && module.exports) {
         const query = extractTokenQuery(url);
         if (!query) throw new Error('URL 中未找到 token query');
         const copied = await copyToClipboard(query);
+        if (epoch !== sessionEpoch) return;
         if (!copied) throw new Error('复制失败，请检查浏览器剪贴板权限');
         setActionStatus('已复制 Token query', 'success');
         setStatus('已复制 ?token=…', 'ok');
@@ -4706,9 +4978,11 @@ if (typeof module !== 'undefined' && module.exports) {
       setStatus(successText, 'ok');
       refreshRecentAfter = true;
     } catch (error) {
+      if (epoch !== sessionEpoch) return;
       setActionStatus(error.message, 'error');
       setStatus(error.message, 'err');
     } finally {
+      if (epoch !== sessionEpoch) return;
       state.loadingLogin = false;
       disabledStates.forEach((wasDisabled, item) => { item.disabled = wasDisabled; });
       if (row) row.removeAttribute('aria-busy');
@@ -4865,6 +5139,7 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function renderRecent() {
+    const epoch = sessionEpoch;
     const list = $('recentList');
     const count = $('quickRecentCount');
     if (!list) return;
@@ -4875,6 +5150,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const response = await request('GET_QUICK_LOGIN_RECENT');
       records = Array.isArray(response.records) ? response.records : (Array.isArray(response) ? response : []);
     } catch (error) {
+      if (epoch !== sessionEpoch) return;
       list.innerHTML = '<div class="recent-empty">' + escapeHtml(error.message || '最近登录读取失败') + '</div>';
       if (count) count.textContent = '读取失败';
       list.removeAttribute('aria-busy');
@@ -4968,6 +5244,7 @@ if (typeof module !== 'undefined' && module.exports) {
   }
 
   async function applyRecentToTeacherLookup(meta, button, row) {
+    const epoch = sessionEpoch;
     let selection;
     try {
       selection = buildRecentTeacherSelection(meta);
@@ -4998,6 +5275,7 @@ if (typeof module !== 'undefined' && module.exports) {
     try {
       const t = state.teacher;
       clearTeacherSession();
+      resetTeacherDepartments();
       t.selectedTenant = selection.selectedTenant;
       t.tenantKeyword = selection.selectedTenant.tenantName;
       t.tenantRecords = [
@@ -5022,9 +5300,12 @@ if (typeof module !== 'undefined' && module.exports) {
       renderTeacherShell();
       $('teacherModePanel')?.scrollIntoView({ block: 'start' });
 
+      await loadTeacherDepartments();
+      if (epoch !== sessionEpoch) return;
       const selected = await selectTeacherUser(selection.selectedUser, {
         dataset: { env: selection.env, localPort: selection.localPort },
       });
+      if (epoch !== sessionEpoch) return;
       if (!selected) throw new Error(t.sessionError || '最近登录账号应用失败');
       if (!t.selectedTeacher) {
         throw new Error(t.teacherError || '未找到与该账号对应的 AI 教师');
@@ -5033,9 +5314,11 @@ if (typeof module !== 'undefined' && module.exports) {
       setActionStatus('已应用最近登录信息', 'success');
       setStatus('已应用并查询相关学生', 'ok');
     } catch (error) {
+      if (epoch !== sessionEpoch) return;
       setActionStatus(error.message, 'error');
       setStatus(error.message, 'err');
     } finally {
+      if (epoch !== sessionEpoch) return;
       state.loadingLogin = false;
       disabledStates.forEach((wasDisabled, item) => { item.disabled = wasDisabled; });
       row?.removeAttribute('aria-busy');
@@ -5132,6 +5415,7 @@ if (typeof module !== 'undefined' && module.exports) {
       if (t.selectedTenant) {
         t.selectedTenant = null;
         t.userPage = resetPage();
+        resetTeacherDepartments();
         clearTeacherSession();
       }
       t.tenantKeyword = keyword;
@@ -5143,6 +5427,8 @@ if (typeof module !== 'undefined' && module.exports) {
       if (state.mode !== 'teacher') return;
       scheduleTenantSearch(tenantSearch.value.trim());
     });
+    $('deptSelect')?.addEventListener('change', (event) => selectTeacherDepartment(event.target.value));
+    $('teacherDeptRetryBtn')?.addEventListener('click', () => loadTeacherDepartments());
 
     const userSearch = $('userSearch');
     const scheduleUserSearch = createDebouncedSearch((keyword) => {
@@ -5303,23 +5589,69 @@ if (typeof module !== 'undefined' && module.exports) {
       state.recentExpanded = false;
       renderRecent();
     });
-    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
-      chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName !== 'local' || !Object.keys(changes).some((key) => key.startsWith('adminToken:'))) return;
-        hasAdminToken().then(async () => {
-          await rehydratePersistedSessions();
-          renderTeacherShell();
-          renderStudentShell();
-          renderRecent();
-        }).catch(() => {});
-      });
-    }
     window.addEventListener('pagehide', () => { flushPersistedState(); });
+  }
+
+  function resetForAdminSession(session, tokenAvailable = null) {
+    sessionEpoch += 1;
+    adminSessionId = session?.id || '';
+    activationPromise = null;
+    clearTimeout(persistenceTimer);
+    persistenceTimer = 0;
+    lastPersistedSignature = '';
+    renderSignatures.clear();
+    const fresh = JSON.parse(initialState);
+    // 请求计数只递增，令已经在途的所有查询回调失效。
+    for (const key of ['teacher', 'student']) {
+      for (const field of Object.keys(state[key])) {
+        if (field.endsWith('RequestId')) fresh[key][field] = state[key][field] + 1;
+      }
+      Object.assign(state[key], fresh[key]);
+    }
+    Object.assign(state, { ...fresh, teacher: state.teacher, student: state.student, adminTokenAvailable: tokenAvailable });
+    if (!initialized) return;
+    document.querySelectorAll('#panel-quick [data-render-signature], #quickHistorySection [data-render-signature]')
+      .forEach((element) => { delete element.dataset.renderSignature; });
+    restoreFormValues();
+    updateModeUI();
+    renderAuthAvailability();
+    clearList('tenantList', 'tenantEmpty', '请输入租户条件');
+    renderTeacherShell();
+    renderTeacherStudents();
+    renderStudentShell();
+    setActionStatus('');
+    setInlineStatus('teacherSessionStatus', '');
+    setInlineStatus('accountSessionStatus', '');
+    $('quickHistoryRoleFilter').value = '';
+    $('quickHistoryEnvFilter').value = '';
+    $('recentList').innerHTML = '<div class="recent-empty">暂无最近登录记录</div>';
+    $('recentList').removeAttribute('aria-busy');
+    $('quickRecentCount').textContent = '0 条';
+  }
+
+  function bindAdminSessionChanges() {
+    if (typeof chrome === 'undefined' || !chrome.storage?.onChanged) return;
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local') return;
+      const projectId = ns.currentProject.getCachedProjectId();
+      const sessionChange = changes[`adminSession:${projectId}`];
+      const tokenChange = changes[`adminToken:${projectId}`];
+      if (!sessionChange && !tokenChange) return;
+      if (sessionChange || tokenChange?.oldValue?.token !== tokenChange?.newValue?.token) {
+        resetForAdminSession(sessionChange?.newValue || { id: adminSessionId }, Boolean(tokenChange?.newValue?.token));
+        if (!sessionChange) ns.quickLoginStateStorage?.clear().catch(() => {});
+      }
+      hasAdminToken().catch(() => {});
+    });
   }
 
   async function init() {
     if (initialized) return;
     initialized = true;
+    bindAdminSessionChanges();
+    const epoch = sessionEpoch;
+    const session = await ns.adminLoginHistory?.getSession();
+    if (epoch === sessionEpoch) adminSessionId = session?.id || '';
     await loadPersistedState();
     renderShell();
     bindEvents();
@@ -5344,16 +5676,17 @@ if (typeof module !== 'undefined' && module.exports) {
     if (activationPromise) return activationPromise;
     activationPromise = (async () => {
       await hasAdminToken();
+      if (state.teacher.selectedTenant && !state.teacher.deptLoaded) await loadTeacherDepartments();
       await rehydratePersistedSessions();
       renderTeacherShell();
       renderTeacherStudents();
       renderStudentShell();
       await renderRecent();
-    })();
+    })().finally(() => { activationPromise = null; });
     return activationPromise;
   }
 
-  const quickLoginUi = { init, activate };
+  const quickLoginUi = { init, activate, resetForAdminSession };
   ns.quickLoginUi = quickLoginUi;
   /* 截图/冒烟测试用：以假数据直渲染租户用户列表（不触网、不绑选择事件） */
   ns.quickLoginUiDebug = {
@@ -5379,7 +5712,14 @@ if (typeof module !== 'undefined' && module.exports) {
       getTeacherReachableStep,
       normalizeAppSiteUrl,
       renderTeacherUsers,
+      loadTeacherDepartments,
+      selectTeacherDepartment,
+      selectTeacherTenant,
+      loadTeacherUsers,
+      resetTeacherDepartments,
       restorePersistedState,
+      resetForAdminSession,
+      request,
       state,
     };
   }
@@ -6920,6 +7260,7 @@ if (typeof module !== 'undefined' && module.exports) {
   let adminInitialized = false;
   let adminLoginPending = false;
   let adminInjectionPending = false;
+  let adminHistoryRecords = [];
 
   function getEditableText(el) {
     return (el.textContent || '').replace(/ /g, ' ');
@@ -6960,6 +7301,7 @@ if (typeof module !== 'undefined' && module.exports) {
   // 点击即编辑、失焦自动保存；向网站注入由登录成功或手动按钮触发。
   // 可编辑内容区会随内容自然增高，无需 textarea 与显式「编辑/保存」按钮。
   async function onTokenBlur() {
+    if (adminLoginPending) return true;
     const tokenEl = $('tokenValue');
     const next = getEditableText(tokenEl).trim();
     // 内容未变化，仅刷新显示态
@@ -7016,11 +7358,10 @@ if (typeof module !== 'undefined' && module.exports) {
       } else {
         $('domainUpdated').textContent = defaultUrl ? `项目默认 · ${defaultUrl}` : '';
       }
-      $('copyDomainBtn').disabled = false;
     } else {
       $('domainUpdated').textContent = '';
-      $('copyDomainBtn').disabled = true;
     }
+    $('copyDomainBtn').disabled = !getEditableText(domainEl).trim();
     // 提示当前默认域名（便于用户参考）
     const hint = $('domainDefaultHint');
     if (hint) hint.textContent = defaultUrl;
@@ -7029,11 +7370,14 @@ if (typeof module !== 'undefined' && module.exports) {
       summary.textContent = effective || '未配置';
       summary.title = effective || '未配置';
     }
+    const openButton = $('openCurrentDomainBtn');
+    if (openButton) openButton.disabled = !effective.trim();
   }
 
   // 点击即编辑、失焦自动保存：与 token 交互一致。
   // 清空或填回默认值 → 清除覆盖（恢复默认）；填入新值 → 保存覆盖并通知 background 刷新缓存。
   async function onDomainBlur() {
+    if (adminLoginPending) return true;
     const domainEl = $('domainValue');
     const next = getEditableText(domainEl).trim();
     const defaultUrl = getDefaultBaseUrl();
@@ -7070,6 +7414,11 @@ if (typeof module !== 'undefined' && module.exports) {
     ns.ui.toast(text, kind);
   }
 
+  async function saveAdminSettings() {
+    if (!(await onTokenBlur())) return false;
+    return onDomainBlur();
+  }
+
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -7098,9 +7447,11 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function syncAdminButtons() {
     const busy = adminLoginPending || adminInjectionPending;
-    for (const id of ['account', 'password', 'saveBtn', 'clearBtn', 'apiLoginBtn', 'clearTokenToolBtn']) {
+    for (const id of ['account', 'password', 'clearBtn', 'apiLoginBtn', 'clearTokenToolBtn', 'applyDomainBtn', 'restoreDomainBtn']) {
       $(id).disabled = busy;
     }
+    for (const id of ['tokenValue', 'domainValue']) $(id).contentEditable = adminLoginPending ? 'false' : 'true';
+    document.querySelectorAll('[data-apply-admin-history]').forEach((button) => { button.disabled = busy; });
     for (const id of ['injectAdminTokenBtn', 'injectAdminTokenToolBtn']) {
       const button = $(id);
       button.disabled = busy || !lastSavedToken.trim();
@@ -7111,7 +7462,63 @@ if (typeof module !== 'undefined' && module.exports) {
   function setAdminLoginPending(pending) {
     adminLoginPending = pending;
     syncAdminButtons();
-    $('apiLoginBtn').textContent = pending ? '正在登录…' : '登录并保存';
+    $('apiLoginBtn').textContent = pending ? '正在登录…' : '登录';
+  }
+
+  async function renderAdminHistory() {
+    adminHistoryRecords = await ns.adminLoginHistory.getRecords();
+    $('adminHistoryCount').textContent = `${adminHistoryRecords.length} 条`;
+    $('adminHistoryList').innerHTML = adminHistoryRecords.length ? adminHistoryRecords.map((record, index) => {
+      const expiresAt = ns.adminLoginHistory.tokenExpiresAt(record.token);
+      const tokenStatus = expiresAt == null ? 'Token 待验证' : (expiresAt <= Date.now() ? 'Token 已过期，应用时重新登录' : 'Token 未过期');
+      const usedAt = new Date(record.lastUsedAt || record.updatedAt).toLocaleString();
+      return `<div class="admin-history-item"><div class="admin-history-info">` +
+        `<strong class="admin-history-account">${escapeHtml(record.account)}</strong>` +
+        `<div class="admin-history-domain">${escapeHtml(record.baseUrl)}</div>` +
+        `<div class="admin-history-meta">密码已保存 · ${tokenStatus}<br>最近使用：${escapeHtml(usedAt)}</div></div>` +
+        `<button class="btn btn-primary" type="button" data-apply-admin-history="${index}" aria-label="应用 ${escapeHtml(record.account)}，${escapeHtml(record.baseUrl)}">应用</button></div>`;
+    }).join('') : '<div class="recent-empty">暂无登录历史，成功登录后会自动保存。</div>';
+    syncAdminButtons();
+  }
+
+  async function refreshAdminSession() {
+    await ns.currentProject.refreshBaseUrlCache();
+    await Promise.all([renderCredentials(), renderToken(), renderDomain(), renderAdminHistory()]);
+    ns.workspaceUi?.syncHeader();
+  }
+
+  async function finishLoginResponse(response) {
+    if (!response?.ok) throw new Error(response?.error || '登录失败');
+    let result = response;
+    if (result.requiresVerification) {
+      result = await requestAdminVerification(result.verification);
+      if (!result) {
+        setLoginStatus('已取消登录', '');
+        return null;
+      }
+    }
+    if (!result.token) throw new Error('登录接口未返回 Token');
+    await refreshAdminSession();
+    return result;
+  }
+
+  async function applyAdminHistory(record) {
+    if (!record || adminLoginPending || adminInjectionPending) return;
+    setAdminLoginPending(true);
+    setLoginStatus('正在检查历史 Token，过期时将重新登录…', '');
+    try {
+      const response = await ns.messages.sendToBackground({
+        type: 'APPLY_ADMIN_LOGIN_HISTORY',
+        payload: { id: record.id, projectId: ns.currentProject.getCachedProjectId() },
+      });
+      const result = await finishLoginResponse(response);
+      if (!result) return;
+      setLoginStatus(result.reused ? '已应用账号及对应 API 域名' : '已重新登录并应用账号信息', 'ok');
+    } catch (error) {
+      setLoginStatus(`应用失败: ${error.message}`, 'err');
+    } finally {
+      setAdminLoginPending(false);
+    }
   }
 
   async function injectAdminToken() {
@@ -7119,8 +7526,8 @@ if (typeof module !== 'undefined' && module.exports) {
     adminInjectionPending = true;
     syncAdminButtons();
     try {
-      // 用户可能刚在 Token 工具屏中编辑内容，先完成保存，再读取最新凭证。
-      if (!(await onTokenBlur())) return;
+      // 先保存同页的 Token 和 API 域名，再读取最新凭证与地址。
+      if (!(await saveAdminSettings())) return;
       const response = await ns.messages.sendToBackground({
         type: 'INJECT_ADMIN_TOKEN',
         payload: {
@@ -7249,21 +7656,6 @@ if (typeof module !== 'undefined' && module.exports) {
       $('pwdToggle').textContent = showing ? '显示' : '隐藏';
     });
 
-    $('saveBtn').addEventListener('click', async () => {
-      const account = $('account').value.trim();
-      const password = $('password').value;
-      if (!account || !password) {
-        setLoginStatus('请输入账号和密码', 'err');
-        return;
-      }
-      try {
-        await ns.credentials.saveCredentials({ account, password });
-        setLoginStatus('已保存', 'ok');
-      } catch (err) {
-        setLoginStatus(`保存失败: ${err.message}`, 'err');
-      }
-    });
-
     $('clearBtn').addEventListener('click', async () => {
       try {
         await ns.credentials.clearCredentials();
@@ -7290,21 +7682,16 @@ if (typeof module !== 'undefined' && module.exports) {
       setLoginStatus('正在登录...', '');
       try {
         await ns.credentials.saveCredentials({ account, password });
-        let res = await ns.messages.sendToBackground({
+        const response = await ns.messages.sendToBackground({
           type: 'LOGIN_API',
-          payload: { account, password },
+          payload: {
+            account, password,
+            projectId: ns.currentProject.getCachedProjectId(),
+            baseUrl: getEditableText($('domainValue')).trim() || getDefaultBaseUrl(),
+          },
         });
-        if (!res?.ok) throw new Error(res?.error || '登录失败');
-        if (res.requiresVerification) {
-          res = await requestAdminVerification(res.verification);
-          if (!res) {
-            setLoginStatus('已取消登录', '');
-            return;
-          }
-        } else if (!res.token) {
-          throw new Error('登录接口未返回 Token');
-        }
-        await renderToken();
+        const res = await finishLoginResponse(response);
+        if (!res) return;
         if (res.injection?.injected) {
           setLoginStatus('登录成功，已注入当前网站并跳转到根目录', 'ok');
         } else if (res.injection?.error) {
@@ -7321,6 +7708,10 @@ if (typeof module !== 'undefined' && module.exports) {
 
     $('injectAdminTokenBtn').addEventListener('click', injectAdminToken);
     $('injectAdminTokenToolBtn').addEventListener('click', injectAdminToken);
+    $('adminHistoryList').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-apply-admin-history]');
+      if (button && !button.disabled) applyAdminHistory(adminHistoryRecords[Number(button.dataset.applyAdminHistory)]);
+    });
 
     $('copyTokenBtn').addEventListener('click', async () => {
       const tokenState = await ns.token.getToken();
@@ -7340,13 +7731,39 @@ if (typeof module !== 'undefined' && module.exports) {
     // 点击即编辑、失焦自动保存（无需编辑/保存按钮）
     bindEditableField('tokenValue', onTokenBlur);
 
-    // 域名地址：点击即编辑、失焦自动保存（与 token 交互一致）
-    bindEditableField('domainValue', onDomainBlur);
+    // 点击“应用”时由按钮保存，避免失焦与点击同时发起保存。
+    bindEditableField('domainValue', (event) => {
+      if (event.relatedTarget?.id === 'applyDomainBtn') return;
+      return onDomainBlur();
+    });
+    $('domainValue').addEventListener('input', () => {
+      $('copyDomainBtn').disabled = !getEditableText($('domainValue')).trim();
+    });
     $('copyDomainBtn').addEventListener('click', async () => {
-      // 复制当前生效地址（覆盖值或默认值）
-      const state = await ns.customDomain.getDomain();
-      const url = state.baseUrl || getDefaultBaseUrl();
+      const url = getEditableText($('domainValue')).trim();
       await copyToClipboard(url, '域名已复制');
+    });
+    $('openCurrentDomainBtn')?.addEventListener('click', async () => {
+      try {
+        const url = new URL((lastSavedDomain || getDefaultBaseUrl()).trim());
+        if (!['http:', 'https:'].includes(url.protocol)) {
+          throw new Error('API 地址须以 http:// 或 https:// 开头');
+        }
+        await chrome.tabs.create({ url: url.href });
+      } catch (err) {
+        setLoginStatus(`打开失败: ${err.message}`, 'err');
+      }
+    });
+    $('applyDomainBtn').addEventListener('click', async () => {
+      const button = $('applyDomainBtn');
+      button.disabled = true;
+      button.textContent = '应用中…';
+      try {
+        if (await onDomainBlur()) setLoginStatus('API 域名已应用', 'ok');
+      } finally {
+        button.disabled = false;
+        button.textContent = '应用';
+      }
     });
     $('restoreDomainBtn')?.addEventListener('click', async () => {
       try {
@@ -7373,11 +7790,16 @@ if (typeof module !== 'undefined' && module.exports) {
   async function initAdminPanel() {
     if (adminInitialized) return;
     adminInitialized = true;
-    await Promise.all([renderCredentials(), renderToken(), renderDomain()]);
+    await Promise.all([renderCredentials(), renderToken(), renderDomain(), renderAdminHistory()]);
     bindCredentials();
     bindAdminPanelToggle();
-    ns.workspaceUi?.registerBeforeLeave('admin-token', onTokenBlur);
-    ns.workspaceUi?.registerBeforeLeave('admin-domain', onDomainBlur);
+    ns.workspaceUi?.registerBeforeLeave('admin-token', saveAdminSettings);
+    ns.workspaceUi?.registerBeforeLeave('admin-history', () => !adminLoginPending);
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      const projectId = ns.currentProject.getCachedProjectId();
+      if (areaName !== 'local' || !changes[`adminSession:${projectId}`]) return;
+      refreshAdminSession().catch((error) => setLoginStatus(`账号信息刷新失败: ${error.message}`, 'err'));
+    });
   }
 
   async function init() {

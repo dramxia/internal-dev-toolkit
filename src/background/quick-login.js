@@ -110,6 +110,7 @@
     if (!tenantId) throw new Error('缺少 tenantId');
     if (!ns.tenantApi) throw new Error('tenantApi 模块未加载');
 
+    const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
     const res = await ns.tenantApi.quickLogin({ tenantId, id, industry });
     const url = extractVirtualLoginUrl(res);
     if (!url || typeof url !== 'string') {
@@ -119,7 +120,7 @@
     const normalizedEnv = normalizeEnv(env);
     const normalizedPort = normalizePort(normalizedEnv, localPort);
     const projectId = await commonNs.currentProject.getCurrentProjectId();
-    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId });
+    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId, ...(adminContextId ? { adminContextId } : {}) });
     return { ok: true, url, tenantId, id };
   }
 
@@ -173,6 +174,8 @@
     const initial = normalizeRecentRecord(item);
     const previous = records.find((record) => sameRecentIdentity(record, initial));
     const normalizedItem = normalizeRecentRecord(item, previous?.localPort);
+    const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
+    if ((item.adminContextId || '') !== adminContextId) throw new Error('后台账号已切换，请重新查询');
     const next = [
       { ...normalizedItem, at: Date.now() },
       ...records.filter((record) => !sameRecentIdentity(record, normalizedItem)),
@@ -187,10 +190,11 @@
 
   async function getRecent() {
     const key = await getStorageKey();
+    const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (items) => {
         const records = Array.isArray(items[key]) ? items[key] : [];
-        const cleaned = compactRecentRecords(records);
+        const cleaned = compactRecentRecords(records.filter((item) => (item.adminContextId || '') === adminContextId));
         // 读取时清理旧凭据，并把旧版按环境/端口拆分的同一身份合并成一条。
         if (JSON.stringify(cleaned) !== JSON.stringify(records)) {
           chrome.storage.local.set({ [key]: cleaned }, () => resolve(cleaned));

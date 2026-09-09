@@ -75,7 +75,7 @@ function createHarness() {
       return { ok: true, text: async () => JSON.stringify(responses.shift()) };
     },
   });
-  for (const file of ['src/common/token.js', 'src/background/cookies.js', 'src/background/admin-token-injection.js', 'src/background/api.js', 'src/background/index.js']) {
+  for (const file of ['src/common/token.js', 'src/common/admin-login-history.js', 'src/background/cookies.js', 'src/background/admin-token-injection.js', 'src/background/api.js', 'src/background/index.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), background, { filename: file });
   }
   return {
@@ -166,7 +166,7 @@ const manualPayload = { projectId: 'alpha', baseUrl: origin };
   const operationsBeforeEditInjection = manual.operations.length;
   const editedResult = await manual.send('INJECT_ADMIN_TOKEN', manualPayload);
   assert.equal(editedResult.ok, false);
-  assert.match(editedResult.error, /缺少用户信息.*登录并保存/);
+  assert.match(editedResult.error, /缺少用户信息.*登录/);
   assert.equal(manual.operations.length, operationsBeforeEditInjection, '缺少用户信息时不能写入或跳转');
   assert.equal(manual.pageStorage.token, 'Bearer saved-token', '不能破坏网站原有的登录状态');
   assert.equal(JSON.parse(manual.pageStorage.userInfo).userId, 'saved-user');
@@ -183,7 +183,7 @@ const manualPayload = { projectId: 'alpha', baseUrl: origin };
     else legacy.pageStorage.userInfo = pageInfo;
     const result = await legacy.send('INJECT_ADMIN_TOKEN', manualPayload);
     assert.equal(result.ok, false, '旧 Token 缺少有效用户信息时不能误报注入成功');
-    assert.match(result.error, /缺少用户信息.*登录并保存/);
+    assert.match(result.error, /缺少用户信息.*登录/);
     assert.deepEqual(legacy.operations, [], '用户信息不完整时不得写入或跳转');
   }
 

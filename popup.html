@@ -707,6 +707,27 @@
       border-style: dashed;
     }
 
+    #domainWrap { position: relative; }
+    #domainWrap .domain-copy-btn {
+      position: absolute;
+      top: 3px;
+      right: 7px;
+      width: 26px;
+      height: 26px;
+      background: var(--sage-100);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--dur-fast);
+    }
+    #domainWrap:hover .domain-copy-btn,
+    #domainWrap:focus-within .domain-copy-btn {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    @media (hover: none) {
+      #domainWrap .domain-copy-btn { opacity: 1; pointer-events: auto; }
+    }
+
     .token-shell-bar {
       background: var(--sage-100);
       padding: 9px 15px;
@@ -2107,6 +2128,12 @@
       box-shadow: none;
     }
     .utility-screen > .section-block > .section-header { display: none; }
+    .utility-screen-grouped > .section-block + .section-block { margin-top: 24px; }
+    .utility-screen-grouped > .section-block > .section-header {
+      display: flex;
+      padding: 0 0 12px;
+      cursor: default;
+    }
     .utility-screen .section-content {
       padding: 0;
       border-top: 0 !important;
@@ -2158,8 +2185,7 @@
       grid-row: 1;
       min-height: 42px;
     }
-    #adminPanelSection #saveBtn,
-    #adminPanelSection #clearBtn,
+    #adminPanelSection #clearBtn { grid-column: 1 / -1; grid-row: 2; }
     #otherLoginSection #otherLoginBtn,
     #otherLoginSection #otherZhiqueBtn { grid-row: 2; }
     #adminPanelSection #injectAdminTokenBtn { grid-column: 1 / -1; grid-row: 3; }
@@ -2364,6 +2390,17 @@
       margin-top: 12px;
     }
     .utility-actions .btn { flex: 1 1 0; min-height: 38px; white-space: nowrap; }
+    .admin-history-list { display: grid; gap: 0; }
+    .admin-history-item { display: flex; align-items: center; gap: 12px; padding: 16px 0; }
+    .admin-history-item + .admin-history-item { border-top: 1px solid var(--border); }
+    .admin-history-info { flex: 1; min-width: 0; }
+    .admin-history-account { font-size: 14px; color: var(--text-1); overflow-wrap: anywhere; }
+    .admin-history-domain { margin-top: 5px; font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+    .admin-history-meta { margin-top: 7px; font-size: 11px; line-height: 1.7; color: var(--text-3); }
+    .admin-history-item .btn { flex-shrink: 0; }
+    .quick-dept-field { margin-top: 14px; }
+    .quick-dept-status-row { display: flex; align-items: center; gap: 8px; }
+    .quick-dept-status-row .quick-inline-status { flex: 1; min-width: 0; }
     .utility-screen .workspace-subview {
       padding: 14px 16px 18px;
       border: 1px solid var(--border);
@@ -2520,9 +2557,6 @@
       <button class="workspace-icon-btn" id="workspaceTokenBtn" type="button" title="Token" aria-label="Token" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 4l4 4M14 6l4 4"/></svg>
       </button>
-      <button class="workspace-icon-btn" id="workspaceDomainBtn" type="button" title="API 域名" aria-label="API 域名" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
-      </button>
     </div>
   </header>
 
@@ -2560,9 +2594,8 @@
             </div>
 
             <div class="btn-row">
-              <button class="btn btn-ghost"   id="saveBtn">仅保存凭证</button>
               <button class="btn btn-danger"  id="clearBtn">清除凭证</button>
-              <button class="btn btn-primary" id="apiLoginBtn">登录并保存</button>
+              <button class="btn btn-primary" id="apiLoginBtn">登录</button>
               <button class="btn btn-ghost" id="injectAdminTokenBtn" type="button" disabled>一键注入当前网站</button>
             </div>
 
@@ -2571,8 +2604,8 @@
             <div class="workspace-domain-summary">
               <span>当前 API</span>
               <strong id="domainSummaryValue">正在读取...</strong>
-              <button class="workspace-icon-btn" id="openDomainToolBtn" type="button" data-open-utility="admin-domain" title="编辑 API 域名" aria-label="编辑 API 域名">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+              <button class="workspace-icon-btn" id="openCurrentDomainBtn" type="button" title="在新标签页打开当前 API" aria-label="在新标签页打开当前 API" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h6v6M21 3 10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/></svg>
               </button>
             </div>
 
@@ -2585,7 +2618,7 @@
         <div class="section-header">
           <div class="section-header-left">
             <div class="section-icon mint"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 4l4 4M14 6l4 4"/></svg></div>
-            <span class="section-header-title">后台账号 Token</span>
+            <span class="section-header-title">后台 Token</span>
           </div>
           <!-- no toggle needed here, always open -->
         </div>
@@ -2619,7 +2652,7 @@
         <div class="section-header">
           <div class="section-header-left">
             <div class="section-icon green"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div>
-            <span class="section-header-title">域名地址</span>
+            <span class="section-header-title">API 域名</span>
           </div>
         </div>
         <div class="section-content" style="border-top:1px solid var(--border)">
@@ -2627,15 +2660,17 @@
           <div class="token-shell" id="domainWrap">
             <div class="token-shell-bar">
               <span class="token-shell-bar-label">Base URL</span>
-              <span class="token-shell-bar-dot"></span>
             </div>
+            <button class="workspace-icon-btn domain-copy-btn" id="copyDomainBtn" type="button" title="复制域名" aria-label="复制域名" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
+            </button>
             <div class="token-box empty" id="domainValue" contenteditable="true" role="textbox" aria-multiline="true"
               data-placeholder="点击此处输入域名，如 https://gpt-admin-pre.hwzxs.com"></div>
             <div class="token-meta"    id="domainUpdated"></div>
           </div>
 
           <div class="utility-actions">
-            <button class="btn btn-ghost" id="copyDomainBtn" disabled>复制域名</button>
+            <button class="btn btn-primary" id="applyDomainBtn" type="button">应用</button>
             <button class="btn btn-danger" id="restoreDomainBtn" type="button">恢复默认值</button>
           </div>
 
@@ -2645,6 +2680,19 @@
             <code id="domainDefaultHint"></code>
           </div>
 
+        </div>
+      </div>
+
+      <div class="section-block expanded" id="adminHistorySection">
+        <div class="section-content">
+          <div class="utility-section-heading">
+            <strong>登录过的账号</strong>
+            <span id="adminHistoryCount">0 条</span>
+          </div>
+          <p class="admin-history-meta">账号与 API 域名一起保存。应用时会同时切换密码和 Token；Token 过期时重新登录。</p>
+          <div class="admin-history-list" id="adminHistoryList" aria-live="polite">
+            <div class="recent-empty">暂无登录历史，成功登录后会自动保存。</div>
+          </div>
         </div>
       </div>
 
@@ -2731,9 +2779,15 @@
                   <div class="quick-inline-status" id="tenantSearchStatus" role="status" aria-live="polite"></div>
                   <div class="list hidden" id="tenantList" role="list"></div>
                   <div class="list-empty hidden" id="tenantEmpty">请输入租户条件</div>
-                  <div class="hidden" aria-hidden="true">
-                    <label for="deptSelect">部门筛选</label>
-                    <select class="field-input" id="deptSelect"><option value="">全部部门</option></select>
+                </div>
+                <div class="quick-dept-field hidden" id="teacherDeptField">
+                  <label class="quick-label" for="deptSelect">组织架构</label>
+                  <select class="field-input" id="deptSelect" aria-describedby="teacherDeptStatus" disabled>
+                    <option value="">全部账号（不指定部门）</option>
+                  </select>
+                  <div class="quick-dept-status-row">
+                    <div class="quick-inline-status" id="teacherDeptStatus" role="status" aria-live="polite"></div>
+                    <button class="btn btn-ghost quick-secondary-btn hidden" id="teacherDeptRetryBtn" type="button">重新加载</button>
                   </div>
                 </div>
               </section>

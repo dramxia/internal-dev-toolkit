@@ -69,7 +69,7 @@
     const result = results?.find((item) => item.frameId === 0)?.result;
     if (!result) throw new Error('网站未完成 Token 注入，请重试');
     if (result.reason === 'missing-user-info') {
-      throw new Error('当前 Token 缺少用户信息，请先点击「登录并保存」重新登录，再注入网站');
+      throw new Error('当前 Token 缺少用户信息，请先点击「登录」重新登录，再注入网站');
     }
     return { ...result, tabId: tab.id };
   }

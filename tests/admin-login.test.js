@@ -60,6 +60,7 @@ function createHarness() {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file });
   }
   load('src/common/token.js');
+  load('src/common/admin-login-history.js');
   load('src/background/cookies.js');
   load('src/background/admin-token-injection.js');
   load('src/background/api.js');

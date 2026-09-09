@@ -12,7 +12,7 @@
       shortLabel: '后台',
       panelId: 'panel-admin',
       path: '后台登录',
-      utilities: { token: 'admin-token', domain: 'admin-domain' },
+      utilities: { history: 'admin-history', token: 'admin-token' },
       usesProjectContext: true,
     },
     quickLogin: {
@@ -45,8 +45,8 @@
   });
 
   const UTILITY_META = Object.freeze({
-    'admin-token': { title: '后台 Token', sourceId: 'adminTokenSection' },
-    'admin-domain': { title: 'API 域名', sourceId: 'adminDomainSection' },
+    'admin-history': { title: '后台登录历史', sourceId: 'adminHistorySection' },
+    'admin-token': { title: '后台 Token 与 API 域名', sourceIds: ['adminTokenSection', 'adminDomainSection'] },
     'quick-history': { title: '最近使用', sourceId: 'quickHistorySection' },
     'other-history': { title: '高校登录历史', sourceId: 'otherHistorySection' },
     'other-token': { title: '高校 Token', sourceId: 'otherTokenSection' },
@@ -185,14 +185,14 @@
     const host = $('utilityHost');
     if (!host) return;
     Object.entries(UTILITY_META).forEach(([id, meta]) => {
-      const source = $(meta.sourceId);
-      if (!source) return;
+      const sources = (meta.sourceIds || [meta.sourceId]).map($).filter(Boolean);
+      if (!sources.length) return;
       const screen = document.createElement('section');
-      screen.className = 'utility-screen';
+      screen.className = sources.length > 1 ? 'utility-screen utility-screen-grouped' : 'utility-screen';
       screen.id = `utility-${id}`;
       screen.dataset.utilityId = id;
       screen.hidden = true;
-      screen.appendChild(source);
+      sources.forEach((source) => screen.appendChild(source));
       host.appendChild(screen);
     });
   }
@@ -203,6 +203,10 @@
     const available = Boolean(utilityId && $(`utility-${utilityId}`));
     button.hidden = !available;
     button.dataset.utilityId = available ? utilityId : '';
+    if (available) {
+      button.title = UTILITY_META[utilityId].title;
+      button.setAttribute('aria-label', UTILITY_META[utilityId].title);
+    }
   }
 
   function currentWorkspaceStatus() {
@@ -227,7 +231,6 @@
     $('workspaceStatus').textContent = currentWorkspaceStatus();
     setHeaderAction('workspaceHistoryBtn', activeWorkspace.utilities.history);
     setHeaderAction('workspaceTokenBtn', activeWorkspace.utilities.token);
-    setHeaderAction('workspaceDomainBtn', activeWorkspace.utilities.domain);
   }
 
   function syncDock() {
@@ -311,7 +314,7 @@
     $('workspaceProject').textContent = activeWorkspace.projectName;
     $('workspacePath').textContent = '工具屏';
     $('workspaceStatus').textContent = '';
-    ['workspaceHistoryBtn', 'workspaceTokenBtn', 'workspaceDomainBtn'].forEach((id) => { $(id).hidden = true; });
+    ['workspaceHistoryBtn', 'workspaceTokenBtn'].forEach((id) => { $(id).hidden = true; });
     if ($('workspaceMain')) $('workspaceMain').scrollTop = 0;
     requestAnimationFrame(() => screen.querySelector('button, input, [contenteditable="true"]')?.focus({ preventScroll: true }));
     return true;
@@ -411,9 +414,10 @@
     if (typeof handler === 'function') beforeLeave.set(utilityId, handler);
   }
 
-  function setPath(path) {
-    if (!activeWorkspace || activeUtility) return;
-    activeWorkspace.path = String(path || '');
+  function setPath(path, feature) {
+    if (!activeWorkspace) return;
+    const targets = feature ? definitions.filter((item) => item.feature === feature) : [activeWorkspace];
+    targets.forEach((workspace) => { workspace.path = String(path || ''); });
     syncHeader();
   }
 

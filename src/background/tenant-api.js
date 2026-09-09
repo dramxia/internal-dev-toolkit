@@ -30,12 +30,18 @@
   }
 
   async function fetchAdminJson(path, body, { referer } = {}) {
+    const sessionId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
+    const baseUrl = commonNs.currentProject.getBaseUrl();
     const token = await getToken();
     if (!token) throw new Error('未获取 admin token，请先登录');
 
-    const baseUrl = commonNs.currentProject.getBaseUrl();
     const finalReferer = referer || `${baseUrl}/tenant`;
-    const cookieHeader = await ns.cookies.getWafCookies();
+    const cookieHeader = ns.cookies.getWafCookiesForUrl
+      ? await ns.cookies.getWafCookiesForUrl(baseUrl)
+      : await ns.cookies.getWafCookies();
+    if (sessionId !== ((await commonNs.adminLoginHistory?.getSession())?.id || '')) {
+      throw new Error('后台账号已切换，请重新查询');
+    }
     if (!cookieHeader) {
       console.warn(`[内部开发工具箱] 未读取到 WAF Cookie，请先在浏览器中打开 ${baseUrl} 完成一次登录`);
     }

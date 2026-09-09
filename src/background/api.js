@@ -17,12 +17,15 @@
       .join('');
   }
 
-  function getLoginContext() {
+  function getLoginContext(options = {}) {
+    const projectId = options.projectId || commonNs.currentProject.getCachedProjectId();
+    const project = commonNs.projects?.getById(projectId);
+    if (options.projectId && !project?.enabledFeatures.includes('adminPanel')) throw new Error('该项目不支持后台登录');
     return {
-      projectId: commonNs.currentProject.getCachedProjectId(),
-      baseUrl: commonNs.currentProject.getBaseUrl(),
-      authPath: commonNs.currentProject.getAuthPath(),
-      cookieKeys: [...commonNs.currentProject.getCookieKeys()],
+      projectId,
+      baseUrl: commonNs.adminLoginHistory.normalizeBaseUrl(options.baseUrl || commonNs.currentProject.getBaseUrl()),
+      authPath: project?.authPath || commonNs.currentProject.getAuthPath(),
+      cookieKeys: [...(project?.cookieKeys || commonNs.currentProject.getCookieKeys())],
     };
   }
 
@@ -164,21 +167,20 @@
     const siteToken = typeof userInfo?.accessToken === 'string'
       ? userInfo.accessToken.trim()
       : `Bearer ${token}`;
-    const state = await saveToken(token, context.projectId, {
-      origin: new URL(context.baseUrl).origin,
-      siteToken,
-      userInfo,
-    });
-    const injection = await ns.adminTokenInjection.autoInject(state);
-    return { token, injection };
+    const { tokenState, session } = await commonNs.adminLoginHistory.activate({
+      account: context.account, password: context.password, baseUrl: context.baseUrl,
+      token, siteToken, userInfo, updatedAt: Date.now(),
+    }, context.projectId);
+    const injection = await ns.adminTokenInjection.autoInject(tokenState);
+    return { token, injection, session };
   }
 
-  async function doLogin({ account, password } = {}) {
+  async function doLogin({ account, password, projectId, baseUrl } = {}) {
     if (!account || !password) {
       throw new Error('请输入账号和密码');
     }
 
-    const context = getLoginContext();
+    const context = { ...getLoginContext({ projectId, baseUrl }), account: String(account).trim(), password: String(password) };
     const captcha = await getCaptcha(context);
     assertResponseSuccess(captcha, '获取验证码失败');
     if (!extractTicket(captcha)) throw new Error('getCaptcha 未返回 ticket');
@@ -208,7 +210,7 @@
   async function verifyLogin({ verification, code } = {}) {
     const inputCode = String(code || '').trim();
     if (!inputCode) throw new Error('请输入验证码');
-    if (!verification?.account || !verification.passwordHash || !verification.projectId ||
+    if (!verification?.account || !verification.password || !verification.passwordHash || !verification.projectId ||
         !verification.baseUrl || !verification.authPath || !Array.isArray(verification.cookieKeys)) {
       throw new Error('登录信息已失效，请重新登录');
     }
@@ -219,5 +221,41 @@
     return completeLogin(token, validRes, verification);
   }
 
-  ns.api = { doLogin, verifyLogin, encryptPassword, getCaptcha, login, valid, extractToken, saveToken };
+  async function isHistoryTokenValid(record, context) {
+    const expiresAt = commonNs.adminLoginHistory.tokenExpiresAt(record.token);
+    if (expiresAt != null) return expiresAt > Date.now();
+    const paths = commonNs.projects?.getById(context.projectId)?.tenantApiPaths || commonNs.currentProject.getTenantApiPaths();
+    if (!paths.tenantPage) throw new Error('当前项目未配置 Token 验证接口');
+    const cookieHeader = await ns.cookies.getWafCookiesForUrl(context.baseUrl, context.cookieKeys);
+    const response = await fetch(`${context.baseUrl}${paths.tenantPage}`, {
+      method: 'POST', credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${record.token.replace(/^Bearer\s+/i, '').trim()}`,
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
+      body: JSON.stringify({ current: 1, size: 1 }),
+    });
+    if (response.status === 401) return false;
+    if (!response.ok) throw new Error(`无法验证 Token：HTTP ${response.status}，请稍后重试`);
+    let data;
+    try { data = JSON.parse(await response.text()); }
+    catch (_) { throw new Error('无法验证 Token：后台未返回有效数据，请检查 API 地址'); }
+    if (Number(data.code) === 401 || /token.*(?:过期|失效|无效)|(?:过期|失效|无效).*token|未登录|登录.*(?:过期|失效)|unauthorized|token.*expired/i.test(extractErrorMessage(data))) return false;
+    assertResponseSuccess(data, '无法验证 Token，请稍后重试');
+    if (data.code == null && data.success == null) throw new Error('无法验证 Token：后台未返回验证结果');
+    return true;
+  }
+
+  async function applyHistory({ id, projectId = commonNs.currentProject.getCachedProjectId() } = {}) {
+    const record = await commonNs.adminLoginHistory.getRecord(id, projectId);
+    const context = getLoginContext({ projectId, baseUrl: record.baseUrl });
+    if (!(await isHistoryTokenValid(record, context))) {
+      return doLogin({ account: record.account, password: record.password, projectId, baseUrl: record.baseUrl });
+    }
+    const { tokenState, session } = await commonNs.adminLoginHistory.activate(record, projectId);
+    return { token: tokenState.token, session, reused: true };
+  }
+
+  ns.api = { doLogin, verifyLogin, applyHistory, isHistoryTokenValid, encryptPassword, getCaptcha, login, valid, extractToken, saveToken };
 })();

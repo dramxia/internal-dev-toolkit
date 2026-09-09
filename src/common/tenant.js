@@ -58,13 +58,39 @@
     };
   }
 
-  function normalizeDept(value = {}) {
+  function normalizeDept(value = {}, inheritedSource = DEFAULT_DEPT_SOURCE) {
     return {
       deptId: String(value.deptId ?? value.id ?? ''),
       deptName: String(value.deptName ?? value.name ?? ''),
-      deptSource: value.deptSource ?? DEFAULT_DEPT_SOURCE,
+      deptSource: value.deptSource ?? inheritedSource,
       children: Array.isArray(value.children) ? value.children : [],
     };
+  }
+
+  function flattenDeptOptions(response) {
+    const result = [];
+    const seen = new Set();
+    function visit(nodes, parents = [], source = DEFAULT_DEPT_SOURCE) {
+      for (const raw of nodes) {
+        if (!raw || typeof raw !== 'object' || Number(raw.isDeleted) === 1) continue;
+        const dept = normalizeDept(raw, source);
+        if (!dept.deptId || seen.has(dept.deptId)) continue;
+        seen.add(dept.deptId);
+        const names = [...parents, dept.deptName || '未命名组织'];
+        const count = raw.deptUserNum == null ? null : Number(raw.deptUserNum);
+        result.push({
+          deptId: dept.deptId,
+          deptName: names.at(-1),
+          deptSource: dept.deptSource,
+          depth: parents.length,
+          path: names.join(' / '),
+          userCount: Number.isFinite(count) && count >= 0 ? count : null,
+        });
+        visit(dept.children, names, dept.deptSource);
+      }
+    }
+    visit(extractListData(response));
+    return result;
   }
 
   function buildTenantPageBody({ current = 1, size = 10, keyword = '' }) {
@@ -76,13 +102,14 @@
     };
   }
 
-  function buildUserPageBody({ tenantId, deptId = '', current = 1, size = 10, keyword = '' }) {
+  function buildUserPageBody({ tenantId, deptId = '', deptSource = DEFAULT_DEPT_SOURCE, current = 1, size = 10, keyword = '' }) {
     if (!tenantId) throw new Error('tenantId 不能为空');
     return {
       current: Number(current) || 1,
       size: Number(size) || 10,
       deptId: String(deptId || ''),
       tenantId: String(tenantId),
+      deptSource,
       searchKey: String(keyword || ''),
       searchType: 'username,phone',
     };
@@ -639,6 +666,7 @@
     normalizeUser,
     normalizeAccount,
     normalizeDept,
+    flattenDeptOptions,
     buildTenantPageBody,
     buildUserPageBody,
     buildAccountPageBody,

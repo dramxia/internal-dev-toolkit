@@ -52,7 +52,7 @@
   async function load() {
     if (!hasChromeStorage()) return null;
     const key = await getStorageKey();
-    return new Promise((resolve) => {
+    const snapshot = await new Promise((resolve) => {
       chrome.storage.local.get(key, (items) => {
         if (chrome.runtime?.lastError) {
           resolve(null);
@@ -66,6 +66,11 @@
         resolve(stored.state);
       });
     });
+    if (namespace.adminLoginHistory) {
+      const session = await namespace.adminLoginHistory.getSession();
+      if ((snapshot?.adminSessionId || '') !== (session?.id || '')) return null;
+    }
+    return snapshot;
   }
 
   function saveToKey(key, state) {
@@ -84,6 +89,10 @@
   async function save(snapshot) {
     const state = sanitizeValue(snapshot);
     if (!hasChromeStorage()) return state;
+    if (namespace.adminLoginHistory) {
+      const session = await namespace.adminLoginHistory.getSession();
+      if ((snapshot?.adminSessionId || '') !== (session?.id || '')) return null;
+    }
     const cachedKey = getCachedStorageKey();
     if (cachedKey) return saveToKey(cachedKey, state);
     return saveToKey(await getStorageKey(), state);

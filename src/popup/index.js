@@ -18,6 +18,7 @@
   let adminInitialized = false;
   let adminLoginPending = false;
   let adminInjectionPending = false;
+  let adminHistoryRecords = [];
 
   function getEditableText(el) {
     return (el.textContent || '').replace(/ /g, ' ');
@@ -58,6 +59,7 @@
   // 点击即编辑、失焦自动保存；向网站注入由登录成功或手动按钮触发。
   // 可编辑内容区会随内容自然增高，无需 textarea 与显式「编辑/保存」按钮。
   async function onTokenBlur() {
+    if (adminLoginPending) return true;
     const tokenEl = $('tokenValue');
     const next = getEditableText(tokenEl).trim();
     // 内容未变化，仅刷新显示态
@@ -114,11 +116,10 @@
       } else {
         $('domainUpdated').textContent = defaultUrl ? `项目默认 · ${defaultUrl}` : '';
       }
-      $('copyDomainBtn').disabled = false;
     } else {
       $('domainUpdated').textContent = '';
-      $('copyDomainBtn').disabled = true;
     }
+    $('copyDomainBtn').disabled = !getEditableText(domainEl).trim();
     // 提示当前默认域名（便于用户参考）
     const hint = $('domainDefaultHint');
     if (hint) hint.textContent = defaultUrl;
@@ -127,11 +128,14 @@
       summary.textContent = effective || '未配置';
       summary.title = effective || '未配置';
     }
+    const openButton = $('openCurrentDomainBtn');
+    if (openButton) openButton.disabled = !effective.trim();
   }
 
   // 点击即编辑、失焦自动保存：与 token 交互一致。
   // 清空或填回默认值 → 清除覆盖（恢复默认）；填入新值 → 保存覆盖并通知 background 刷新缓存。
   async function onDomainBlur() {
+    if (adminLoginPending) return true;
     const domainEl = $('domainValue');
     const next = getEditableText(domainEl).trim();
     const defaultUrl = getDefaultBaseUrl();
@@ -168,6 +172,11 @@
     ns.ui.toast(text, kind);
   }
 
+  async function saveAdminSettings() {
+    if (!(await onTokenBlur())) return false;
+    return onDomainBlur();
+  }
+
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -196,9 +205,11 @@
 
   function syncAdminButtons() {
     const busy = adminLoginPending || adminInjectionPending;
-    for (const id of ['account', 'password', 'saveBtn', 'clearBtn', 'apiLoginBtn', 'clearTokenToolBtn']) {
+    for (const id of ['account', 'password', 'clearBtn', 'apiLoginBtn', 'clearTokenToolBtn', 'applyDomainBtn', 'restoreDomainBtn']) {
       $(id).disabled = busy;
     }
+    for (const id of ['tokenValue', 'domainValue']) $(id).contentEditable = adminLoginPending ? 'false' : 'true';
+    document.querySelectorAll('[data-apply-admin-history]').forEach((button) => { button.disabled = busy; });
     for (const id of ['injectAdminTokenBtn', 'injectAdminTokenToolBtn']) {
       const button = $(id);
       button.disabled = busy || !lastSavedToken.trim();
@@ -209,7 +220,63 @@
   function setAdminLoginPending(pending) {
     adminLoginPending = pending;
     syncAdminButtons();
-    $('apiLoginBtn').textContent = pending ? '正在登录…' : '登录并保存';
+    $('apiLoginBtn').textContent = pending ? '正在登录…' : '登录';
+  }
+
+  async function renderAdminHistory() {
+    adminHistoryRecords = await ns.adminLoginHistory.getRecords();
+    $('adminHistoryCount').textContent = `${adminHistoryRecords.length} 条`;
+    $('adminHistoryList').innerHTML = adminHistoryRecords.length ? adminHistoryRecords.map((record, index) => {
+      const expiresAt = ns.adminLoginHistory.tokenExpiresAt(record.token);
+      const tokenStatus = expiresAt == null ? 'Token 待验证' : (expiresAt <= Date.now() ? 'Token 已过期，应用时重新登录' : 'Token 未过期');
+      const usedAt = new Date(record.lastUsedAt || record.updatedAt).toLocaleString();
+      return `<div class="admin-history-item"><div class="admin-history-info">` +
+        `<strong class="admin-history-account">${escapeHtml(record.account)}</strong>` +
+        `<div class="admin-history-domain">${escapeHtml(record.baseUrl)}</div>` +
+        `<div class="admin-history-meta">密码已保存 · ${tokenStatus}<br>最近使用：${escapeHtml(usedAt)}</div></div>` +
+        `<button class="btn btn-primary" type="button" data-apply-admin-history="${index}" aria-label="应用 ${escapeHtml(record.account)}，${escapeHtml(record.baseUrl)}">应用</button></div>`;
+    }).join('') : '<div class="recent-empty">暂无登录历史，成功登录后会自动保存。</div>';
+    syncAdminButtons();
+  }
+
+  async function refreshAdminSession() {
+    await ns.currentProject.refreshBaseUrlCache();
+    await Promise.all([renderCredentials(), renderToken(), renderDomain(), renderAdminHistory()]);
+    ns.workspaceUi?.syncHeader();
+  }
+
+  async function finishLoginResponse(response) {
+    if (!response?.ok) throw new Error(response?.error || '登录失败');
+    let result = response;
+    if (result.requiresVerification) {
+      result = await requestAdminVerification(result.verification);
+      if (!result) {
+        setLoginStatus('已取消登录', '');
+        return null;
+      }
+    }
+    if (!result.token) throw new Error('登录接口未返回 Token');
+    await refreshAdminSession();
+    return result;
+  }
+
+  async function applyAdminHistory(record) {
+    if (!record || adminLoginPending || adminInjectionPending) return;
+    setAdminLoginPending(true);
+    setLoginStatus('正在检查历史 Token，过期时将重新登录…', '');
+    try {
+      const response = await ns.messages.sendToBackground({
+        type: 'APPLY_ADMIN_LOGIN_HISTORY',
+        payload: { id: record.id, projectId: ns.currentProject.getCachedProjectId() },
+      });
+      const result = await finishLoginResponse(response);
+      if (!result) return;
+      setLoginStatus(result.reused ? '已应用账号及对应 API 域名' : '已重新登录并应用账号信息', 'ok');
+    } catch (error) {
+      setLoginStatus(`应用失败: ${error.message}`, 'err');
+    } finally {
+      setAdminLoginPending(false);
+    }
   }
 
   async function injectAdminToken() {
@@ -217,8 +284,8 @@
     adminInjectionPending = true;
     syncAdminButtons();
     try {
-      // 用户可能刚在 Token 工具屏中编辑内容，先完成保存，再读取最新凭证。
-      if (!(await onTokenBlur())) return;
+      // 先保存同页的 Token 和 API 域名，再读取最新凭证与地址。
+      if (!(await saveAdminSettings())) return;
       const response = await ns.messages.sendToBackground({
         type: 'INJECT_ADMIN_TOKEN',
         payload: {
@@ -347,21 +414,6 @@
       $('pwdToggle').textContent = showing ? '显示' : '隐藏';
     });
 
-    $('saveBtn').addEventListener('click', async () => {
-      const account = $('account').value.trim();
-      const password = $('password').value;
-      if (!account || !password) {
-        setLoginStatus('请输入账号和密码', 'err');
-        return;
-      }
-      try {
-        await ns.credentials.saveCredentials({ account, password });
-        setLoginStatus('已保存', 'ok');
-      } catch (err) {
-        setLoginStatus(`保存失败: ${err.message}`, 'err');
-      }
-    });
-
     $('clearBtn').addEventListener('click', async () => {
       try {
         await ns.credentials.clearCredentials();
@@ -388,21 +440,16 @@
       setLoginStatus('正在登录...', '');
       try {
         await ns.credentials.saveCredentials({ account, password });
-        let res = await ns.messages.sendToBackground({
+        const response = await ns.messages.sendToBackground({
           type: 'LOGIN_API',
-          payload: { account, password },
+          payload: {
+            account, password,
+            projectId: ns.currentProject.getCachedProjectId(),
+            baseUrl: getEditableText($('domainValue')).trim() || getDefaultBaseUrl(),
+          },
         });
-        if (!res?.ok) throw new Error(res?.error || '登录失败');
-        if (res.requiresVerification) {
-          res = await requestAdminVerification(res.verification);
-          if (!res) {
-            setLoginStatus('已取消登录', '');
-            return;
-          }
-        } else if (!res.token) {
-          throw new Error('登录接口未返回 Token');
-        }
-        await renderToken();
+        const res = await finishLoginResponse(response);
+        if (!res) return;
         if (res.injection?.injected) {
           setLoginStatus('登录成功，已注入当前网站并跳转到根目录', 'ok');
         } else if (res.injection?.error) {
@@ -419,6 +466,10 @@
 
     $('injectAdminTokenBtn').addEventListener('click', injectAdminToken);
     $('injectAdminTokenToolBtn').addEventListener('click', injectAdminToken);
+    $('adminHistoryList').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-apply-admin-history]');
+      if (button && !button.disabled) applyAdminHistory(adminHistoryRecords[Number(button.dataset.applyAdminHistory)]);
+    });
 
     $('copyTokenBtn').addEventListener('click', async () => {
       const tokenState = await ns.token.getToken();
@@ -438,13 +489,39 @@
     // 点击即编辑、失焦自动保存（无需编辑/保存按钮）
     bindEditableField('tokenValue', onTokenBlur);
 
-    // 域名地址：点击即编辑、失焦自动保存（与 token 交互一致）
-    bindEditableField('domainValue', onDomainBlur);
+    // 点击“应用”时由按钮保存，避免失焦与点击同时发起保存。
+    bindEditableField('domainValue', (event) => {
+      if (event.relatedTarget?.id === 'applyDomainBtn') return;
+      return onDomainBlur();
+    });
+    $('domainValue').addEventListener('input', () => {
+      $('copyDomainBtn').disabled = !getEditableText($('domainValue')).trim();
+    });
     $('copyDomainBtn').addEventListener('click', async () => {
-      // 复制当前生效地址（覆盖值或默认值）
-      const state = await ns.customDomain.getDomain();
-      const url = state.baseUrl || getDefaultBaseUrl();
+      const url = getEditableText($('domainValue')).trim();
       await copyToClipboard(url, '域名已复制');
+    });
+    $('openCurrentDomainBtn')?.addEventListener('click', async () => {
+      try {
+        const url = new URL((lastSavedDomain || getDefaultBaseUrl()).trim());
+        if (!['http:', 'https:'].includes(url.protocol)) {
+          throw new Error('API 地址须以 http:// 或 https:// 开头');
+        }
+        await chrome.tabs.create({ url: url.href });
+      } catch (err) {
+        setLoginStatus(`打开失败: ${err.message}`, 'err');
+      }
+    });
+    $('applyDomainBtn').addEventListener('click', async () => {
+      const button = $('applyDomainBtn');
+      button.disabled = true;
+      button.textContent = '应用中…';
+      try {
+        if (await onDomainBlur()) setLoginStatus('API 域名已应用', 'ok');
+      } finally {
+        button.disabled = false;
+        button.textContent = '应用';
+      }
     });
     $('restoreDomainBtn')?.addEventListener('click', async () => {
       try {
@@ -471,11 +548,16 @@
   async function initAdminPanel() {
     if (adminInitialized) return;
     adminInitialized = true;
-    await Promise.all([renderCredentials(), renderToken(), renderDomain()]);
+    await Promise.all([renderCredentials(), renderToken(), renderDomain(), renderAdminHistory()]);
     bindCredentials();
     bindAdminPanelToggle();
-    ns.workspaceUi?.registerBeforeLeave('admin-token', onTokenBlur);
-    ns.workspaceUi?.registerBeforeLeave('admin-domain', onDomainBlur);
+    ns.workspaceUi?.registerBeforeLeave('admin-token', saveAdminSettings);
+    ns.workspaceUi?.registerBeforeLeave('admin-history', () => !adminLoginPending);
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      const projectId = ns.currentProject.getCachedProjectId();
+      if (areaName !== 'local' || !changes[`adminSession:${projectId}`]) return;
+      refreshAdminSession().catch((error) => setLoginStatus(`账号信息刷新失败: ${error.message}`, 'err'));
+    });
   }
 
   async function init() {

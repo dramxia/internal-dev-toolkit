@@ -56,7 +56,7 @@
     }
   })();
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  function handleMessage(msg, _sender, sendResponse) {
     if (!msg || !msg.type) return false;
 
     if (msg.type === 'PING') {
@@ -84,6 +84,13 @@
     if (msg.type === 'VERIFY_LOGIN_API' && ns.api) {
       ns.api
         .verifyLogin(msg.payload)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.type === 'APPLY_ADMIN_LOGIN_HISTORY' && ns.api) {
+      ns.api.applyHistory(msg.payload)
         .then((result) => sendResponse({ ok: true, ...result }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
@@ -556,5 +563,17 @@
     }
 
     return false;
+  }
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (typeof msg?.adminSessionId !== 'string') return handleMessage(msg, sender, sendResponse);
+    commonNs.adminLoginHistory.getSession().then((session) => {
+      if ((session?.id || '') !== msg.adminSessionId) {
+        sendResponse({ ok: false, error: '后台账号已切换，请重新查询' });
+        return;
+      }
+      if (!handleMessage(msg, sender, sendResponse)) sendResponse({ ok: false, error: '不支持的查询请求' });
+    }).catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
   });
 })();

@@ -25,6 +25,7 @@
     'teacherIdentitySummaryTitle', 'teacherIdentitySummaryMeta', 'changeTeacherIdentityBtn',
     'teacherIdentityStepBody',
     'tenantSearch', 'tenantList', 'tenantEmpty', 'deptSelect',
+    'teacherDeptField', 'teacherDeptStatus', 'teacherDeptRetryBtn',
     'userSearch', 'userList', 'userEmpty', 'userPager',
     'teacherRefreshBtn', 'teacherNameSearch', 'teacherAccountSearch',
     'teacherList', 'teacherEmpty', 'teacherPager', 'studentSection',
@@ -48,6 +49,8 @@
   let persistenceReady = false;
   let persistenceTimer = 0;
   let lastPersistedSignature = '';
+  let adminSessionId = '';
+  let sessionEpoch = 0;
   const renderSignatures = new Map();
 
   const icons = {
@@ -75,6 +78,12 @@
       tenantRecords: [],
       tenantRequestId: 0,
       loadingTenants: false,
+      deptId: '',
+      deptOptions: [],
+      deptRequestId: 0,
+      loadingDepts: false,
+      deptLoaded: false,
+      deptError: '',
       userKeyword: '',
       userRequestId: 0,
       loadingUsers: false,
@@ -132,6 +141,8 @@
     },
   };
 
+  const initialState = JSON.stringify(state);
+
   function $(id) {
     return document.getElementById(id);
   }
@@ -146,7 +157,8 @@
     let timer = 0;
     return (...args) => {
       clearTimeout(timer);
-      timer = setTimeout(() => fn(...args), ms);
+      const epoch = sessionEpoch;
+      timer = setTimeout(() => { if (epoch === sessionEpoch) fn(...args); }, ms);
     };
   }
 
@@ -277,12 +289,15 @@
     const t = source.teacher;
     const s = source.student;
     return {
+      adminSessionId,
       mode: source.mode === 'student' ? 'student' : 'teacher',
       teacher: {
         activeStep: boundedStep(t.activeStep, 3),
         selectedTenant: t.selectedTenant,
         tenantKeyword: t.tenantKeyword,
         tenantRecords: Array.isArray(t.tenantRecords) ? t.tenantRecords : [],
+        deptId: t.deptId,
+        deptOptions: Array.isArray(t.deptOptions) ? t.deptOptions : [],
         userKeyword: t.userKeyword,
         userPage: pageSnapshot(t.userPage),
         selectedUser: withoutRuntimeToken(t.selectedUser),
@@ -323,6 +338,9 @@
       state.teacher.selectedTenant = t.selectedTenant && typeof t.selectedTenant === 'object' ? t.selectedTenant : null;
       state.teacher.tenantKeyword = typeof t.tenantKeyword === 'string' ? t.tenantKeyword : '';
       state.teacher.tenantRecords = Array.isArray(t.tenantRecords) ? t.tenantRecords : [];
+      state.teacher.deptOptions = Array.isArray(t.deptOptions) ? t.deptOptions : [];
+      state.teacher.deptId = state.teacher.deptOptions.some((dept) => dept.deptId === t.deptId) ? t.deptId : '';
+      state.teacher.deptLoaded = false;
       state.teacher.userKeyword = typeof t.userKeyword === 'string' ? t.userKeyword : '';
       state.teacher.userPage = pageSnapshot(t.userPage);
       state.teacher.selectedUser = withoutRuntimeToken(t.selectedUser);
@@ -388,12 +406,14 @@
   }
 
   async function loadPersistedState() {
+    const epoch = sessionEpoch;
     if (!ns.quickLoginStateStorage) {
       persistenceReady = true;
       return false;
     }
     try {
-      const restored = restorePersistedState(await ns.quickLoginStateStorage.load());
+      const snapshot = await ns.quickLoginStateStorage.load();
+      const restored = epoch === sessionEpoch && restorePersistedState(snapshot);
       persistenceReady = true;
       return restored;
     } catch (error) {
@@ -431,6 +451,7 @@
 
   async function rehydratePersistedSessions() {
     if (!state.adminTokenAvailable) return;
+    const epoch = sessionEpoch;
     const tasks = [];
     const t = state.teacher;
     if (t.selectedUser && !t.selectedUser.aiToken && t.selectedUser.id && t.selectedUser.tenantId) {
@@ -440,6 +461,7 @@
         id: t.selectedUser.id,
         industry: t.selectedUser.industry,
       }).then((result) => {
+        if (epoch !== sessionEpoch) return;
         t.selectedUser = Object.assign({}, t.selectedUser, {
           origin: result.origin,
           aiToken: result.aiToken,
@@ -448,8 +470,9 @@
         });
         t.sessionError = '';
       }).catch((error) => {
+        if (epoch !== sessionEpoch) return;
         t.sessionError = '查询结果已恢复，会话重建失败：' + error.message;
-      }).finally(() => { t.loadingSession = false; }));
+      }).finally(() => { if (epoch === sessionEpoch) t.loadingSession = false; }));
     }
     const s = state.student;
     if (s.selectedAccount?.session && !s.selectedAccount.session.aiToken && s.selectedAccount.loginId && s.selectedAccount.tenantId) {
@@ -459,6 +482,7 @@
         id: s.selectedAccount.loginId,
         industry: s.selectedAccount.industry,
       }).then((result) => {
+        if (epoch !== sessionEpoch) return;
         s.selectedAccount = Object.assign({}, s.selectedAccount, {
           session: Object.assign({}, s.selectedAccount.session, {
             origin: result.origin,
@@ -466,8 +490,9 @@
           }),
         });
       }).catch((error) => {
+        if (epoch !== sessionEpoch) return;
         s.relationError = '查询结果已恢复，会话重建失败：' + error.message;
-      }).finally(() => { s.loadingSession = false; }));
+      }).finally(() => { if (epoch === sessionEpoch) s.loadingSession = false; }));
     }
     await Promise.all(tasks);
     persistStateSoon();
@@ -656,7 +681,7 @@
     });
     existing.slice(steps.length).forEach((button) => button.remove());
     compact.textContent = `步骤 ${activeStep + 1}/${steps.length} · ${steps[activeStep].label}`;
-    ns.workspaceUi?.setPath(teacherMode ? '教师 -> 学生' : '学生 -> 教师');
+    ns.workspaceUi?.setPath(teacherMode ? '教师 -> 学生' : '学生 -> 教师', 'quickLogin');
   }
 
   function onProgressClick(event) {
@@ -677,14 +702,18 @@
   }
 
   async function hasAdminToken() {
+    const epoch = sessionEpoch;
     const tokenState = await ns.token.getToken();
+    if (epoch !== sessionEpoch) return false;
     state.adminTokenAvailable = Boolean(tokenState && tokenState.token);
     renderAuthAvailability();
     return state.adminTokenAvailable;
   }
 
   async function request(type, payload) {
-    const response = await messages.sendToBackground({ type, payload });
+    const epoch = sessionEpoch;
+    const response = await messages.sendToBackground({ type, payload, adminSessionId });
+    if (epoch !== sessionEpoch) throw new Error('后台账号已切换，已忽略原账号的查询结果');
     if (!response || !response.ok) throw new Error(response?.error || '请求失败');
     return response.res ?? response;
   }
@@ -914,6 +943,7 @@
   }
 
   async function performStudentAppLogin(student, button, row) {
+    const epoch = sessionEpoch;
     if (state.loadingLogin || !button) return;
     let payload;
     try {
@@ -949,10 +979,12 @@
       const response = await messages.sendToBackground({ type: 'APP_LOGIN', payload });
       if (!response?.ok) throw new Error(response?.error || '登录失败');
     } catch (error) {
+      if (epoch !== sessionEpoch) return;
       const message = formatAppLoginError(error);
       setActionStatus(message, 'error');
       setStatus(message, 'err');
     } finally {
+      if (epoch !== sessionEpoch) return;
       state.loadingLogin = false;
       row?.removeAttribute('aria-busy');
       button.disabled = false;
@@ -1041,6 +1073,7 @@
     t.activeStep = 1;
     t.userKeyword = '';
     t.userPage = resetPage();
+    resetTeacherDepartments();
     clearTeacherSession();
     $('tenantSearch').value = item.tenantName || '';
     $('tenantList').classList.add('hidden');
@@ -1049,6 +1082,84 @@
     $('teacherAccountSearch').value = '';
     renderTeacherShell();
     focusControl('userSearch');
+    await Promise.all([loadTeacherDepartments(), loadTeacherUsers(true)]);
+  }
+
+  function resetTeacherDepartments() {
+    const t = state.teacher;
+    t.deptId = '';
+    t.deptOptions = [];
+    t.deptRequestId += 1;
+    t.loadingDepts = false;
+    t.deptLoaded = false;
+    t.deptError = '';
+  }
+
+  function renderTeacherDepartments() {
+    const t = state.teacher;
+    const select = $('deptSelect');
+    if (!select) return;
+    toggleRegion('teacherDeptField', Boolean(t.selectedTenant));
+    const options = '<option value="">全部账号（不指定部门）</option>' + t.deptOptions.map((dept) => {
+      const label = '　'.repeat(Math.min(dept.depth, 8)) + dept.deptName +
+        (dept.userCount == null ? '' : `（${dept.userCount} 人）`) + ` · 编号 ${dept.deptId}`;
+      return `<option value="${escapeHtml(dept.deptId)}">${escapeHtml(label)}</option>`;
+    }).join('');
+    setHtmlIfChanged(select, t.deptOptions, options);
+    select.value = t.deptId;
+    select.title = t.deptOptions.find((dept) => dept.deptId === t.deptId)?.path || '全部账号（不指定部门）';
+    select.disabled = !t.selectedTenant || t.loadingDepts || !t.deptOptions.length || state.loadingLogin || state.adminTokenAvailable === false;
+    setInlineStatus('teacherDeptStatus', t.loadingDepts ? '正在读取组织架构…' :
+      (t.deptError || (t.deptLoaded && !t.deptOptions.length ? '暂无组织架构，可查询全部账号' : '')), t.deptError ? 'error' : '');
+    toggleRegion('teacherDeptRetryBtn', Boolean(t.deptError) && !t.loadingDepts);
+  }
+
+  async function loadTeacherDepartments() {
+    const t = state.teacher;
+    if (!t.selectedTenant) return;
+    const selectedTenant = t.selectedTenant;
+    const requestId = ++t.deptRequestId;
+    t.loadingDepts = true;
+    t.deptError = '';
+    renderTeacherDepartments();
+    try {
+      if (!(await hasAdminToken())) throw new Error('请先在「后台账号」获取后台 Token');
+      if (requestId !== t.deptRequestId) return;
+      const response = await request('FETCH_DEPTS', {
+        tenantId: selectedTenant.tenantId, industry: selectedTenant.industry,
+      });
+      if (requestId !== t.deptRequestId) return;
+      t.deptOptions = tenant.flattenDeptOptions(response);
+      t.deptLoaded = true;
+      if (t.deptId && !t.deptOptions.some((dept) => dept.deptId === t.deptId)) {
+        await selectTeacherDepartment('');
+      }
+    } catch (error) {
+      if (requestId === t.deptRequestId) t.deptError = `组织架构读取失败：${error.message}`;
+    } finally {
+      if (requestId === t.deptRequestId) {
+        t.loadingDepts = false;
+        renderTeacherDepartments();
+        persistStateSoon();
+      }
+    }
+  }
+
+  async function selectTeacherDepartment(deptId) {
+    const t = state.teacher;
+    if (!t.selectedTenant || deptId === t.deptId || (deptId && !t.deptOptions.some((dept) => dept.deptId === deptId))) return;
+    t.deptId = deptId;
+    t.activeStep = 1;
+    t.userPage = resetPage();
+    t.userKeyword = '';
+    t.teacherNameKeyword = '';
+    t.teacherAccountKeyword = '';
+    t.studentNameKeyword = '';
+    t.studentCodeKeyword = '';
+    clearTeacherSession();
+    restoreFormValues();
+    renderTeacherShell();
+    renderTeacherStudents();
     await loadTeacherUsers(true);
   }
 
@@ -1061,16 +1172,21 @@
       clearList('userList', 'userEmpty', '正在加载租户用户...');
     }
     const requestId = ++t.userRequestId;
+    const selectedTenant = t.selectedTenant;
+    const deptId = t.deptId;
+    const deptSource = t.deptOptions.find((dept) => dept.deptId === deptId)?.deptSource || tenant.DEFAULT_DEPT_SOURCE;
     t.loadingUsers = true;
     t.userError = '';
     setInlineStatus('teacherSessionStatus', '正在加载租户用户...');
     setStageState('teacherUserStep', 'teacherUserState', { visible: true, status: '加载中' });
     try {
       if (!(await hasAdminToken())) throw new Error('请先在「后台账号」获取后台 Token');
+      if (requestId !== t.userRequestId) return;
       const response = await request('FETCH_USERS', {
-        tenantId: t.selectedTenant.tenantId,
-        deptId: '',
-        industry: t.selectedTenant.industry,
+        tenantId: selectedTenant.tenantId,
+        deptId,
+        deptSource,
+        industry: selectedTenant.industry,
         current: t.userPage.current,
         size: t.userPage.size,
         keyword: t.userKeyword,
@@ -1108,6 +1224,7 @@
     if (!list || !empty) return;
     if (!deps && !shouldRender('teacher-users', {
       tenantId: t.selectedTenant?.tenantId,
+      deptId: t.deptId,
       selectedId: t.selectedUser?.id,
       selectedEnv: t.selectedUser?.env,
       selectedPort: t.selectedUser?.localPort,
@@ -1675,6 +1792,7 @@
 
   function renderTeacherShell() {
     const t = state.teacher;
+    renderTeacherDepartments();
     const tenantReady = Boolean(t.selectedTenant);
     const userReady = Boolean(t.selectedUser);
     const teacherReady = Boolean(t.selectedTeacher);
@@ -2602,6 +2720,7 @@
   }
 
   async function performLoginAction(meta, action, button, row) {
+    const epoch = sessionEpoch;
     if (!meta.id || !meta.tenantId || state.loadingLogin) return;
     const allActions = [...document.querySelectorAll('#quickLoginBody .action-btn, #quickLoginBody .recent-action-btn')];
     const disabledStates = new Map(allActions.map((item) => [item, item.disabled]));
@@ -2631,6 +2750,7 @@
         const query = extractTokenQuery(url);
         if (!query) throw new Error('URL 中未找到 token query');
         const copied = await copyToClipboard(query);
+        if (epoch !== sessionEpoch) return;
         if (!copied) throw new Error('复制失败，请检查浏览器剪贴板权限');
         setActionStatus('已复制 Token query', 'success');
         setStatus('已复制 ?token=…', 'ok');
@@ -2654,9 +2774,11 @@
       setStatus(successText, 'ok');
       refreshRecentAfter = true;
     } catch (error) {
+      if (epoch !== sessionEpoch) return;
       setActionStatus(error.message, 'error');
       setStatus(error.message, 'err');
     } finally {
+      if (epoch !== sessionEpoch) return;
       state.loadingLogin = false;
       disabledStates.forEach((wasDisabled, item) => { item.disabled = wasDisabled; });
       if (row) row.removeAttribute('aria-busy');
@@ -2813,6 +2935,7 @@
   }
 
   async function renderRecent() {
+    const epoch = sessionEpoch;
     const list = $('recentList');
     const count = $('quickRecentCount');
     if (!list) return;
@@ -2823,6 +2946,7 @@
       const response = await request('GET_QUICK_LOGIN_RECENT');
       records = Array.isArray(response.records) ? response.records : (Array.isArray(response) ? response : []);
     } catch (error) {
+      if (epoch !== sessionEpoch) return;
       list.innerHTML = '<div class="recent-empty">' + escapeHtml(error.message || '最近登录读取失败') + '</div>';
       if (count) count.textContent = '读取失败';
       list.removeAttribute('aria-busy');
@@ -2916,6 +3040,7 @@
   }
 
   async function applyRecentToTeacherLookup(meta, button, row) {
+    const epoch = sessionEpoch;
     let selection;
     try {
       selection = buildRecentTeacherSelection(meta);
@@ -2946,6 +3071,7 @@
     try {
       const t = state.teacher;
       clearTeacherSession();
+      resetTeacherDepartments();
       t.selectedTenant = selection.selectedTenant;
       t.tenantKeyword = selection.selectedTenant.tenantName;
       t.tenantRecords = [
@@ -2970,9 +3096,12 @@
       renderTeacherShell();
       $('teacherModePanel')?.scrollIntoView({ block: 'start' });
 
+      await loadTeacherDepartments();
+      if (epoch !== sessionEpoch) return;
       const selected = await selectTeacherUser(selection.selectedUser, {
         dataset: { env: selection.env, localPort: selection.localPort },
       });
+      if (epoch !== sessionEpoch) return;
       if (!selected) throw new Error(t.sessionError || '最近登录账号应用失败');
       if (!t.selectedTeacher) {
         throw new Error(t.teacherError || '未找到与该账号对应的 AI 教师');
@@ -2981,9 +3110,11 @@
       setActionStatus('已应用最近登录信息', 'success');
       setStatus('已应用并查询相关学生', 'ok');
     } catch (error) {
+      if (epoch !== sessionEpoch) return;
       setActionStatus(error.message, 'error');
       setStatus(error.message, 'err');
     } finally {
+      if (epoch !== sessionEpoch) return;
       state.loadingLogin = false;
       disabledStates.forEach((wasDisabled, item) => { item.disabled = wasDisabled; });
       row?.removeAttribute('aria-busy');
@@ -3080,6 +3211,7 @@
       if (t.selectedTenant) {
         t.selectedTenant = null;
         t.userPage = resetPage();
+        resetTeacherDepartments();
         clearTeacherSession();
       }
       t.tenantKeyword = keyword;
@@ -3091,6 +3223,8 @@
       if (state.mode !== 'teacher') return;
       scheduleTenantSearch(tenantSearch.value.trim());
     });
+    $('deptSelect')?.addEventListener('change', (event) => selectTeacherDepartment(event.target.value));
+    $('teacherDeptRetryBtn')?.addEventListener('click', () => loadTeacherDepartments());
 
     const userSearch = $('userSearch');
     const scheduleUserSearch = createDebouncedSearch((keyword) => {
@@ -3251,23 +3385,69 @@
       state.recentExpanded = false;
       renderRecent();
     });
-    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
-      chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName !== 'local' || !Object.keys(changes).some((key) => key.startsWith('adminToken:'))) return;
-        hasAdminToken().then(async () => {
-          await rehydratePersistedSessions();
-          renderTeacherShell();
-          renderStudentShell();
-          renderRecent();
-        }).catch(() => {});
-      });
-    }
     window.addEventListener('pagehide', () => { flushPersistedState(); });
+  }
+
+  function resetForAdminSession(session, tokenAvailable = null) {
+    sessionEpoch += 1;
+    adminSessionId = session?.id || '';
+    activationPromise = null;
+    clearTimeout(persistenceTimer);
+    persistenceTimer = 0;
+    lastPersistedSignature = '';
+    renderSignatures.clear();
+    const fresh = JSON.parse(initialState);
+    // 请求计数只递增，令已经在途的所有查询回调失效。
+    for (const key of ['teacher', 'student']) {
+      for (const field of Object.keys(state[key])) {
+        if (field.endsWith('RequestId')) fresh[key][field] = state[key][field] + 1;
+      }
+      Object.assign(state[key], fresh[key]);
+    }
+    Object.assign(state, { ...fresh, teacher: state.teacher, student: state.student, adminTokenAvailable: tokenAvailable });
+    if (!initialized) return;
+    document.querySelectorAll('#panel-quick [data-render-signature], #quickHistorySection [data-render-signature]')
+      .forEach((element) => { delete element.dataset.renderSignature; });
+    restoreFormValues();
+    updateModeUI();
+    renderAuthAvailability();
+    clearList('tenantList', 'tenantEmpty', '请输入租户条件');
+    renderTeacherShell();
+    renderTeacherStudents();
+    renderStudentShell();
+    setActionStatus('');
+    setInlineStatus('teacherSessionStatus', '');
+    setInlineStatus('accountSessionStatus', '');
+    $('quickHistoryRoleFilter').value = '';
+    $('quickHistoryEnvFilter').value = '';
+    $('recentList').innerHTML = '<div class="recent-empty">暂无最近登录记录</div>';
+    $('recentList').removeAttribute('aria-busy');
+    $('quickRecentCount').textContent = '0 条';
+  }
+
+  function bindAdminSessionChanges() {
+    if (typeof chrome === 'undefined' || !chrome.storage?.onChanged) return;
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local') return;
+      const projectId = ns.currentProject.getCachedProjectId();
+      const sessionChange = changes[`adminSession:${projectId}`];
+      const tokenChange = changes[`adminToken:${projectId}`];
+      if (!sessionChange && !tokenChange) return;
+      if (sessionChange || tokenChange?.oldValue?.token !== tokenChange?.newValue?.token) {
+        resetForAdminSession(sessionChange?.newValue || { id: adminSessionId }, Boolean(tokenChange?.newValue?.token));
+        if (!sessionChange) ns.quickLoginStateStorage?.clear().catch(() => {});
+      }
+      hasAdminToken().catch(() => {});
+    });
   }
 
   async function init() {
     if (initialized) return;
     initialized = true;
+    bindAdminSessionChanges();
+    const epoch = sessionEpoch;
+    const session = await ns.adminLoginHistory?.getSession();
+    if (epoch === sessionEpoch) adminSessionId = session?.id || '';
     await loadPersistedState();
     renderShell();
     bindEvents();
@@ -3292,16 +3472,17 @@
     if (activationPromise) return activationPromise;
     activationPromise = (async () => {
       await hasAdminToken();
+      if (state.teacher.selectedTenant && !state.teacher.deptLoaded) await loadTeacherDepartments();
       await rehydratePersistedSessions();
       renderTeacherShell();
       renderTeacherStudents();
       renderStudentShell();
       await renderRecent();
-    })();
+    })().finally(() => { activationPromise = null; });
     return activationPromise;
   }
 
-  const quickLoginUi = { init, activate };
+  const quickLoginUi = { init, activate, resetForAdminSession };
   ns.quickLoginUi = quickLoginUi;
   /* 截图/冒烟测试用：以假数据直渲染租户用户列表（不触网、不绑选择事件） */
   ns.quickLoginUiDebug = {
@@ -3327,7 +3508,14 @@
       getTeacherReachableStep,
       normalizeAppSiteUrl,
       renderTeacherUsers,
+      loadTeacherDepartments,
+      selectTeacherDepartment,
+      selectTeacherTenant,
+      loadTeacherUsers,
+      resetTeacherDepartments,
       restorePersistedState,
+      resetForAdminSession,
+      request,
       state,
     };
   }
