@@ -781,6 +781,13 @@ if (typeof module !== 'undefined' && module.exports) {
     return Array.isArray(value) ? value[0] : value;
   }
 
+  // 后端同一字段可能返回数组、单值或分隔符字符串，统一成字符串数组。
+  function toStringList(value) {
+    if (value == null || value === '') return [];
+    if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+    return String(value).split(/[,，、\s]+/).filter(Boolean);
+  }
+
   // 状态映射：0 = 在线（正常），1 = 离线（停用）
   // 教师状态映射：0 = 在线，1 = 离线
   function statusInfo(value) {
@@ -983,6 +990,32 @@ if (typeof module !== 'undefined' && module.exports) {
     return map;
   }
 
+  // 组织树节点层级：subDeptType/deptType 1=学段，2=年级，3=班级。
+  function deptNodeType(node) {
+    const raw = String(node?.subDeptType ?? node?.deptType ?? node?.type ?? '').toLowerCase();
+    if (raw === '3' || raw === 'class' || node?.isClass === true) return 'class';
+    if (raw === '2' || raw === 'grade') return 'grade';
+    if (raw === '1' || raw === 'stage' || raw === 'section') return 'stage';
+    return '';
+  }
+
+  // 定位班级所属的学段与年级。缺少层级类型的租户树按位置兜底：
+  // 班级的直接上级视作年级，再上一级视作学段。
+  function resolveClassLineage(ancestors = []) {
+    const usable = ancestors.filter((item) => item && item.id);
+    let stage = usable.filter((item) => item.type === 'stage').at(-1) || null;
+    let grade = usable.filter((item) => item.type === 'grade').at(-1) || null;
+    if (!grade) {
+      const parent = usable.at(-1) || null;
+      if (parent && parent !== stage) grade = parent;
+    }
+    if (!stage) {
+      const index = grade ? usable.indexOf(grade) : usable.length;
+      stage = index > 0 ? usable[index - 1] : null;
+    }
+    return { stage, grade };
+  }
+
   // 将 schoolDept/tree 的班级叶子扁平化，保留完整路径以区分不同年级的同名班级。
   function extractClassOptions(treeData) {
     const payload = treeData?.data ?? treeData?.result ?? treeData;
@@ -992,7 +1025,7 @@ if (typeof module !== 'undefined' && module.exports) {
           : (Array.isArray(payload?.records) ? payload.records : [])));
     const classes = [];
 
-    const walk = (nodes, parentPath = [], parentIds = []) => {
+    const walk = (nodes, parentPath = [], parentIds = [], ancestors = []) => {
       if (!Array.isArray(nodes)) return;
       for (const node of nodes) {
         if (!node || typeof node !== 'object') continue;
@@ -1001,9 +1034,9 @@ if (typeof module !== 'undefined' && module.exports) {
         const path = name ? [...parentPath, name] : parentPath;
         const ids = id ? [...parentIds, id] : parentIds;
         const children = Array.isArray(node.children) ? node.children : [];
-        const typeText = String(node.subDeptType ?? node.deptType ?? node.type ?? '').toLowerCase();
-        const isClass = typeText === '3' || typeText === 'class' || node.isClass === true;
-        if (isClass && id) {
+        const nodeType = deptNodeType(node);
+        if (nodeType === 'class' && id) {
+          const { stage, grade } = resolveClassLineage(ancestors);
           classes.push({
             id,
             name,
@@ -1011,14 +1044,129 @@ if (typeof module !== 'undefined' && module.exports) {
             path,
             parentId: pickFirstString(node.parentId),
             ancestorIds: ids.slice(0, -1),
+            stageId: stage?.id || '',
+            stageName: stage?.name || '',
+            gradeId: grade?.id || '',
+            gradeName: grade?.name || '',
           });
         }
-        if (children.length) walk(children, path, ids);
+        if (children.length) walk(children, path, ids, [...ancestors, { id, name, type: nodeType }]);
       }
     };
 
     walk(roots);
     return classes;
+  }
+
+  // 教学职务上的部门可能是学段/年级/班级，统一展开成班级 id。
+  function expandDeptIdsToClassIds(deptIds, classOptions = []) {
+    const source = Array.isArray(deptIds) ? deptIds : [deptIds];
+    const targets = new Set(source.map((id) => String(id ?? '').trim()).filter(Boolean));
+    if (!targets.size) return [];
+    const result = [];
+    for (const item of (Array.isArray(classOptions) ? classOptions : [])) {
+      const id = pickFirstString(item?.id);
+      if (!id) continue;
+      const ancestorIds = Array.isArray(item?.ancestorIds) ? item.ancestorIds : [];
+      if (targets.has(id) || ancestorIds.some((ancestorId) => targets.has(String(ancestorId)))) result.push(id);
+    }
+    return result;
+  }
+
+  // 教师详情 → 可筛选的教学范围（学科 × 班级）。
+  // 没有学科的任教关系（班主任、管理班级等）归入空学科，只在「全部学科」下出现。
+  function buildTeacherScopeEntries(detail, classOptions = []) {
+    const classById = new Map((Array.isArray(classOptions) ? classOptions : [])
+      .filter((item) => item && item.id)
+      .map((item) => [String(item.id), item]));
+    const entries = [];
+    const seen = new Set();
+    const addEntry = (subject, classId) => {
+      const cls = classById.get(String(classId));
+      if (!cls) return;
+      const key = subject + '¦' + cls.id;
+      if (seen.has(key)) return;
+      seen.add(key);
+      entries.push({
+        subject,
+        classId: String(cls.id),
+        className: cls.name || '',
+        classLabel: cls.label || cls.name || '',
+        gradeId: cls.gradeId || '',
+        gradeName: cls.gradeName || '',
+        stageId: cls.stageId || '',
+        stageName: cls.stageName || '',
+      });
+    };
+
+    const subjectDetails = Array.isArray(detail?.schoolSubjectTeachersDetail)
+      ? detail.schoolSubjectTeachersDetail
+      : [];
+    for (const item of subjectDetails) {
+      if (!item || typeof item !== 'object') continue;
+      const subjects = toStringList(item.subjectNames ?? item.subjectName ?? item.subject);
+      const deptIds = toStringList(item.deptIds ?? item.deptId ?? item.classIds ?? item.classId ?? item.clazzIds ?? item.clazzId);
+      for (const classId of expandDeptIdsToClassIds(deptIds, classOptions)) {
+        if (subjects.length) subjects.forEach((subject) => addEntry(subject, classId));
+        else addEntry('', classId);
+      }
+    }
+
+    // 其它来源（班主任、管理班级等）补齐尚未出现的班级，避免筛选项少于实际教学范围。
+    const covered = new Set(entries.map((entry) => entry.classId));
+    for (const classId of expandDeptIdsToClassIds(extractTeacherClassIds(detail), classOptions)) {
+      if (!covered.has(String(classId))) addEntry('', classId);
+    }
+    return entries;
+  }
+
+  // 学科 → 学段 → 年级 → 班级 逐级联动：每级选项只来自上级已选范围，
+  // 上级变化后失效的下级选择自动清空；classIds 为当前筛选命中的班级。
+  function resolveTeacherScope(entries = [], filter = {}) {
+    const rows = (Array.isArray(entries) ? entries : []).filter((row) => row && row.classId);
+    const uniqueOptions = (list, valueKey, buildLabel) => {
+      const seen = new Set();
+      const options = [];
+      for (const row of list) {
+        const value = String(row?.[valueKey] ?? '');
+        if (!value || seen.has(value)) continue;
+        seen.add(value);
+        options.push({ value, label: buildLabel(row) || value });
+      }
+      return options;
+    };
+    const pick = (options, value) => (options.some((item) => item.value === String(value || '')) ? String(value) : '');
+
+    const subjects = uniqueOptions(rows, 'subject', (row) => row.subject);
+    const subject = pick(subjects, filter?.subject);
+    const bySubject = subject ? rows.filter((row) => row.subject === subject) : rows;
+
+    const stages = uniqueOptions(bySubject, 'stageId', (row) => row.stageName);
+    const stageId = pick(stages, filter?.stageId);
+    const byStage = stageId ? bySubject.filter((row) => row.stageId === stageId) : bySubject;
+
+    // 未选中的上级层级并入下级标签，避免同名年级/班级无法区分。
+    const grades = uniqueOptions(byStage, 'gradeId', (row) => [stageId ? '' : row.stageName, row.gradeName].filter(Boolean).join(' / '));
+    const gradeId = pick(grades, filter?.gradeId);
+    const byGrade = gradeId ? byStage.filter((row) => row.gradeId === gradeId) : byStage;
+
+    const classes = uniqueOptions(byGrade, 'classId', (row) => [
+      stageId ? '' : row.stageName,
+      gradeId ? '' : row.gradeName,
+      row.className,
+    ].filter(Boolean).join(' / '));
+    const classId = pick(classes, filter?.classId);
+    const matched = classId ? byGrade.filter((row) => row.classId === classId) : byGrade;
+
+    return {
+      filter: { subject, stageId, gradeId, classId },
+      subjects,
+      stages,
+      grades,
+      classes,
+      classIds: [...new Set(matched.map((row) => row.classId))],
+      active: Boolean(subject || stageId || gradeId || classId),
+    };
   }
 
   function normalizeClassText(value) {
@@ -1167,20 +1315,14 @@ if (typeof module !== 'undefined' && module.exports) {
     if (!detail || typeof detail !== 'object') return [];
     const duties = [];
 
-    const toStrArray = (v) => {
-      if (v == null || v === '') return [];
-      if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
-      return String(v).split(/[,，、\s]+/).filter(Boolean);
-    };
-
     const subjectList = Array.isArray(detail.schoolSubjectTeachersDetail)
       ? detail.schoolSubjectTeachersDetail
       : [];
     for (const item of subjectList) {
       if (!item || typeof item !== 'object') continue;
-      const subjects = toStrArray(item.subjectNames ?? item.subjectName ?? item.subject);
-      const deptIds = toStrArray(item.deptIds ?? item.deptId ?? item.classIds ?? item.classId);
-      const deptNames = toStrArray(item.deptNames ?? item.deptName ?? item.classNames ?? item.className);
+      const subjects = toStringList(item.subjectNames ?? item.subjectName ?? item.subject);
+      const deptIds = toStringList(item.deptIds ?? item.deptId ?? item.classIds ?? item.classId);
+      const deptNames = toStringList(item.deptNames ?? item.deptName ?? item.classNames ?? item.className);
       // deptId 优先走班级树翻译成全名；翻译不到时回落同位置的 deptName
       const classes = deptIds.length
         ? deptIds.map((id, i) => idNameMap[id] || deptNames[i] || '').filter(Boolean)
@@ -1269,6 +1411,9 @@ if (typeof module !== 'undefined' && module.exports) {
     extractDetailData,
     buildDeptIdNameMap,
     extractClassOptions,
+    expandDeptIdsToClassIds,
+    buildTeacherScopeEntries,
+    resolveTeacherScope,
     findStudentClass,
     matchStudentCandidates,
     buildClassTeacherMap,
@@ -1497,19 +1642,22 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function transitionView(update, kind = 'content') {
     if (typeof update !== 'function') return null;
-    activeContentAnimation?.cancel();
+    // finish 而非 cancel：被打断的动画落到自然终态，连点时不会先弹回起点再重放。
+    activeContentAnimation?.finish();
     activeContentAnimation = null;
     update();
 
     const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     const target = transitionTarget(kind);
-    if (reduceMotion || typeof target?.animate !== 'function') return null;
+    if (reduceMotion || !target || typeof target.animate !== 'function') return null;
 
+    // 只做位移、不碰透明度：对整块面板做透明度下潜本身就会被看成一次闪光，
+    // 而 transform 走合成层，不会重绘面板内容。
     const animation = target.animate([
-      { opacity: 0.88, transform: 'translate3d(0, 4px, 0)' },
-      { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+      { transform: 'translate3d(0, 5px, 0)' },
+      { transform: 'translate3d(0, 0, 0)' },
     ], {
-      duration: 150,
+      duration: 170,
       easing: 'cubic-bezier(.2, .8, .2, 1)',
     });
     activeContentAnimation = animation;
@@ -1698,21 +1846,35 @@ if (typeof module !== 'undefined' && module.exports) {
     row.dataset.compactSignature = signature;
   }
 
+  const COMPACT_ROW_SELECTOR =
+    '.recent-item, .list-item, .quick-action-row, .student-item, .quick-stage-summary, .lookup-teacher-item';
+
   function compactActions(root = document) {
-    root.querySelectorAll(
-      '.recent-item, .list-item, .quick-action-row, .student-item, .quick-stage-summary, .lookup-teacher-item'
-    ).forEach(compactRowActions);
+    root.querySelectorAll(COMPACT_ROW_SELECTOR).forEach(compactRowActions);
+    // 传入的 root 本身可能就是一行（来自 MutationObserver 的局部扫描）。
+    if (typeof root.matches === 'function' && root.matches(COMPACT_ROW_SELECTOR)) compactRowActions(root);
   }
 
   function observeActions() {
     if (observed || typeof MutationObserver === 'undefined') return;
     observed = true;
-    const observer = new MutationObserver(() => {
-      if (compactScheduled) return;
+    const pendingRoots = new Set();
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        const target = mutation.target?.nodeType === 1 ? mutation.target : null;
+        if (target) pendingRoots.add(target);
+      });
+      if (compactScheduled || !pendingRoots.size) return;
       compactScheduled = true;
       requestAnimationFrame(() => {
         compactScheduled = false;
-        compactActions();
+        const roots = [...pendingRoots];
+        pendingRoots.clear();
+        // 只扫本轮真正变动过的子树，不再每次都把整个文档重扫一遍。
+        roots.forEach((root) => { if (root.isConnected) compactActions(root); });
+        // 折叠逻辑自身要插/删 "..." 按钮。这些记录是同步产生的，若不在这里丢弃就会在下一个
+        // 微任务检查点把 observer 再唤醒一轮（虽然会被 compactSignature 挡掉，但白跑一趟）。
+        observer.takeRecords();
       });
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -2234,6 +2396,9 @@ if (typeof module !== 'undefined' && module.exports) {
     'teacherRefreshBtn', 'teacherNameSearch', 'teacherAccountSearch',
     'teacherList', 'teacherEmpty', 'teacherPager', 'studentSection',
     'studentSectionTitle', 'studentRefreshBtn', 'teacherDuties', 'studentAppSiteUrl',
+    'studentScopeFilters', 'studentScopeToggle', 'studentScopeCount',
+    'studentSubjectFilter', 'studentStageFilter',
+    'studentGradeFilter', 'studentClassFilter',
     'studentNameSearch', 'studentCodeSearch', 'studentList', 'studentEmpty', 'studentPager',
     'accountSearchField', 'accountSearch', 'accountList', 'accountEmpty', 'accountPager',
     'studentAccountStep', 'studentAccountState', 'studentAccountSummary',
@@ -2263,6 +2428,7 @@ if (typeof module !== 'undefined' && module.exports) {
     open: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
     copy: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
     student: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
+    aiReview: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 3.2l1.9 4.9 4.9 1.9-4.9 1.9L11 16.8 9.1 11.9 4.2 10l4.9-1.9z"/><path d="M18 15.4l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z"/></svg>',
     teacher: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
     delete: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
   };
@@ -2307,6 +2473,9 @@ if (typeof module !== 'undefined' && module.exports) {
       teacherDetailRequestId: 0,
       loadingDuties: false,
       classIds: [],
+      classScopes: [],
+      scopeFilter: { subject: '', stageId: '', gradeId: '', classId: '' },
+      scopeExpanded: false,
       studentNameKeyword: '',
       studentCodeKeyword: '',
       studentRequestId: 0,
@@ -2380,6 +2549,55 @@ if (typeof module !== 'undefined' && module.exports) {
     element.dataset.renderSignature = signature;
     element.innerHTML = html;
     return true;
+  }
+
+  // 按 key 就地复用列表行。内容签名不变的行完全不动 DOM，只有新增/内容变化的行才重建，
+  // 选中态一律交给 sync 幂等改写 —— 于是「点一下换个选中项」不再整列重排，焦点也留在被点的行上。
+  // 签名变化时整行重建而不是原地改写，避免复用行上挂着旧 item 的闭包；事件处理器统一读
+  // row.__item，因此即便行被复用，拿到的也始终是本次渲染传入的对象。
+  function reconcileList(listEl, items, spec = {}) {
+    if (!listEl) return;
+    const doc = spec.document || (typeof document === 'undefined' ? null : document);
+    const list = Array.isArray(items) ? items : [];
+    const existing = new Map();
+    Array.from(listEl.children || []).forEach((row) => {
+      const rowKey = row?.dataset?.rowKey;
+      if (rowKey != null && rowKey !== '' && !existing.has(rowKey)) existing.set(rowKey, row);
+    });
+
+    const ordered = [];
+    list.forEach((item, index) => {
+      const rowKey = String(spec.key ? spec.key(item, index) : index);
+      const signature = JSON.stringify(spec.signature ? spec.signature(item, index) : null);
+      let row = existing.get(rowKey);
+      if (row && row.dataset.rowSignature === signature) {
+        existing.delete(rowKey);
+      } else {
+        if (row) existing.delete(rowKey);
+        row = spec.create(item, index, doc);
+        if (!row) return;
+        row.dataset.rowKey = rowKey;
+        row.dataset.rowSignature = signature;
+      }
+      row.__item = item;
+      if (spec.sync) spec.sync(row, item, index);
+      ordered.push(row);
+    });
+
+    // 先摘掉本轮不再出现的行，再用游标按序归位：位置已经对的行完全不碰。
+    existing.forEach((row) => {
+      if (row.parentNode === listEl && typeof listEl.removeChild === 'function') listEl.removeChild(row);
+    });
+    ordered.forEach((row, index) => {
+      const atCursor = listEl.children ? listEl.children[index] : null;
+      if (atCursor === row) return;
+      if (atCursor && typeof listEl.insertBefore === 'function') listEl.insertBefore(row, atCursor);
+      else listEl.appendChild(row);
+    });
+    // 多余的尾部节点（例如上一轮写入的占位提示）一并清掉。
+    Array.from(listEl.children || []).slice(ordered.length).forEach((row) => {
+      if (typeof listEl.removeChild === 'function') listEl.removeChild(row);
+    });
   }
 
   function createDebouncedSearch(invalidate, load, ms = SEARCH_DEBOUNCE) {
@@ -2458,6 +2676,23 @@ if (typeof module !== 'undefined' && module.exports) {
     return Number.isInteger(step) ? Math.max(0, Math.min(step, max)) : 0;
   }
 
+  function normalizeScopeFilter(filter) {
+    const source = filter && typeof filter === 'object' ? filter : {};
+    return {
+      subject: String(source.subject || ''),
+      stageId: String(source.stageId || ''),
+      gradeId: String(source.gradeId || ''),
+      classId: String(source.classId || ''),
+    };
+  }
+
+  // 教师的教学范围（班级、学科/学段/年级/班级筛选）随所选教师整体失效。
+  function resetTeacherScope(teacherState = state.teacher) {
+    teacherState.classIds = [];
+    teacherState.classScopes = [];
+    teacherState.scopeFilter = normalizeScopeFilter(null);
+  }
+
   function getTeacherReachableStep(teacherState = state.teacher) {
     if (!teacherState.selectedTenant) return 0;
     if (!teacherState.selectedUser) return 1;
@@ -2510,6 +2745,8 @@ if (typeof module !== 'undefined' && module.exports) {
         teacherPage: pageSnapshot(t.teacherPage),
         selectedTeacher: t.selectedTeacher,
         classIds: Array.isArray(t.classIds) ? t.classIds : [],
+        classScopes: Array.isArray(t.classScopes) ? t.classScopes : [],
+        scopeFilter: normalizeScopeFilter(t.scopeFilter),
         studentNameKeyword: t.studentNameKeyword,
         studentCodeKeyword: t.studentCodeKeyword,
         studentPage: pageSnapshot(t.studentPage),
@@ -2553,6 +2790,9 @@ if (typeof module !== 'undefined' && module.exports) {
       state.teacher.teacherPage = pageSnapshot(t.teacherPage);
       state.teacher.selectedTeacher = t.selectedTeacher && typeof t.selectedTeacher === 'object' ? t.selectedTeacher : null;
       state.teacher.classIds = Array.isArray(t.classIds) ? t.classIds : [];
+      state.teacher.classScopes = Array.isArray(t.classScopes) ? t.classScopes : [];
+      // 只恢复筛选形状；与教学范围对不上的选择由首次 resolveTeacherScope 收敛清空。
+      state.teacher.scopeFilter = normalizeScopeFilter(t.scopeFilter);
       state.teacher.studentNameKeyword = typeof t.studentNameKeyword === 'string' ? t.studentNameKeyword : '';
       state.teacher.studentCodeKeyword = typeof t.studentCodeKeyword === 'string' ? t.studentCodeKeyword : '';
       state.teacher.studentPage = pageSnapshot(t.studentPage);
@@ -2742,7 +2982,7 @@ if (typeof module !== 'undefined' && module.exports) {
     t.selectedTeacher = null;
     t.teacherPage = resetPage();
     t.studentPage = resetPage();
-    t.classIds = [];
+    resetTeacherScope(t);
     t.tenantRequestId += 1;
     t.userRequestId += 1;
     t.teacherRequestId += 1;
@@ -2867,6 +3107,8 @@ if (typeof module !== 'undefined' && module.exports) {
         { label: '关联教师', complete: Boolean(state.student.selectedClassId) },
       ];
     track.style.setProperty('--step-count', String(steps.length));
+    // 轨道填充比例交给 CSS 做 scaleX 过渡，避免动画 width 触发重排。
+    track.style.setProperty('--step-progress', steps.length > 1 ? String(activeStep / (steps.length - 1)) : '1');
     const existing = [...track.querySelectorAll('.quick-progress-step')];
     steps.forEach((step, index) => {
       let button = existing[index];
@@ -2935,12 +3177,18 @@ if (typeof module !== 'undefined' && module.exports) {
 
   function buildPagerUI(el, page, go) {
     if (!el) return;
-    el.innerHTML = '';
     const total = Number(page.total) || 0;
     const size = Number(page.size) || 10;
     const current = Number(page.current) || 1;
     const pages = Math.ceil(total / size);
-    if (!total || pages <= 1) { el.classList.add('hidden'); return; }
+    const shouldHide = !total || pages <= 1;
+    // 分页结构没变就别重建，否则每次列表渲染都要连带把整条分页器拆掉重画。
+    // 空态分支会自行把分页器藏起来，所以可见性也要参与比对，避免该显示时被跳过。
+    const signature = JSON.stringify([current, size, total]);
+    if (el.dataset.pagerSignature === signature && el.classList.contains('hidden') === shouldHide) return;
+    el.dataset.pagerSignature = signature;
+    el.innerHTML = '';
+    if (shouldHide) { el.classList.add('hidden'); return; }
     el.classList.remove('hidden');
     const add = (label, ariaLabel, target, disabled, active) => {
       const button = document.createElement('button');
@@ -2982,7 +3230,7 @@ if (typeof module !== 'undefined' && module.exports) {
       '<button class="action-btn quick-action-btn primary" type="button" data-action="open" ' + attrs + suffix + ' title="打开 AI 平台" aria-label="打开 AI 平台">' + icons.open + '</button>' +
       '<button class="action-btn quick-action-btn" type="button" data-action="copy" ' + attrs + suffix + ' title="复制 token" aria-label="复制 token">' + icons.copy + '</button>' +
       '<button class="action-btn quick-action-btn" type="button" data-action="student" ' + attrs + suffix + ' title="学生评价" aria-label="学生评价">' + icons.student + '</button>' +
-      '<button class="action-btn quick-action-btn" type="button" data-action="aiReview" ' + attrs + suffix + ' title="AI评价（前海港湾）" aria-label="AI评价（前海港湾）">' + icons.student + '</button>' +
+      '<button class="action-btn quick-action-btn" type="button" data-action="aiReview" ' + attrs + suffix + ' title="AI评价（前海港湾）" aria-label="AI评价（前海港湾）">' + icons.aiReview + '</button>' +
       '<button class="action-btn quick-action-btn" type="button" data-action="teacher" ' + attrs + suffix + ' title="教师评价" aria-label="教师评价">' + icons.teacher + '</button>' +
       '</div>';
   }
@@ -3248,8 +3496,8 @@ if (typeof module !== 'undefined' && module.exports) {
     const list = $('tenantList');
     const empty = $('tenantEmpty');
     if (!list || !empty) return;
-    list.innerHTML = '';
     if (!records.length) {
+      list.innerHTML = '';
       list.classList.add('hidden');
       empty.textContent = '未找到租户';
       empty.classList.remove('hidden');
@@ -3257,17 +3505,25 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     empty.classList.add('hidden');
     list.classList.remove('hidden');
-    records.forEach((raw) => {
-      const item = tenant.normalizeTenant(raw);
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'list-item quick-list-button' + (state.teacher.selectedTenant?.tenantId === item.tenantId ? ' active' : '');
-      row.setAttribute('aria-pressed', String(state.teacher.selectedTenant?.tenantId === item.tenantId));
-      row.innerHTML = '<span class="list-item-content"><span class="list-item-title">' +
-        escapeHtml(item.tenantName || '(未命名)') + '</span><span class="list-item-meta">' +
-        escapeHtml(item.domain || item.contactPhone || item.tenantId) + '</span></span>';
-      row.addEventListener('click', () => selectTeacherTenant(item));
-      list.appendChild(row);
+    const normalizedTenants = records.map((raw) => tenant.normalizeTenant(raw));
+    reconcileList(list, normalizedTenants, {
+      key: (item) => item.tenantId,
+      signature: (item) => [item.tenantName, item.domain, item.contactPhone, item.tenantId],
+      create: (item) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'list-item quick-list-button';
+        row.innerHTML = '<span class="list-item-content"><span class="list-item-title">' +
+          escapeHtml(item.tenantName || '(未命名)') + '</span><span class="list-item-meta">' +
+          escapeHtml(item.domain || item.contactPhone || item.tenantId) + '</span></span>';
+        row.addEventListener('click', () => selectTeacherTenant(row.__item));
+        return row;
+      },
+      sync: (row, item) => {
+        const selected = state.teacher.selectedTenant?.tenantId === item.tenantId;
+        row.classList.toggle('active', selected);
+        row.setAttribute('aria-pressed', String(selected));
+      },
     });
   }
 
@@ -3426,20 +3682,8 @@ if (typeof module !== 'undefined' && module.exports) {
     const empty = getEl('userEmpty');
     const normalized = (t.userPage.records || []).map(tenant.normalizeUser);
     if (!list || !empty) return;
-    if (!deps && !shouldRender('teacher-users', {
-      tenantId: t.selectedTenant?.tenantId,
-      deptId: t.deptId,
-      selectedId: t.selectedUser?.id,
-      selectedEnv: t.selectedUser?.env,
-      selectedPort: t.selectedUser?.localPort,
-      loadingUsers: t.loadingUsers,
-      loadingSession: t.loadingSession,
-      error: t.userError,
-      page: [t.userPage.current, t.userPage.total],
-      records: normalized.map((item) => [item.id, item.userName, item.account, item.phone, item.userId, item.roleName]),
-    })) return;
-    list.innerHTML = '';
     if (!t.selectedTenant) {
+      list.innerHTML = '';
       list.classList.add('hidden');
       empty.textContent = '先选择租户';
       empty.classList.remove('hidden');
@@ -3447,6 +3691,7 @@ if (typeof module !== 'undefined' && module.exports) {
       return;
     }
     if (!normalized.length) {
+      list.innerHTML = '';
       list.classList.add('hidden');
       empty.textContent = t.loadingUsers
         ? '正在加载租户用户...'
@@ -3459,45 +3704,58 @@ if (typeof module !== 'undefined' && module.exports) {
     empty.classList.add('hidden');
     list.classList.remove('hidden');
     const doc = d.document || document;
-    normalized.forEach((user) => {
-      const selected = t.selectedUser?.id === user.id;
-      const env = 'online';
-      const localPort = DEFAULT_DEV_PORT;
-      const displayName = user.userName || '(未命名)';
-      const avatarText = Array.from(String(user.userName || user.account || '?').trim())[0] || '?';
-      const row = doc.createElement('div');
-      row.className = 'list-item quick-action-row quick-target-container quick-tenant-user-row' + (selected ? ' active' : '');
-      row.dataset.env = env;
-      row.dataset.localPort = localPort;
-      row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="' + selected + '"' + (t.loadingSession ? ' disabled' : '') + '>' +
-        '<span class="quick-user-avatar" aria-hidden="true">' + escapeHtml(avatarText.toUpperCase()) + '</span>' +
-        '<span class="list-item-content"><span class="list-item-title">' +
-        '<span class="quick-user-name">' + escapeHtml(displayName) + '</span>' +
-        (user.roleName ? '<span class="list-item-role">' + escapeHtml(user.roleName) + '</span>' : '') +
-        '</span><span class="list-item-meta">' + escapeHtml(user.account || user.phone || user.userId) + '</span></span></button>' +
-        '<div class="quick-user-toolbar">' +
-        actionTargetControls({
-          id: user.id,
-          tenantName: t.selectedTenant.tenantName,
-          userName: user.userName,
-        }, env, localPort) +
-        actionButtons({
-          id: user.id,
-          tenantId: t.selectedTenant.tenantId,
-          tenantName: t.selectedTenant.tenantName,
-          domain: t.selectedTenant.domain,
-          industry: t.selectedTenant.industry,
-          userName: user.userName,
-          role: 'teacher',
-          env,
-          localPort,
-        }, !user.id || t.loadingSession) +
-        '</div>';
-      if (!deps) {
-        row.querySelector('.quick-row-select')?.addEventListener('click', () => selectTeacherUser(user, row));
-      }
-      syncActionTarget(row, env, localPort);
-      list.appendChild(row);
+    reconcileList(list, normalized, {
+      document: doc,
+      key: (user) => user.id,
+      // 选中态不入签名：换选中项时所有行原样复用，只走下面的 sync 改 class。
+      signature: (user) => [
+        user.id, user.userName, user.account, user.phone, user.userId, user.roleName,
+        t.selectedTenant.tenantId, t.loadingSession,
+      ],
+      create: (user) => {
+        const env = 'online';
+        const localPort = DEFAULT_DEV_PORT;
+        const displayName = user.userName || '(未命名)';
+        const avatarText = Array.from(String(user.userName || user.account || '?').trim())[0] || '?';
+        const row = doc.createElement('div');
+        row.className = 'list-item quick-action-row quick-target-container quick-tenant-user-row';
+        row.dataset.env = env;
+        row.dataset.localPort = localPort;
+        row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="false"' + (t.loadingSession ? ' disabled' : '') + '>' +
+          '<span class="quick-user-avatar" aria-hidden="true">' + escapeHtml(avatarText.toUpperCase()) + '</span>' +
+          '<span class="list-item-content"><span class="list-item-title">' +
+          '<span class="quick-user-name">' + escapeHtml(displayName) + '</span>' +
+          (user.roleName ? '<span class="list-item-role">' + escapeHtml(user.roleName) + '</span>' : '') +
+          '</span><span class="list-item-meta">' + escapeHtml(user.account || user.phone || user.userId) + '</span></span></button>' +
+          '<div class="quick-user-toolbar">' +
+          actionTargetControls({
+            id: user.id,
+            tenantName: t.selectedTenant.tenantName,
+            userName: user.userName,
+          }, env, localPort) +
+          actionButtons({
+            id: user.id,
+            tenantId: t.selectedTenant.tenantId,
+            tenantName: t.selectedTenant.tenantName,
+            domain: t.selectedTenant.domain,
+            industry: t.selectedTenant.industry,
+            userName: user.userName,
+            role: 'teacher',
+            env,
+            localPort,
+          }, !user.id || t.loadingSession) +
+          '</div>';
+        if (!deps) {
+          row.querySelector('.quick-row-select')?.addEventListener('click', () => selectTeacherUser(row.__item, row));
+        }
+        syncActionTarget(row, env, localPort);
+        return row;
+      },
+      sync: (row, user) => {
+        const selected = t.selectedUser?.id === user.id;
+        row.classList.toggle('active', selected);
+        row.querySelector('.quick-row-select')?.setAttribute('aria-pressed', String(selected));
+      },
     });
     const pagerEl = getEl('userPager');
     if (d.buildPagerUI) {
@@ -3579,7 +3837,7 @@ if (typeof module !== 'undefined' && module.exports) {
       t.teacherPage = resetPage();
       t.selectedTeacher = null;
       t.studentPage = resetPage();
-      t.classIds = [];
+      resetTeacherScope(t);
       t.teacherDetailRequestId += 1;
       t.studentRequestId += 1;
       t.loadingDuties = false;
@@ -3632,15 +3890,8 @@ if (typeof module !== 'undefined' && module.exports) {
     const list = $('teacherList');
     const empty = $('teacherEmpty');
     if (!list || !empty) return;
-    if (!shouldRender('teachers', {
-      selectedId: t.selectedTeacher?.id,
-      loading: t.loadingTeachers,
-      error: t.teacherError,
-      page: [t.teacherPage.current, t.teacherPage.total],
-      records: t.teacherPage.records.map((item) => [item.id, item.name, item.account, item.statusText, item.statusOn]),
-    })) return;
-    list.innerHTML = '';
     if (!t.teacherPage.records.length) {
+      list.innerHTML = '';
       list.classList.add('hidden');
       empty.textContent = t.loadingTeachers
         ? '正在加载 AI 教师...'
@@ -3652,21 +3903,33 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     empty.classList.add('hidden');
     list.classList.remove('hidden');
-    t.teacherPage.records.forEach((teacherItem) => {
-      const selected = t.selectedTeacher?.id === teacherItem.id;
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'teacher-item quick-list-button' + (selected ? ' selected' : '');
-      row.setAttribute('aria-pressed', String(selected));
-      const status = teacherItem.statusText
-        ? '<span class="teacher-badge ' + (teacherItem.statusOn === true ? 'status-on' : 'status-off') + '">' + escapeHtml(teacherItem.statusText) + '</span>'
-        : '';
-      row.innerHTML = '<span class="teacher-item-header"><span class="teacher-item-name">' +
-        escapeHtml(teacherItem.name || '(未命名)') + '</span><span class="teacher-item-account">' +
-        escapeHtml(teacherItem.account || '') + '</span></span>' +
-        (status ? '<span class="teacher-item-badges">' + status + '</span>' : '');
-      row.addEventListener('click', () => selectTeacher(teacherItem));
-      list.appendChild(row);
+    reconcileList(list, t.teacherPage.records, {
+      key: (teacherItem) => teacherItem.id,
+      signature: (teacherItem) => [teacherItem.id, teacherItem.name, teacherItem.account, teacherItem.statusText, teacherItem.statusOn],
+      create: (teacherItem) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'teacher-item quick-list-button';
+        const status = teacherItem.statusText
+          ? '<span class="teacher-badge ' + (teacherItem.statusOn === true ? 'status-on' : 'status-off') + '">' + escapeHtml(teacherItem.statusText) + '</span>'
+          : '';
+        // 与上一步的租户用户行同构：头像锚点 + 姓名/状态首行 + 账号次行。
+        // 账号是重名时唯一的区分依据，必须紧跟姓名，不能被 space-between 甩到行尾。
+        const avatarText = Array.from(String(teacherItem.name || teacherItem.account || '?').trim())[0] || '?';
+        row.innerHTML = '<span class="quick-user-avatar" aria-hidden="true">' +
+          escapeHtml(avatarText.toUpperCase()) + '</span>' +
+          '<span class="teacher-item-body"><span class="teacher-item-header">' +
+          '<span class="teacher-item-name">' + escapeHtml(teacherItem.name || '(未命名)') + '</span>' +
+          status + '</span><span class="teacher-item-account">' +
+          escapeHtml(teacherItem.account || '') + '</span></span>';
+        row.addEventListener('click', () => selectTeacher(row.__item));
+        return row;
+      },
+      sync: (row, teacherItem) => {
+        const selected = t.selectedTeacher?.id === teacherItem.id;
+        row.classList.toggle('selected', selected);
+        row.setAttribute('aria-pressed', String(selected));
+      },
     });
     buildPagerUI($('teacherPager'), t.teacherPage, (page) => {
       t.teacherPage.current = page;
@@ -3684,7 +3947,7 @@ if (typeof module !== 'undefined' && module.exports) {
     t.selectedTeacher = teacherItem;
     t.activeStep = 3;
     t.studentPage = resetPage();
-    t.classIds = [];
+    resetTeacherScope(t);
     renderTeacherShell();
     await loadTeacherRelations(teacherItem);
     focusControl('studentNameSearch');
@@ -3696,7 +3959,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const requestId = ++t.teacherDetailRequestId;
     t.loadingDuties = true;
     t.studentError = '';
-    t.classIds = [];
+    resetTeacherScope(t);
     renderTeacherStudentArea('加载教师教学班级中...');
     try {
       const detailResponse = await request('FETCH_TEACHER_DETAIL', {
@@ -3717,19 +3980,15 @@ if (typeof module !== 'undefined' && module.exports) {
       const classOptions = tenant.extractClassOptions(treeResponse);
       teacherItem.detailDuties = tenant.extractTeachDuties(detail, idNameMap);
       const extractedClassIds = tenant.extractTeacherClassIds(detail);
-      const extractedSet = new Set(extractedClassIds.map((id) => String(id)));
-      const classIdsInTree = classOptions
-        .filter((item) => extractedSet.has(String(item.id)))
-        .map((item) => String(item.id));
       // 教师教学职务可以挂在班级、年级或学段；若详情给的是上级部门，
       // 将班级树中所有下级班级展开，确保“教师查学生”不漏掉下级班级。
-      const expandedClassIds = new Set(classIdsInTree);
-      classOptions.forEach((item) => {
-        const ancestors = Array.isArray(item.ancestorIds) ? item.ancestorIds : [];
-        if (ancestors.some((id) => extractedSet.has(String(id)))) expandedClassIds.add(String(item.id));
-      });
-      t.classIds = expandedClassIds.size ? [...expandedClassIds] : extractedClassIds;
+      const expandedClassIds = tenant.expandDeptIdsToClassIds(extractedClassIds, classOptions);
+      t.classIds = expandedClassIds.length ? expandedClassIds : extractedClassIds;
+      // 学科/学段/年级/班级筛选项只来自该教师的教学范围，班级树缺失时为空并隐藏筛选。
+      t.classScopes = tenant.buildTeacherScopeEntries(detail, classOptions);
+      t.scopeFilter = tenant.resolveTeacherScope(t.classScopes, t.scopeFilter).filter;
       renderTeacherDuties();
+      renderTeacherScopeFilters();
       if (!t.classIds.length) {
         renderTeacherStudentArea('未找到该教师的教学班级');
         return;
@@ -3817,6 +4076,81 @@ if (typeof module !== 'undefined' && module.exports) {
     el.classList.remove('hidden');
   }
 
+  // 按当前筛选收敛教学范围，并顺带把已失效的下级选择写回 state。
+  function resolveTeacherScope() {
+    const t = state.teacher;
+    const scope = tenant.resolveTeacherScope(t.classScopes, t.scopeFilter);
+    t.scopeFilter = scope.filter;
+    return scope;
+  }
+
+  // 有教学范围时以筛选结果为准；班级树缺失（范围为空）时回落教师详情里的全部班级。
+  function getTeacherStudentClassIds() {
+    const t = state.teacher;
+    if (!Array.isArray(t.classScopes) || !t.classScopes.length) return t.classIds;
+    const classIds = resolveTeacherScope().classIds;
+    return classIds.length ? classIds : t.classIds;
+  }
+
+  function renderScopeSelect(id, options, value, allLabel) {
+    const select = $(id);
+    if (!select) return;
+    toggleRegion(id, options.length > 0);
+    setHtmlIfChanged(select, [allLabel, options], '<option value="">' + escapeHtml(allLabel) + '</option>' +
+      options.map((item) => '<option value="' + escapeHtml(item.value) + '">' + escapeHtml(item.label) + '</option>').join(''));
+    select.value = value || '';
+    select.title = options.find((item) => item.value === value)?.label || allLabel;
+    select.disabled = !options.length || state.loadingLogin;
+  }
+
+  function renderTeacherScopeFilters() {
+    const t = state.teacher;
+    const hasScope = Boolean(t.selectedTeacher) && Array.isArray(t.classScopes) && t.classScopes.length > 0;
+    // 披露区：有教学范围才出现筛选入口，展开与否由用户控制，收起时靠计数徽标回述已生效条件。
+    toggleRegion('studentScopeToggle', hasScope);
+    toggleRegion('studentScopeFilters', hasScope && t.scopeExpanded);
+    const toggle = $('studentScopeToggle');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', String(hasScope && t.scopeExpanded));
+      toggle.classList.toggle('is-open', hasScope && t.scopeExpanded);
+    }
+    if (!hasScope) {
+      t.scopeExpanded = false;
+      return;
+    }
+    const scope = resolveTeacherScope();
+    renderScopeSelect('studentSubjectFilter', scope.subjects, scope.filter.subject, '全部学科');
+    renderScopeSelect('studentStageFilter', scope.stages, scope.filter.stageId, '全部学段');
+    renderScopeSelect('studentGradeFilter', scope.grades, scope.filter.gradeId, '全部年级');
+    renderScopeSelect('studentClassFilter', scope.classes, scope.filter.classId, '全部班级');
+    const active = Object.values(scope.filter).filter(Boolean).length;
+    const count = $('studentScopeCount');
+    if (count) {
+      count.textContent = String(active);
+      count.hidden = active === 0;
+    }
+    if (toggle) toggle.classList.toggle('has-filters', active > 0);
+  }
+
+  function toggleTeacherScopeFilters() {
+    const t = state.teacher;
+    if (!Array.isArray(t.classScopes) || !t.classScopes.length) return;
+    t.scopeExpanded = !t.scopeExpanded;
+    renderTeacherScopeFilters();
+  }
+
+  // 四级筛选联动：只改动当前层级，失效的下级选择由 resolveTeacherScope 清空。
+  function setTeacherScopeFilter(key, value) {
+    const t = state.teacher;
+    if (!Array.isArray(t.classScopes) || !t.classScopes.length) return;
+    const next = normalizeScopeFilter(Object.assign({}, t.scopeFilter, { [key]: String(value || '') }));
+    if (JSON.stringify(next) === JSON.stringify(t.scopeFilter)) return;
+    t.scopeFilter = tenant.resolveTeacherScope(t.classScopes, next).filter;
+    renderTeacherScopeFilters();
+    persistStateSoon();
+    return loadTeacherStudents(true, t.teacherDetailRequestId);
+  }
+
   async function loadTeacherStudents(reset, detailRequestId) {
     if (state.mode !== 'teacher') return;
     const t = state.teacher;
@@ -3828,7 +4162,9 @@ if (typeof module !== 'undefined' && module.exports) {
     const requestId = ++t.studentRequestId;
     t.loadingStudents = true;
     renderTeacherStudentArea('加载相关学生中...');
-    const classIds = new Set(t.classIds.map((id) => String(id)));
+    // 只查询学科/学段/年级/班级筛选命中的班级，未筛选时等于教师的全部教学班级。
+    const scopedClassIds = getTeacherStudentClassIds().map((id) => String(id));
+    const classIds = new Set(scopedClassIds);
     const isRelated = (student) => {
       const raw = student.raw && typeof student.raw === 'object' ? student.raw : {};
       const values = [student.classId, raw.classId, raw.clazzId, raw.deptId, raw.schoolDeptId]
@@ -3845,8 +4181,8 @@ if (typeof module !== 'undefined' && module.exports) {
       size: t.studentPage.size,
       name: t.studentNameKeyword,
       code: t.studentCodeKeyword,
-      clazzId: t.classIds.length === 1 ? t.classIds[0] : '',
-      clazzIds: t.classIds.length > 1 ? t.classIds : [],
+      clazzId: scopedClassIds.length === 1 ? scopedClassIds[0] : '',
+      clazzIds: scopedClassIds.length > 1 ? scopedClassIds : [],
     };
     try {
       let response;
@@ -3870,7 +4206,7 @@ if (typeof module !== 'undefined' && module.exports) {
       });
       const related = normalized.filter(isRelated);
       // 筛选被忽略、返回空页或缺少班级字段时，扫描完整分页再过滤。
-      const needsFullScan = Boolean(t.classIds.length) && (
+      const needsFullScan = Boolean(scopedClassIds.length) && (
         usedFallback || !normalized.length || !hasClassInfo || related.length !== normalized.length
       );
       let scannedAll = false;
@@ -3935,18 +4271,10 @@ if (typeof module !== 'undefined' && module.exports) {
     const list = $('studentList');
     const empty = $('studentEmpty');
     if (!list || !empty) return;
-    if (!shouldRender('teacher-students', {
-      tenantId: t.selectedTenant?.tenantId,
-      selectedTeacherId: t.selectedTeacher?.id,
-      loading: t.loadingStudents,
-      error: t.studentError,
-      page: [t.studentPage.current, t.studentPage.total],
-      records: t.studentPage.records.map((item) => [item.id, item.name, item.code, item.account, item.className, item.statusText, item.statusOn]),
-    })) return;
-    list.innerHTML = '';
     if (!t.studentPage.records.length) {
+      list.innerHTML = '';
       list.classList.add('hidden');
-      empty.textContent = '暂无相关学生';
+      empty.textContent = resolveTeacherScope().active ? '当前筛选条件下暂无相关学生' : '暂无相关学生';
       empty.classList.remove('hidden');
       const pager = $('studentPager');
       if (pager) pager.classList.add('hidden');
@@ -3954,39 +4282,46 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     empty.classList.add('hidden');
     list.classList.remove('hidden');
-    t.studentPage.records.forEach((student) => {
-      const row = document.createElement('div');
-      row.className = 'student-item';
-      const status = student.statusText
-        ? '<span class="student-item-badge ' + (student.statusOn === true ? 'status-on' : 'status-off') + '">' + escapeHtml(student.statusText) + '</span>'
-        : '';
-      row.innerHTML = '<div class="student-item-info"><div class="student-item-name">' +
-        escapeHtml(student.name || '(未命名)') + '</div><div class="student-item-meta">' +
-        (student.code ? '<span>学号: ' + escapeHtml(student.code) + '</span>' : '') +
-        (student.className ? '<span>班级: ' + escapeHtml(student.className) + '</span>' : '') +
-        '</div></div><div class="student-item-actions">' + status +
-        '<button class="action-btn quick-action-btn student-app-login-btn" type="button" title="一键登录 APP" aria-label="一键登录 APP"' +
-        (!(student.account || student.code) || !t.selectedTenant?.tenantId ? ' disabled aria-disabled="true"' : '') + '>' +
-        icons.login + '</button>' +
-        '<button class="action-btn quick-action-btn student-copy-btn" type="button" title="复制学生登录信息" aria-label="复制学生登录信息">' +
-        icons.copy + '</button></div>';
-      row.querySelector('.student-app-login-btn')?.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        performStudentAppLogin(student, event.currentTarget, row);
-      });
-      row.querySelector('.student-copy-btn')?.addEventListener('click', async () => {
-        const credentials = buildStudentCredentialsText(student, t.selectedTenant?.tenantName);
-        const copied = await copyToClipboard(credentials);
-        if (!copied) {
-          setActionStatus('复制失败，请检查浏览器剪贴板权限', 'error');
-          setStatus('复制学生登录信息失败', 'err');
-          return;
-        }
-        setActionStatus('已复制学生登录信息', 'success');
-        setStatus('已复制学生登录信息', 'ok');
-      });
-      list.appendChild(row);
+    reconcileList(list, t.studentPage.records, {
+      key: (student) => student.id,
+      signature: (student) => [
+        student.id, student.name, student.code, student.account, student.className,
+        student.statusText, student.statusOn, t.selectedTenant?.tenantId,
+      ],
+      create: (student) => {
+        const row = document.createElement('div');
+        row.className = 'student-item';
+        const status = student.statusText
+          ? '<span class="student-item-badge ' + (student.statusOn === true ? 'status-on' : 'status-off') + '">' + escapeHtml(student.statusText) + '</span>'
+          : '';
+        row.innerHTML = '<div class="student-item-info"><div class="student-item-name">' +
+          escapeHtml(student.name || '(未命名)') + '</div><div class="student-item-meta">' +
+          (student.code ? '<span>学号: ' + escapeHtml(student.code) + '</span>' : '') +
+          (student.className ? '<span>班级: ' + escapeHtml(student.className) + '</span>' : '') +
+          '</div></div><div class="student-item-actions">' + status +
+          '<button class="action-btn quick-action-btn student-app-login-btn" type="button" title="一键登录 APP" aria-label="一键登录 APP"' +
+          (!(student.account || student.code) || !t.selectedTenant?.tenantId ? ' disabled aria-disabled="true"' : '') + '>' +
+          icons.login + '</button>' +
+          '<button class="action-btn quick-action-btn student-copy-btn" type="button" title="复制学生登录信息" aria-label="复制学生登录信息">' +
+          icons.copy + '</button></div>';
+        row.querySelector('.student-app-login-btn')?.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          performStudentAppLogin(row.__item, event.currentTarget, row);
+        });
+        row.querySelector('.student-copy-btn')?.addEventListener('click', async () => {
+          const credentials = buildStudentCredentialsText(row.__item, t.selectedTenant?.tenantName);
+          const copied = await copyToClipboard(credentials);
+          if (!copied) {
+            setActionStatus('复制失败，请检查浏览器剪贴板权限', 'error');
+            setStatus('复制学生登录信息失败', 'err');
+            return;
+          }
+          setActionStatus('已复制学生登录信息', 'success');
+          setStatus('已复制学生登录信息', 'ok');
+        });
+        return row;
+      },
     });
     buildPagerUI($('studentPager'), t.studentPage, (page) => {
       t.studentPage.current = page;
@@ -4080,6 +4415,7 @@ if (typeof module !== 'undefined' && module.exports) {
     renderTeacherUsers();
     renderTeachers();
     renderTeacherDuties();
+    renderTeacherScopeFilters();
     renderProgress();
     persistStateSoon();
   }
@@ -4140,19 +4476,8 @@ if (typeof module !== 'undefined' && module.exports) {
     const list = $('accountList');
     const empty = $('accountEmpty');
     if (!list || !empty) return;
-    if (!shouldRender('student-accounts', {
-      selectedId: s.selectedAccount?.id,
-      selectedEnv: s.selectedAccount?.env,
-      selectedPort: s.selectedAccount?.localPort,
-      loadingAccounts: s.loadingAccounts,
-      loadingSession: s.loadingSession,
-      error: s.accountError,
-      keyword: s.keyword,
-      page: [s.accountPage.current, s.accountPage.total],
-      records: s.accountPage.records.map((item) => [item.id, item.loginId, item.username, item.account, item.tenantId, item.tenantName, item.type, item.accountType, item.env, item.localPort]),
-    })) return;
-    list.innerHTML = '';
     if (!s.accountPage.records.length) {
+      list.innerHTML = '';
       list.classList.add('hidden');
       empty.textContent = s.loadingAccounts
         ? '正在搜索学生账号...'
@@ -4164,40 +4489,52 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     empty.classList.add('hidden');
     list.classList.remove('hidden');
-    s.accountPage.records.forEach((account) => {
-      const selected = s.selectedAccount?.id === account.id;
-      const env = normalizeEnv(account.env);
-      const localPort = normalizePort(account.localPort);
-      const row = document.createElement('div');
-      row.className = 'list-item quick-action-row quick-target-container' + (selected ? ' active' : '');
-      row.dataset.env = env;
-      row.dataset.localPort = localPort;
-      const typeText = account.type === '1' || account.accountType === '1' || /学生|student/i.test(String(account.type || '')) ? '学生' : '账号';
-      row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="' + selected + '"' + (s.loadingSession ? ' disabled' : '') + '><span class="list-item-content"><span class="list-item-title">' +
-        escapeHtml(account.username || '(未命名)') + '<span class="list-item-role">' + typeText + '</span></span>' +
-        '<span class="list-item-meta">' + escapeHtml(account.account || '无账号') + ' · ' +
-        escapeHtml(account.tenantName || account.tenantId || '未知租户') + '</span></span></button>' +
-        '<div class="quick-user-toolbar">' +
-        actionTargetControls({
-          id: account.loginId,
-          tenantName: account.tenantName,
-          userName: account.username,
-        }, env, localPort, !account.loginId || !account.tenantId || s.loadingSession) +
-        actionButtons({
-          id: account.loginId,
-          tenantId: account.tenantId,
-          tenantName: account.tenantName,
-          domain: account.domain,
-          industry: account.industry,
-          userName: account.username,
-          role: 'student',
-          env,
-          localPort,
-        }, !account.loginId || !account.tenantId || s.loadingSession) +
-        '</div>';
-      row.querySelector('.quick-row-select')?.addEventListener('click', () => selectStudentAccount(account, row));
-      syncActionTarget(row, env, localPort);
-      list.appendChild(row);
+    reconcileList(list, s.accountPage.records, {
+      key: (account) => account.id,
+      signature: (account) => [
+        account.id, account.loginId, account.username, account.account, account.tenantId,
+        account.tenantName, account.type, account.accountType, account.env, account.localPort,
+        s.loadingSession,
+      ],
+      create: (account) => {
+        const env = normalizeEnv(account.env);
+        const localPort = normalizePort(account.localPort);
+        const row = document.createElement('div');
+        row.className = 'list-item quick-action-row quick-target-container';
+        row.dataset.env = env;
+        row.dataset.localPort = localPort;
+        const typeText = account.type === '1' || account.accountType === '1' || /学生|student/i.test(String(account.type || '')) ? '学生' : '账号';
+        row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="false"' + (s.loadingSession ? ' disabled' : '') + '><span class="list-item-content"><span class="list-item-title">' +
+          escapeHtml(account.username || '(未命名)') + '<span class="list-item-role">' + typeText + '</span></span>' +
+          '<span class="list-item-meta">' + escapeHtml(account.account || '无账号') + ' · ' +
+          escapeHtml(account.tenantName || account.tenantId || '未知租户') + '</span></span></button>' +
+          '<div class="quick-user-toolbar">' +
+          actionTargetControls({
+            id: account.loginId,
+            tenantName: account.tenantName,
+            userName: account.username,
+          }, env, localPort, !account.loginId || !account.tenantId || s.loadingSession) +
+          actionButtons({
+            id: account.loginId,
+            tenantId: account.tenantId,
+            tenantName: account.tenantName,
+            domain: account.domain,
+            industry: account.industry,
+            userName: account.username,
+            role: 'student',
+            env,
+            localPort,
+          }, !account.loginId || !account.tenantId || s.loadingSession) +
+          '</div>';
+        row.querySelector('.quick-row-select')?.addEventListener('click', () => selectStudentAccount(row.__item, row));
+        syncActionTarget(row, env, localPort);
+        return row;
+      },
+      sync: (row, account) => {
+        const selected = s.selectedAccount?.id === account.id;
+        row.classList.toggle('active', selected);
+        row.querySelector('.quick-row-select')?.setAttribute('aria-pressed', String(selected));
+      },
     });
     buildPagerUI($('accountPager'), s.accountPage, (page) => {
       s.accountPage.current = page;
@@ -4271,6 +4608,8 @@ if (typeof module !== 'undefined' && module.exports) {
     if (list) {
       list.innerHTML = '';
       list.classList.add('hidden');
+      // 清空后必须让渲染键失效，否则下次同班级会被早退守卫误判为「已渲染」。
+      delete list.dataset.relationRenderKey;
     }
     if (empty) {
       empty.textContent = message || '请选择学生或班级';
@@ -4328,15 +4667,9 @@ if (typeof module !== 'undefined' && module.exports) {
     const empty = $('lookupStudentEmpty');
     const pager = $('lookupStudentPager');
     if (!list || !empty || !pager) return;
-    if (!shouldRender('matched-students', {
-      error: s.relationError,
-      selectedId: s.selectedStudent?.id,
-      classes: s.classes.map((item) => [item.id, item.label, item.name]),
-      students: s.matchedStudents.map((item) => [item.id, item.name, item.code, item.account, item.classId, item.className]),
-    })) return;
-    list.innerHTML = '';
     pager.classList.add('hidden');
     if (!s.matchedStudents.length) {
+      list.innerHTML = '';
       list.classList.add('hidden');
       empty.textContent = s.relationLoading ? '正在匹配 AI 学生…' : (s.relationError || '未找到严格匹配的 AI 学生');
       empty.classList.remove('hidden');
@@ -4344,21 +4677,31 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     empty.classList.add('hidden');
     list.classList.remove('hidden');
-    s.matchedStudents.forEach((student) => {
-      const matchedClass = tenant.findStudentClass(student, s.classes);
-      const row = document.createElement('button');
-      row.type = 'button';
-      row.className = 'student-item lookup-student-item quick-student-select' +
-        (s.selectedStudent?.id === student.id ? ' selected' : '');
-      row.setAttribute('aria-pressed', String(s.selectedStudent?.id === student.id));
-      row.innerHTML = '<span class="student-item-info"><span class="student-item-name">' +
-        escapeHtml(student.name || '(未命名)') + '</span><span class="student-item-meta">' +
-        (student.code ? '<span>学号: ' + escapeHtml(student.code) + '</span>' : '') +
-        (student.account ? '<span>账号: ' + escapeHtml(student.account) + '</span>' : '') +
-        '<span>' + escapeHtml(matchedClass?.label || student.className || '班级未识别') + '</span>' +
-        '</span></span>';
-      row.addEventListener('click', () => selectMatchedStudent(student));
-      list.appendChild(row);
+    reconcileList(list, s.matchedStudents, {
+      key: (student) => student.id,
+      signature: (student) => [
+        student.id, student.name, student.code, student.account, student.classId, student.className,
+        tenant.findStudentClass(student, s.classes)?.label,
+      ],
+      create: (student) => {
+        const matchedClass = tenant.findStudentClass(student, s.classes);
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'student-item lookup-student-item quick-student-select';
+        row.innerHTML = '<span class="student-item-info"><span class="student-item-name">' +
+          escapeHtml(student.name || '(未命名)') + '</span><span class="student-item-meta">' +
+          (student.code ? '<span>学号: ' + escapeHtml(student.code) + '</span>' : '') +
+          (student.account ? '<span>账号: ' + escapeHtml(student.account) + '</span>' : '') +
+          '<span>' + escapeHtml(matchedClass?.label || student.className || '班级未识别') + '</span>' +
+          '</span></span>';
+        row.addEventListener('click', () => selectMatchedStudent(row.__item));
+        return row;
+      },
+      sync: (row, student) => {
+        const selected = s.selectedStudent?.id === student.id;
+        row.classList.toggle('selected', selected);
+        row.setAttribute('aria-pressed', String(selected));
+      },
     });
   }
 
@@ -4744,9 +5087,18 @@ if (typeof module !== 'undefined' && module.exports) {
     });
   }
 
-  async function renderRelationTeachers(classId) {
+  async function renderRelationTeachers(classId, options = {}) {
     if (state.mode !== 'student') return;
     const s = state.student;
+    // renderStudentShell 只要有选中班级就会调用这里，于是学生模式下任何无关点击都会把
+    // 已渲染好的教师列表拆掉重放一遍。班级与学生都没变、列表也已填充时直接跳过。
+    const renderKey = JSON.stringify([String(classId), s.selectedStudent?.id || '', s.relationRequestId]);
+    const resultList = $('lookupTeacherList');
+    if (!options.force && !s.resolvingTeachers &&
+        resultList?.dataset.relationRenderKey === renderKey && resultList.children.length) {
+      return;
+    }
+    if (resultList) resultList.dataset.relationRenderKey = renderKey;
     const relationRequestId = s.relationRequestId;
     const teacherResolveRequestId = invalidateRelationTeacherResolution();
     const cls = s.classes.find((item) => String(item.id) === String(classId));
@@ -4764,8 +5116,8 @@ if (typeof module !== 'undefined' && module.exports) {
     head.classList.remove('hidden');
     title.textContent = (s.selectedStudent?.name ? s.selectedStudent.name + ' · ' : '') + (cls.label || cls.name || cls.id);
     count.textContent = rawTeachers.length + ' 位教师';
-    list.innerHTML = '';
     if (!rawTeachers.length) {
+      list.innerHTML = '';
       list.classList.add('hidden');
       empty.textContent = '该班级暂无关联教师';
       empty.classList.remove('hidden');
@@ -4775,47 +5127,60 @@ if (typeof module !== 'undefined' && module.exports) {
     empty.classList.add('hidden');
     s.resolvingTeachers = true;
     updateRelationBusy();
-    list.innerHTML = '<div class="list-empty">正在反查教师租户账号…</div>';
+    // 账号池已缓存时反查不跨任何 await，解析在同一帧内完成，占位写进去只会变成一帧闪光；
+    // 真要走网络时才提示，否则切班级期间会一直挂着上一个班的教师，比空着更容易误读。
+    const accountsCached = Array.isArray(s.regularAccountsByTenant[String(s.selectedAccount?.tenantId || '')]);
+    if (!accountsCached) {
+      list.innerHTML = '<div class="list-empty">正在反查教师租户账号…</div>';
+    }
 
     // 无论后台账号反查是否成功，都保留 AI 平台返回的关系记录。反查失败时
     // 只禁用登录相关操作，避免用户误以为班级没有教师或丢失关系上下文。
     const renderRows = (teachers, note) => {
-      list.innerHTML = '';
-      teachers.forEach((teacherItem) => {
-        const env = normalizeEnv(teacherItem.env);
-        const localPort = normalizePort(teacherItem.localPort);
-        const row = document.createElement('div');
-        row.className = 'list-item lookup-teacher-item quick-action-row quick-target-container' + (!teacherItem.loginId ? ' relation-disabled' : '');
-        row.dataset.env = env;
-        row.dataset.localPort = localPort;
-        const duties = teacherItem.duties?.length
-          ? '<div class="lookup-teacher-duties">' + teacherItem.duties.map((duty) => '<span class="teacher-badge teach">' + escapeHtml(duty) + '</span>').join('') + '</div>'
-          : '';
-        const accountText = teacherItem.loginAccount || teacherItem.account || teacherItem.userId || '未解析后台账号';
-        const unresolvedText = !teacherItem.loginId ? ' · 关系字段未反查到后台账号' : '';
-        row.innerHTML = '<div class="list-item-content"><div class="list-item-title">' +
-          escapeHtml(teacherItem.loginName || teacherItem.name || '(未命名)') + '</div><div class="list-item-meta">' +
-          escapeHtml(accountText) + unresolvedText + (note ? ' · ' + escapeHtml(note) : '') + '</div>' + duties + '</div>' +
-          '<div class="quick-user-toolbar">' +
-          actionTargetControls({
-            id: teacherItem.loginId,
-            tenantName: teacherItem.tenantName,
-            userName: teacherItem.loginName || teacherItem.name,
-          }, env, localPort, !teacherItem.loginId) +
-          actionButtons({
-            id: teacherItem.loginId,
-            tenantId: teacherItem.tenantId,
-            tenantName: teacherItem.tenantName,
-            domain: teacherItem.domain,
-            industry: teacherItem.industry,
-            userName: teacherItem.loginName || teacherItem.name,
-            role: 'teacher',
-            env,
-            localPort,
-          }, !teacherItem.loginId) +
-          '</div>';
-        syncActionTarget(row, env, localPort);
-        list.appendChild(row);
+      reconcileList(list, teachers, {
+        key: (teacherItem, index) => teacherItem.loginId || teacherItem.tmbId || teacherItem.userId || `idx-${index}`,
+        signature: (teacherItem) => [
+          teacherItem.loginId, teacherItem.loginName, teacherItem.name, teacherItem.loginAccount,
+          teacherItem.account, teacherItem.userId, teacherItem.tenantId, teacherItem.tenantName,
+          teacherItem.domain, teacherItem.industry, teacherItem.env, teacherItem.localPort,
+          teacherItem.duties, note,
+        ],
+        create: (teacherItem) => {
+          const env = normalizeEnv(teacherItem.env);
+          const localPort = normalizePort(teacherItem.localPort);
+          const row = document.createElement('div');
+          row.className = 'list-item lookup-teacher-item quick-action-row quick-target-container' + (!teacherItem.loginId ? ' relation-disabled' : '');
+          row.dataset.env = env;
+          row.dataset.localPort = localPort;
+          const duties = teacherItem.duties?.length
+            ? '<div class="lookup-teacher-duties">' + teacherItem.duties.map((duty) => '<span class="teacher-badge teach">' + escapeHtml(duty) + '</span>').join('') + '</div>'
+            : '';
+          const accountText = teacherItem.loginAccount || teacherItem.account || teacherItem.userId || '未解析后台账号';
+          const unresolvedText = !teacherItem.loginId ? ' · 关系字段未反查到后台账号' : '';
+          row.innerHTML = '<div class="list-item-content"><div class="list-item-title">' +
+            escapeHtml(teacherItem.loginName || teacherItem.name || '(未命名)') + '</div><div class="list-item-meta">' +
+            escapeHtml(accountText) + unresolvedText + (note ? ' · ' + escapeHtml(note) : '') + '</div>' + duties + '</div>' +
+            '<div class="quick-user-toolbar">' +
+            actionTargetControls({
+              id: teacherItem.loginId,
+              tenantName: teacherItem.tenantName,
+              userName: teacherItem.loginName || teacherItem.name,
+            }, env, localPort, !teacherItem.loginId) +
+            actionButtons({
+              id: teacherItem.loginId,
+              tenantId: teacherItem.tenantId,
+              tenantName: teacherItem.tenantName,
+              domain: teacherItem.domain,
+              industry: teacherItem.industry,
+              userName: teacherItem.loginName || teacherItem.name,
+              role: 'teacher',
+              env,
+              localPort,
+            }, !teacherItem.loginId) +
+            '</div>';
+          syncActionTarget(row, env, localPort);
+          return row;
+        },
       });
       if (!teachers.length) {
         list.classList.add('hidden');
@@ -4972,8 +5337,12 @@ if (typeof module !== 'undefined' && module.exports) {
         const apps = await request('FETCH_OTHER_APPS', { origin: session.origin, aiToken: session.token });
         target = buildAiReviewUrl(url, apps, targetLocalPort);
       } else target = buildDirectUrl(url, targetLocalPort);
-      await request('OPEN_LOGIN_URL', { url: target });
-      const successText = action === 'open' ? '已打开 AI 平台' : '已打开评价页面';
+      // 「打开 AI 平台」允许复用当前标签页：目标与当前标签页同源（线上域名一致，或本地端口一致）
+      // 时原地跳转，否则新开标签页。评价类入口是附加页面，始终新开标签页。
+      const opened = await request('OPEN_LOGIN_URL', { url: target, reuseCurrentTab: action === 'open' });
+      const successText = action === 'open'
+        ? (opened?.reused ? '已在当前标签页打开 AI 平台' : '已打开 AI 平台')
+        : '已打开评价页面';
       setActionStatus(successText, 'success');
       setStatus(successText, 'ok');
       refreshRecentAfter = true;
@@ -5464,7 +5833,7 @@ if (typeof module !== 'undefined' && module.exports) {
       t.selectedTeacher = null;
       t.teacherPage = resetPage();
       t.studentPage = resetPage();
-      t.classIds = [];
+      resetTeacherScope(t);
       renderTeacherShell();
       clearList('teacherList', 'teacherEmpty', '等待搜索...');
       const pager = $('teacherPager');
@@ -5512,6 +5881,20 @@ if (typeof module !== 'undefined' && module.exports) {
     });
     $('teacherRefreshBtn')?.addEventListener('click', () => {
       if (state.mode === 'teacher') loadTeachers(true);
+    });
+    $('studentScopeToggle')?.addEventListener('click', () => {
+      if (state.mode === 'teacher') toggleTeacherScopeFilters();
+    });
+    [
+      ['studentSubjectFilter', 'subject'],
+      ['studentStageFilter', 'stageId'],
+      ['studentGradeFilter', 'gradeId'],
+      ['studentClassFilter', 'classId'],
+    ].forEach(([id, key]) => {
+      $(id)?.addEventListener('change', (event) => {
+        if (state.mode !== 'teacher') return;
+        setTeacherScopeFilter(key, event.target.value);
+      });
     });
     $('studentRefreshBtn')?.addEventListener('click', () => {
       if (state.mode === 'teacher') loadTeacherStudents(true, state.teacher.teacherDetailRequestId);
@@ -5592,7 +5975,7 @@ if (typeof module !== 'undefined' && module.exports) {
     window.addEventListener('pagehide', () => { flushPersistedState(); });
   }
 
-  function resetForAdminSession(session, tokenAvailable = null) {
+  async function resetForAdminSession(session, tokenAvailable = null) {
     sessionEpoch += 1;
     adminSessionId = session?.id || '';
     activationPromise = null;
@@ -5610,6 +5993,8 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     Object.assign(state, { ...fresh, teacher: state.teacher, student: state.student, adminTokenAvailable: tokenAvailable });
     if (!initialized) return;
+    // 初始化完成前只清状态，不触碰 DOM：否则未初始化的 renderRecent 会给出失败/空内容，
+    // 后续 init 内嵌 renderRecent 与之竞态，可能被其错误结果覆盖。
     document.querySelectorAll('#panel-quick [data-render-signature], #quickHistorySection [data-render-signature]')
       .forEach((element) => { delete element.dataset.renderSignature; });
     restoreFormValues();
@@ -5624,9 +6009,9 @@ if (typeof module !== 'undefined' && module.exports) {
     setInlineStatus('accountSessionStatus', '');
     $('quickHistoryRoleFilter').value = '';
     $('quickHistoryEnvFilter').value = '';
-    $('recentList').innerHTML = '<div class="recent-empty">暂无最近登录记录</div>';
-    $('recentList').removeAttribute('aria-busy');
-    $('quickRecentCount').textContent = '0 条';
+    // 列表交给 renderRecent() 刷新：同一账号 token 过期自动重登只换会话标识，
+    // 最近记录依然有效；切换账号/项目时 storage 已被清空，渲染自然会显示为空。
+    await renderRecent();
   }
 
   function bindAdminSessionChanges() {
@@ -5638,7 +6023,8 @@ if (typeof module !== 'undefined' && module.exports) {
       const tokenChange = changes[`adminToken:${projectId}`];
       if (!sessionChange && !tokenChange) return;
       if (sessionChange || tokenChange?.oldValue?.token !== tokenChange?.newValue?.token) {
-        resetForAdminSession(sessionChange?.newValue || { id: adminSessionId }, Boolean(tokenChange?.newValue?.token));
+        const resetResult = resetForAdminSession(sessionChange?.newValue || { id: adminSessionId }, Boolean(tokenChange?.newValue?.token));
+        resetResult?.catch?.(() => {});
         if (!sessionChange) ns.quickLoginStateStorage?.clear().catch(() => {});
       }
       hasAdminToken().catch(() => {});
@@ -5715,7 +6101,11 @@ if (typeof module !== 'undefined' && module.exports) {
       loadTeacherDepartments,
       selectTeacherDepartment,
       selectTeacherTenant,
+      selectTeacher,
       loadTeacherUsers,
+      loadTeacherStudents,
+      setTeacherScopeFilter,
+      toggleTeacherScopeFilters,
       resetTeacherDepartments,
       restorePersistedState,
       resetForAdminSession,

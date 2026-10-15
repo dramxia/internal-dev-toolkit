@@ -76,7 +76,10 @@ assert.match(workspaceSource, /ensureFeatureInitialized\(workspace\.feature\)[\s
 assert.match(workspaceSource, /requestIdleCallback\(run/, '非首屏模块应分批在空闲阶段预热');
 assert.match(workspaceSource, /transitionView\(update, 'workspace'\)/, '底部模块应使用显式轻量视图过渡');
 assert.doesNotMatch(uiSource, /document\.startViewTransition|::view-transition/, '主内容动画不得使用会覆盖任务坞的 top-layer View Transition');
-assert.match(uiSource, /activeContentAnimation\?\.cancel\(\)/, '快速切换应取消上一段内容动画');
+// finish 而非 cancel：两者都会终止上一段动画，但 cancel 会先把元素弹回动画起点再重放，
+// 连续点击时这一下回弹本身就是可见的闪烁。
+assert.match(uiSource, /activeContentAnimation\?\.finish\(\)/, '快速切换应终止上一段内容动画且不回弹');
+assert.doesNotMatch(uiSource, /opacity: 0?\.\d+, transform/, '内容过渡不得对整块面板做透明度下潜');
 assert.match(uiSource, /target\.animate\(\[/, '主内容应使用容器内 WAAPI 动画');
 assert.match(popupHtml, /\.workspace-main\s*\{[\s\S]*position:\s*relative;[\s\S]*isolation:\s*isolate;/, '主内容动画必须限制在独立层叠上下文');
 assert.doesNotMatch(popupHtml, /::view-transition|view-transition-name|data-view-transition/, '样式不得创建浏览器 top-layer 过渡快照');

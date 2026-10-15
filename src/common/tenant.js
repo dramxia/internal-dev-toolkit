@@ -202,6 +202,13 @@
     return Array.isArray(value) ? value[0] : value;
   }
 
+  // 后端同一字段可能返回数组、单值或分隔符字符串，统一成字符串数组。
+  function toStringList(value) {
+    if (value == null || value === '') return [];
+    if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+    return String(value).split(/[,，、\s]+/).filter(Boolean);
+  }
+
   // 状态映射：0 = 在线（正常），1 = 离线（停用）
   // 教师状态映射：0 = 在线，1 = 离线
   function statusInfo(value) {
@@ -404,6 +411,32 @@
     return map;
   }
 
+  // 组织树节点层级：subDeptType/deptType 1=学段，2=年级，3=班级。
+  function deptNodeType(node) {
+    const raw = String(node?.subDeptType ?? node?.deptType ?? node?.type ?? '').toLowerCase();
+    if (raw === '3' || raw === 'class' || node?.isClass === true) return 'class';
+    if (raw === '2' || raw === 'grade') return 'grade';
+    if (raw === '1' || raw === 'stage' || raw === 'section') return 'stage';
+    return '';
+  }
+
+  // 定位班级所属的学段与年级。缺少层级类型的租户树按位置兜底：
+  // 班级的直接上级视作年级，再上一级视作学段。
+  function resolveClassLineage(ancestors = []) {
+    const usable = ancestors.filter((item) => item && item.id);
+    let stage = usable.filter((item) => item.type === 'stage').at(-1) || null;
+    let grade = usable.filter((item) => item.type === 'grade').at(-1) || null;
+    if (!grade) {
+      const parent = usable.at(-1) || null;
+      if (parent && parent !== stage) grade = parent;
+    }
+    if (!stage) {
+      const index = grade ? usable.indexOf(grade) : usable.length;
+      stage = index > 0 ? usable[index - 1] : null;
+    }
+    return { stage, grade };
+  }
+
   // 将 schoolDept/tree 的班级叶子扁平化，保留完整路径以区分不同年级的同名班级。
   function extractClassOptions(treeData) {
     const payload = treeData?.data ?? treeData?.result ?? treeData;
@@ -413,7 +446,7 @@
           : (Array.isArray(payload?.records) ? payload.records : [])));
     const classes = [];
 
-    const walk = (nodes, parentPath = [], parentIds = []) => {
+    const walk = (nodes, parentPath = [], parentIds = [], ancestors = []) => {
       if (!Array.isArray(nodes)) return;
       for (const node of nodes) {
         if (!node || typeof node !== 'object') continue;
@@ -422,9 +455,9 @@
         const path = name ? [...parentPath, name] : parentPath;
         const ids = id ? [...parentIds, id] : parentIds;
         const children = Array.isArray(node.children) ? node.children : [];
-        const typeText = String(node.subDeptType ?? node.deptType ?? node.type ?? '').toLowerCase();
-        const isClass = typeText === '3' || typeText === 'class' || node.isClass === true;
-        if (isClass && id) {
+        const nodeType = deptNodeType(node);
+        if (nodeType === 'class' && id) {
+          const { stage, grade } = resolveClassLineage(ancestors);
           classes.push({
             id,
             name,
@@ -432,14 +465,129 @@
             path,
             parentId: pickFirstString(node.parentId),
             ancestorIds: ids.slice(0, -1),
+            stageId: stage?.id || '',
+            stageName: stage?.name || '',
+            gradeId: grade?.id || '',
+            gradeName: grade?.name || '',
           });
         }
-        if (children.length) walk(children, path, ids);
+        if (children.length) walk(children, path, ids, [...ancestors, { id, name, type: nodeType }]);
       }
     };
 
     walk(roots);
     return classes;
+  }
+
+  // 教学职务上的部门可能是学段/年级/班级，统一展开成班级 id。
+  function expandDeptIdsToClassIds(deptIds, classOptions = []) {
+    const source = Array.isArray(deptIds) ? deptIds : [deptIds];
+    const targets = new Set(source.map((id) => String(id ?? '').trim()).filter(Boolean));
+    if (!targets.size) return [];
+    const result = [];
+    for (const item of (Array.isArray(classOptions) ? classOptions : [])) {
+      const id = pickFirstString(item?.id);
+      if (!id) continue;
+      const ancestorIds = Array.isArray(item?.ancestorIds) ? item.ancestorIds : [];
+      if (targets.has(id) || ancestorIds.some((ancestorId) => targets.has(String(ancestorId)))) result.push(id);
+    }
+    return result;
+  }
+
+  // 教师详情 → 可筛选的教学范围（学科 × 班级）。
+  // 没有学科的任教关系（班主任、管理班级等）归入空学科，只在「全部学科」下出现。
+  function buildTeacherScopeEntries(detail, classOptions = []) {
+    const classById = new Map((Array.isArray(classOptions) ? classOptions : [])
+      .filter((item) => item && item.id)
+      .map((item) => [String(item.id), item]));
+    const entries = [];
+    const seen = new Set();
+    const addEntry = (subject, classId) => {
+      const cls = classById.get(String(classId));
+      if (!cls) return;
+      const key = subject + '¦' + cls.id;
+      if (seen.has(key)) return;
+      seen.add(key);
+      entries.push({
+        subject,
+        classId: String(cls.id),
+        className: cls.name || '',
+        classLabel: cls.label || cls.name || '',
+        gradeId: cls.gradeId || '',
+        gradeName: cls.gradeName || '',
+        stageId: cls.stageId || '',
+        stageName: cls.stageName || '',
+      });
+    };
+
+    const subjectDetails = Array.isArray(detail?.schoolSubjectTeachersDetail)
+      ? detail.schoolSubjectTeachersDetail
+      : [];
+    for (const item of subjectDetails) {
+      if (!item || typeof item !== 'object') continue;
+      const subjects = toStringList(item.subjectNames ?? item.subjectName ?? item.subject);
+      const deptIds = toStringList(item.deptIds ?? item.deptId ?? item.classIds ?? item.classId ?? item.clazzIds ?? item.clazzId);
+      for (const classId of expandDeptIdsToClassIds(deptIds, classOptions)) {
+        if (subjects.length) subjects.forEach((subject) => addEntry(subject, classId));
+        else addEntry('', classId);
+      }
+    }
+
+    // 其它来源（班主任、管理班级等）补齐尚未出现的班级，避免筛选项少于实际教学范围。
+    const covered = new Set(entries.map((entry) => entry.classId));
+    for (const classId of expandDeptIdsToClassIds(extractTeacherClassIds(detail), classOptions)) {
+      if (!covered.has(String(classId))) addEntry('', classId);
+    }
+    return entries;
+  }
+
+  // 学科 → 学段 → 年级 → 班级 逐级联动：每级选项只来自上级已选范围，
+  // 上级变化后失效的下级选择自动清空；classIds 为当前筛选命中的班级。
+  function resolveTeacherScope(entries = [], filter = {}) {
+    const rows = (Array.isArray(entries) ? entries : []).filter((row) => row && row.classId);
+    const uniqueOptions = (list, valueKey, buildLabel) => {
+      const seen = new Set();
+      const options = [];
+      for (const row of list) {
+        const value = String(row?.[valueKey] ?? '');
+        if (!value || seen.has(value)) continue;
+        seen.add(value);
+        options.push({ value, label: buildLabel(row) || value });
+      }
+      return options;
+    };
+    const pick = (options, value) => (options.some((item) => item.value === String(value || '')) ? String(value) : '');
+
+    const subjects = uniqueOptions(rows, 'subject', (row) => row.subject);
+    const subject = pick(subjects, filter?.subject);
+    const bySubject = subject ? rows.filter((row) => row.subject === subject) : rows;
+
+    const stages = uniqueOptions(bySubject, 'stageId', (row) => row.stageName);
+    const stageId = pick(stages, filter?.stageId);
+    const byStage = stageId ? bySubject.filter((row) => row.stageId === stageId) : bySubject;
+
+    // 未选中的上级层级并入下级标签，避免同名年级/班级无法区分。
+    const grades = uniqueOptions(byStage, 'gradeId', (row) => [stageId ? '' : row.stageName, row.gradeName].filter(Boolean).join(' / '));
+    const gradeId = pick(grades, filter?.gradeId);
+    const byGrade = gradeId ? byStage.filter((row) => row.gradeId === gradeId) : byStage;
+
+    const classes = uniqueOptions(byGrade, 'classId', (row) => [
+      stageId ? '' : row.stageName,
+      gradeId ? '' : row.gradeName,
+      row.className,
+    ].filter(Boolean).join(' / '));
+    const classId = pick(classes, filter?.classId);
+    const matched = classId ? byGrade.filter((row) => row.classId === classId) : byGrade;
+
+    return {
+      filter: { subject, stageId, gradeId, classId },
+      subjects,
+      stages,
+      grades,
+      classes,
+      classIds: [...new Set(matched.map((row) => row.classId))],
+      active: Boolean(subject || stageId || gradeId || classId),
+    };
   }
 
   function normalizeClassText(value) {
@@ -588,20 +736,14 @@
     if (!detail || typeof detail !== 'object') return [];
     const duties = [];
 
-    const toStrArray = (v) => {
-      if (v == null || v === '') return [];
-      if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
-      return String(v).split(/[,，、\s]+/).filter(Boolean);
-    };
-
     const subjectList = Array.isArray(detail.schoolSubjectTeachersDetail)
       ? detail.schoolSubjectTeachersDetail
       : [];
     for (const item of subjectList) {
       if (!item || typeof item !== 'object') continue;
-      const subjects = toStrArray(item.subjectNames ?? item.subjectName ?? item.subject);
-      const deptIds = toStrArray(item.deptIds ?? item.deptId ?? item.classIds ?? item.classId);
-      const deptNames = toStrArray(item.deptNames ?? item.deptName ?? item.classNames ?? item.className);
+      const subjects = toStringList(item.subjectNames ?? item.subjectName ?? item.subject);
+      const deptIds = toStringList(item.deptIds ?? item.deptId ?? item.classIds ?? item.classId);
+      const deptNames = toStringList(item.deptNames ?? item.deptName ?? item.classNames ?? item.className);
       // deptId 优先走班级树翻译成全名；翻译不到时回落同位置的 deptName
       const classes = deptIds.length
         ? deptIds.map((id, i) => idNameMap[id] || deptNames[i] || '').filter(Boolean)
@@ -690,6 +832,9 @@
     extractDetailData,
     buildDeptIdNameMap,
     extractClassOptions,
+    expandDeptIdsToClassIds,
+    buildTeacherScopeEntries,
+    resolveTeacherScope,
     findStudentClass,
     matchStudentCandidates,
     buildClassTeacherMap,

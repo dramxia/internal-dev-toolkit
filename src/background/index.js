@@ -249,8 +249,8 @@
 
     if (msg.type === 'OPEN_LOGIN_URL' && ns.quickLogin) {
       ns.quickLogin
-        .openLoginUrl(msg.payload.url)
-        .then((tab) => sendResponse({ ok: true, tabId: tab.id }))
+        .openLoginUrl(msg.payload.url, { reuseCurrentTab: msg.payload.reuseCurrentTab })
+        .then((result) => sendResponse({ ok: true, tabId: result.tabId, reused: result.reused }))
         .catch((err) => sendResponse({ ok: false, error: err.message }));
       return true;
     }

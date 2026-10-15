@@ -145,7 +145,56 @@
     return { url, origin: parsed.origin, aiToken: parsed.token };
   }
 
-  async function openLoginUrl(url) {
+  function httpOrigin(value) {
+    try {
+      const url = new URL(String(value || ''));
+      return ['http:', 'https:'].includes(url.protocol) ? url.origin : '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function queryTabs(queryInfo) {
+    return new Promise((resolve) => {
+      try {
+        chrome.tabs.query(queryInfo, (tabs) => {
+          // 查询失败（无窗口、权限受限）只影响「能否复用当前标签页」，不应让打开操作失败。
+          if (chrome.runtime?.lastError) resolve([]);
+          else resolve(Array.isArray(tabs) ? tabs : []);
+        });
+      } catch (_) {
+        resolve([]);
+      }
+    });
+  }
+
+  // 当前标签页与目标同源（协议 + 域名 + 端口全部一致）时，说明用户正停在同一环境：
+  // 线上停在该租户线上域名，或本地停在同一端口的开发页。此时原地跳转比新开标签页更符合预期。
+  async function findSameOriginActiveTab(origin) {
+    if (!origin || !chrome.tabs?.query) return null;
+    const tabs = await queryTabs({ active: true, lastFocusedWindow: true });
+    return tabs.find((tab) => tab?.id && httpOrigin(tab.pendingUrl || tab.url) === origin) || null;
+  }
+
+  function updateTabUrl(tabId, url) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.update(tabId, { url, active: true }, (tab) => {
+        if (chrome.runtime?.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(tab);
+      });
+    });
+  }
+
+  function createTab(url) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.create({ url, active: true }, (tab) => {
+        if (chrome.runtime?.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve(tab);
+      });
+    });
+  }
+
+  async function openLoginUrl(url, { reuseCurrentTab = false } = {}) {
     if (!url) throw new Error('缺少 URL');
     let parsed;
     try {
@@ -156,15 +205,15 @@
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       throw new Error('仅允许打开 HTTP(S) 登录地址');
     }
-    return new Promise((resolve, reject) => {
-      chrome.tabs.create({ url, active: true }, (tab) => {
-        if (chrome.runtime?.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-        } else {
-          resolve(tab);
-        }
-      });
-    });
+    if (reuseCurrentTab) {
+      const tab = await findSameOriginActiveTab(parsed.origin);
+      if (tab) {
+        const updated = await updateTabUrl(tab.id, url);
+        return { tabId: updated?.id ?? tab.id, reused: true };
+      }
+    }
+    const created = await createTab(url);
+    return { tabId: created?.id, reused: false };
   }
 
   async function recordRecent(item) {
@@ -188,13 +237,16 @@
     });
   }
 
+  // 最近记录与后台会话的关系：
+  // - 切换「后台账号/域名」或项目：清空 storage，记录彻底删除（隐私与数据归属要求）。
+  // - 同一账号 token 过期后自动重新登录 / 服务端重启导致扩展重载（生成新会话标识）：记录保留，
+  //   会话校验仅用于拦截在途请求与恢复过期快照，历史记录不应跟着消失。
   async function getRecent() {
     const key = await getStorageKey();
-    const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
     return new Promise((resolve) => {
       chrome.storage.local.get(key, (items) => {
         const records = Array.isArray(items[key]) ? items[key] : [];
-        const cleaned = compactRecentRecords(records.filter((item) => (item.adminContextId || '') === adminContextId));
+        const cleaned = compactRecentRecords(records);
         // 读取时清理旧凭据，并把旧版按环境/端口拆分的同一身份合并成一条。
         if (JSON.stringify(cleaned) !== JSON.stringify(records)) {
           chrome.storage.local.set({ [key]: cleaned }, () => resolve(cleaned));
@@ -228,6 +280,7 @@
       deleteRecent,
       getRecent,
       normalizeRecentRecord,
+      openLoginUrl,
       recentIdentityKey,
       recordRecent,
       sameRecentIdentity,

@@ -123,6 +123,15 @@ storage[key] = [
   assert.equal(records.some((item) => item.id === 'user-1' && item.role === 'teacher'), false, '删除不应再依赖环境或端口');
   assert.equal(records.some((item) => item.id === 'user-1' && item.role === 'student'), true, '删除教师记录不应删除同身份学生角色');
 
+  // 会话标识仅用于拦截旧账号的在途请求/快照。同一账号重新登录（token 过期自动重登、
+  // 扩展重载）生成的新会话不应导致最近记录消失；切换账号/项目时 activate() 已直接清空 storage。
+  const beforeResession = records;
+  globalThis.InternalDevToolkit.adminLoginHistory = {
+    getSession: async () => ({ id: 'rotated-session-id' }),
+  };
+  records = await getRecent();
+  assert.deepEqual(records, beforeResession, '重新登录/重载生成新会话后，最近记录必须保留');
+
   console.log('quick login recent storage tests passed');
 })().catch((error) => {
   console.error(error);

@@ -1306,13 +1306,12 @@
     .teacher-item-header {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 4px;
+      gap: 6px;
+      margin-bottom: 2px;
     }
     .teacher-item-name {
-      font-size: 12px;
-      font-weight: 500;
+      font-size: 12.5px;
+      font-weight: 600;
       color: var(--text-1);
     }
     .teacher-item-account {
@@ -1640,6 +1639,16 @@
       display: grid;
       gap: 8px;
       margin-top: 8px;
+    }
+    /* 步骤体与汇总条靠 .hidden(display:none) 切换，是硬跳。元素重新显示时 CSS 动画会自动
+       重放，所以在这里补一段短促的进入动画，让步骤导航读起来是「过渡」而不是「闪现」。 */
+    @keyframes quickStageIn {
+      from { opacity: 0; transform: translate3d(0, 6px, 0); }
+      to   { opacity: 1; transform: translate3d(0, 0, 0); }
+    }
+    .quick-stage.is-current > .quick-stage-body,
+    .quick-stage > .quick-stage-summary {
+      animation: quickStageIn var(--dur-med) var(--ease-spring) both;
     }
     /* APP 站点属于该步骤的前置配置，压缩为单行配置条而非表单字段 */
     .quick-app-site-field {
@@ -2005,9 +2014,11 @@
     }
     .quick-relation-toolbar {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(140px, .8fr);
+      grid-template-columns: minmax(0, .78fr) minmax(0, 1.22fr);
       gap: 8px;
     }
+    /* 学期名较长，让它拿更大的份额，别被右侧按钮挤成省略号 */
+    .quick-relation-toolbar .field-input { min-width: 0; }
     .quick-relation-toolbar .env-switcher,
     .quick-relation-toolbar .field-input { min-height: 36px; }
     .quick-sr-only {
@@ -2067,6 +2078,14 @@
       .quick-mode-panel,
       .quick-recent-row,
       .quick-stage,
+      .quick-stage-body,
+      .quick-stage-summary,
+      .quick-scope-grid,
+      .quick-filter-toggle,
+      .quick-filter-toggle svg,
+      .quick-step-progress-track::after,
+      .quick-progress-step,
+      .quick-progress-step::before,
       .quick-action-btn,
       .quick-recent-action,
       .toast { animation: none; transition: none; }
@@ -2085,6 +2104,12 @@
       .quick-relation-toolbar,
       .quick-stage-summary,
       .quick-recent-row { grid-template-columns: minmax(0, 1fr); }
+      .quick-search-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .quick-search-bar .quick-filter-toggle {
+        grid-column: 1 / -1;
+        justify-content: center;
+        min-height: 34px;
+      }
       .quick-stage-summary .quick-secondary-btn { justify-self: start; }
       .quick-summary-actions { grid-column: 1; justify-content: flex-start; }
       .quick-recent-actions-main,
@@ -2297,82 +2322,479 @@
 
     #quickLoginBody > .section-content { padding: 0; }
     .quick-context { padding: 0; }
-    .quick-mode-switcher {
+
+    /* ── 指令轨 ──
+       模式切换与步骤进度原本是两条等重的控件条，叠在一起像两层导航。这里合成一个
+       双层壳：外层是 sticky 毛玻璃托盘，内层放段控与步骤轨，同心圆角做出硬件质感。
+       backdrop-filter 只加在 sticky 元素上，不会让滚动内容反复重绘。 */
+    .quick-command-rail {
       position: sticky;
       top: 0;
       z-index: 10;
-      margin: 0 0 10px;
-      box-shadow: 0 10px 28px rgba(74, 124, 89, .12);
+      display: grid;
+      gap: 8px;
+      margin: 0 0 14px;
+      padding: 5px 5px 10px;
+      border: 1px solid rgba(74, 124, 89, .10);
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, rgba(247, 249, 245, .94), rgba(240, 245, 238, .88));
+      backdrop-filter: blur(16px) saturate(1.3);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85), 0 10px 30px rgba(74, 124, 89, .10);
+    }
+    .quick-mode-switcher {
+      margin: 0;
+      padding: 3px;
+      gap: 3px;
+      border-radius: calc(var(--radius-xl) - 5px);
+      background: rgba(216, 229, 212, .58);
+      box-shadow: inset 0 1px 2px rgba(28, 46, 32, .05);
     }
     .quick-mode-switcher .quick-mode-desc { display: none; }
-    .quick-mode-switcher .env-btn { min-height: 38px; }
+    .quick-mode-switcher .env-btn {
+      min-height: 34px;
+      padding: 4px 8px;
+      border: 0;
+      border-radius: calc(var(--radius-xl) - 8px);
+      transition: background var(--dur-med) var(--ease-breathe), color var(--dur-fast),
+        box-shadow var(--dur-med) var(--ease-breathe), transform var(--dur-fast) var(--ease-spring);
+    }
+    .quick-mode-switcher .env-btn.active {
+      border: 0;
+      background: var(--panel);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 1px 2px rgba(28, 46, 32, .05),
+        0 6px 16px rgba(74, 124, 89, .14);
+    }
+    .quick-mode-switcher .env-btn:active { transform: scale(.985); }
+    .quick-mode-name { font-size: 12px; letter-spacing: .01em; }
+
+    /* 步骤轨：连线 + 圆点，不再是 4 个各自带边框的按钮 */
     .quick-step-progress {
       display: grid;
-      gap: 4px;
-      margin: 0 0 12px;
-      padding: 10px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      background: var(--panel);
+      gap: 0;
+      margin: 0;
+      padding: 0 6px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
     }
     .quick-step-progress-track {
+      position: relative;
       display: grid;
       grid-template-columns: repeat(var(--step-count, 4), minmax(0, 1fr));
-      gap: 4px;
+      gap: 0;
+    }
+    /* 底轨与已完成段：已完成段用 scaleX 过渡，避免动画 width 触发重排 */
+    .quick-step-progress-track::before,
+    .quick-step-progress-track::after {
+      content: '';
+      position: absolute;
+      top: 6.25px;
+      left: calc(50% / var(--step-count, 4));
+      right: calc(50% / var(--step-count, 4));
+      height: 1.5px;
+      border-radius: 2px;
+    }
+    .quick-step-progress-track::before { background: var(--sage-200); }
+    .quick-step-progress-track::after {
+      background: linear-gradient(90deg, var(--sage-400), var(--sage-500));
+      transform: scaleX(var(--step-progress, 0));
+      transform-origin: left center;
+      transition: transform .62s var(--ease-spring);
     }
     .quick-progress-step {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      justify-items: center;
+      align-content: start;
+      gap: 6px;
       min-width: 0;
-      height: 30px;
-      padding: 0 4px;
-      overflow: hidden;
-      border: 1px solid var(--border);
+      height: auto;
+      padding: 0 2px;
+      overflow: visible;
+      border: 0;
       border-radius: var(--radius-sm);
-      background: var(--sage-50);
+      background: transparent;
       color: var(--text-3);
       font: inherit;
       font-size: 10px;
       font-weight: 600;
-      text-overflow: ellipsis;
       white-space: nowrap;
-      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+      transition: color var(--dur-med) var(--ease-breathe);
     }
-    .quick-progress-step.complete { border-color: var(--sage-300); color: var(--sage-700); }
-    .quick-progress-step:not(:disabled) { cursor: pointer; }
-    .quick-progress-step:disabled { cursor: not-allowed; opacity: .55; }
-    .quick-progress-step.current {
+    .quick-progress-step::before {
+      content: '';
+      width: 14px;
+      height: 14px;
+      border: 1.5px solid var(--sage-200);
+      border-radius: 50%;
+      background: var(--panel);
+      transition: transform .42s var(--ease-spring), background var(--dur-med) var(--ease-breathe),
+        border-color var(--dur-med), box-shadow var(--dur-med) var(--ease-breathe);
+    }
+    .quick-progress-step.complete {
+      border-color: transparent;
+      color: var(--sage-700);
+    }
+    .quick-progress-step.complete::before {
       border-color: var(--sage-500);
-      background: var(--sage-500);
-      color: var(--text-inv);
-      box-shadow: 0 8px 20px rgba(74, 124, 89, .26);
+      background: var(--sage-500)
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FAFCF8' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 12.5 9.5 18 20 6.5'/></svg>")
+        center / 9px 9px no-repeat;
+    }
+    .quick-progress-step:not(:disabled) { cursor: pointer; }
+    .quick-progress-step:not(:disabled):hover::before { border-color: var(--sage-400); }
+    .quick-progress-step:disabled { cursor: not-allowed; opacity: .45; }
+    .quick-progress-step.current {
+      background: transparent;
+      color: var(--sage-700);
+      box-shadow: none;
+      font-weight: 700;
+    }
+    .quick-progress-step.current::before {
+      border-color: var(--sage-600);
+      background: var(--panel);
+      box-shadow: 0 0 0 4px var(--success-bg), 0 4px 10px rgba(74, 124, 89, .22);
+      transform: scale(1.14);
     }
     .quick-progress-compact { display: none; color: var(--text-2); font-size: 11px; font-weight: 600; }
+
+    /* ── 阶段卡：外托盘 + 内核 ──
+       当前步骤升为实体卡（panel 底 + 顶部内高光 + 环境光投影），已完成步骤降为
+       托盘上的低调摘要行。层级靠材质而不是靠分隔线表达。 */
     .quick-mode-panel {
-      padding: 0 14px 8px;
+      display: grid;
+      gap: 6px;
+      padding: 6px;
       border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      background: var(--panel);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7), var(--shadow-sm);
+      border-radius: var(--radius-xl);
+      background: linear-gradient(180deg, rgba(240, 245, 238, .92), rgba(253, 254, 252, .78));
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), 0 18px 44px rgba(74, 124, 89, .09);
     }
     .quick-stage {
-      padding: 12px 0;
-      border-top: 1px solid var(--border);
+      padding: 0;
+      border-top: 0;
+      border-radius: calc(var(--radius-xl) - 6px);
+      transition: background var(--dur-med) var(--ease-breathe), box-shadow var(--dur-med) var(--ease-breathe);
     }
     .quick-mode-panel .quick-stage:first-child { border-top: 0; }
     .quick-stage::after,
     .quick-stage-header::before { display: none; }
-    .quick-stage.is-complete { padding: 8px 0; }
+    .quick-stage.is-current {
+      padding: 13px 13px 15px;
+      background: var(--panel);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 1px 2px rgba(28, 46, 32, .04),
+        0 12px 28px rgba(74, 124, 89, .10);
+    }
+    .quick-stage.is-complete { padding: 0; }
     .quick-stage.is-complete .quick-stage-header { display: none; }
-    .quick-stage.is-complete.is-current { padding: 12px 0; }
+    .quick-stage.is-complete.is-current { padding: 13px 13px 15px; }
     .quick-stage.is-complete.is-current .quick-stage-header { display: flex; }
     .quick-stage.is-complete .quick-stage-summary { margin: 0; }
-    .quick-stage:not(.is-complete) .quick-stage-header { margin-bottom: 8px; }
+    .quick-stage:not(.is-complete) .quick-stage-header { margin-bottom: 10px; }
+
+    /* 摘要条：去掉原来的 border + 外光晕双层描边，单层内环即可 */
     .quick-stage-summary {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 0;
       border-left: 0;
-      border-radius: var(--radius-sm);
-      background: var(--sage-50);
+      border-radius: calc(var(--radius-xl) - 6px);
+      background: rgba(253, 254, 252, .72);
+      box-shadow: inset 0 0 0 1px var(--border), inset 0 1px 0 rgba(255, 255, 255, .7);
     }
-    .quick-stage-status { border-radius: 999px; }
+    .quick-stage.is-complete > .quick-stage-summary:hover {
+      background: var(--panel);
+      box-shadow: inset 0 0 0 1px var(--border-strong), 0 6px 18px rgba(74, 124, 89, .10);
+    }
+    /* 已完成摘要挂一枚勾选徽标，接住步骤轨上的完成语义 */
+    .quick-stage.is-complete > .quick-stage-summary .quick-summary-title::before {
+      content: '';
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      margin-right: 6px;
+      vertical-align: -2px;
+      border-radius: 50%;
+      background: var(--sage-500)
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FAFCF8' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><polyline points='4 12.5 9.5 18 20 6.5'/></svg>")
+        center / 9px 9px no-repeat;
+    }
+    /* 状态 chip：进行中是空心点标，已完成才填色，避免两种状态同样抢眼 */
+    .quick-stage-status {
+      border-radius: 999px;
+      background: transparent;
+      box-shadow: inset 0 0 0 1px var(--border);
+      color: var(--text-3);
+      font-weight: 600;
+    }
+    .quick-stage.is-complete .quick-stage-status {
+      background: var(--success-bg);
+      box-shadow: none;
+      color: var(--success);
+    }
     .quick-recent-section { border-bottom: 0; }
+
+    /* ── 主检索条 ──
+       姓名/学号是每次都要用的主检索，常驻；学科→学段→年级→班级四级 scope 收进
+       右侧披露按钮，收起时用计数徽标回述已生效的条件，不让表单墙挡住结果。 */
+    .quick-search-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .quick-search-bar .field-input { min-width: 0; }
+    .quick-filter-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 13px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--sage-50);
+      color: var(--text-2);
+      font: inherit;
+      font-size: 11.5px;
+      font-weight: 600;
+      white-space: nowrap;
+      cursor: pointer;
+      box-shadow: inset 0 1px 2px rgba(28, 46, 32, .03);
+      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast),
+        box-shadow var(--dur-med) var(--ease-breathe), transform var(--dur-fast) var(--ease-spring);
+    }
+    .quick-filter-toggle svg {
+      width: 13px;
+      height: 13px;
+      flex-shrink: 0;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: var(--icon-stroke);
+      stroke-linecap: round;
+      transition: transform var(--dur-med) var(--ease-spring);
+    }
+    .quick-filter-toggle:hover {
+      border-color: var(--sage-400);
+      background: var(--panel);
+      color: var(--sage-700);
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-sm);
+    }
+    .quick-filter-toggle:active { transform: scale(.97); }
+    .quick-filter-toggle:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 2px; }
+    .quick-filter-toggle.has-filters { border-color: var(--sage-400); color: var(--sage-700); }
+    .quick-filter-toggle.is-open {
+      border-color: var(--sage-400);
+      background: var(--panel);
+      color: var(--sage-700);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85), 0 6px 16px rgba(74, 124, 89, .14);
+    }
+    /* 展开态靠底色与描边表达，不旋转漏斗图标（180° 后只是个倒过来的字形，读作错位而非状态） */
+    /* 计数徽标嵌在按钮内的独立圆里，和按钮本体分层 */
+    .quick-filter-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 17px;
+      height: 17px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: var(--sage-500);
+      color: var(--text-inv);
+      font-size: 9.5px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .quick-filter-count[hidden] { display: none; }
+    .quick-scope-grid { animation: quickStageIn var(--dur-med) var(--ease-spring) both; }
+
+    /* 结果区让位：筛选收起后一屏能多看到几行 */
+    .quick-mode-panel .list,
+    #userList { max-height: min(46vh, 380px); }
+
+    /* 与上一步的租户用户行同构，减少跨步骤的重新学习成本。
+       原先是 name / account 用 space-between 分居两端，中间一大片死区，
+       姓名一长又会顶到账号，状态徽标再占第三行把行高撑到 60px。 */
+    .quick-mode-panel .teacher-item {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: transparent;
+      transition: background var(--dur-fast) var(--ease-breathe), box-shadow var(--dur-med) var(--ease-breathe);
+    }
+    .quick-mode-panel .teacher-item .quick-user-avatar { width: 28px; height: 28px; flex-basis: 28px; font-size: 11.5px; }
+    .quick-mode-panel .teacher-item.selected .quick-user-avatar {
+      border-color: var(--sage-600);
+      background: var(--sage-600);
+      color: var(--text-inv);
+      box-shadow: none;
+    }
+    .teacher-item-body { min-width: 0; display: grid; }
+    .quick-mode-panel .teacher-item-header {
+      min-width: 0;
+      margin-bottom: 3px;
+      flex-wrap: nowrap;
+    }
+    /* 姓名截断，状态徽标固定不被压缩——姓名可以省略，状态不能 */
+    .quick-mode-panel .teacher-item-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .quick-mode-panel .teacher-item-header .teacher-badge { flex: 0 0 auto; }
+    .quick-mode-panel .teacher-item-account {
+      min-width: 0;
+      overflow: hidden;
+      font-family: 'SF Mono', 'Consolas', monospace;
+      font-size: 10.5px;
+      font-variant-numeric: tabular-nums;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    /* 选中态：边框常驻为透明，避免选中时因 border 出现而挤动内宽导致文字重排 */
+    .quick-mode-panel .list-item.active,
+    .quick-mode-panel .teacher-item.selected,
+    .quick-mode-panel .lookup-student-item.selected {
+      margin: 3px 0;
+      border: 0;
+      outline: 0;
+      border-radius: 13px;
+      background: var(--panel);
+      box-shadow: 0 0 0 1.5px var(--sage-400), 0 6px 16px rgba(74, 124, 89, .16);
+    }
+    .quick-mode-panel .list-item.active,
+    .quick-mode-panel .teacher-item.selected { padding: 8px 10px; }
+    .quick-mode-panel .lookup-student-item.selected { padding: 8px 13px; }
+    .quick-mode-panel .quick-tenant-user-row.active { padding: 7px 10px; }
+
+    /* 行内环境切换压到与图标按钮同档，别让它吃掉半行宽度 */
+    .quick-mode-panel .quick-user-env-switcher {
+      grid-template-columns: repeat(2, minmax(38px, 1fr));
+      gap: 2px;
+      min-width: 84px;
+      padding: 2px;
+    }
+    .quick-mode-panel .quick-user-env-btn {
+      min-height: 24px;
+      padding: 0 8px;
+      font-size: 10.5px;
+    }
+    .quick-mode-panel .quick-user-port { width: 54px; height: 24px; font-size: 10.5px; }
+
+    /* 图标簇收进浅托盘，5 个同尺寸方块不再平铺成一排 */
+    .quick-mode-panel .quick-user-toolbar .list-item-actions,
+    .quick-summary-actions .list-item-actions {
+      gap: 2px;
+      padding: 2px;
+      border-radius: 999px;
+      background: rgba(240, 245, 238, .92);
+      box-shadow: inset 0 0 0 1px var(--border);
+    }
+    .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn,
+    .quick-summary-actions .list-item-actions .quick-action-btn {
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+    }
+    .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn:hover:not(:disabled),
+    .quick-summary-actions .list-item-actions .quick-action-btn:hover:not(:disabled) {
+      background: var(--panel);
+      border-color: transparent;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 10px rgba(74, 124, 89, .16);
+    }
+    .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn.primary,
+    .quick-summary-actions .list-item-actions .quick-action-btn.primary {
+      background: var(--sage-500);
+      border-color: var(--sage-500);
+      color: var(--text-inv);
+    }
+    .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn.primary:hover:not(:disabled),
+    .quick-summary-actions .list-item-actions .quick-action-btn.primary:hover:not(:disabled) {
+      background: var(--sage-600);
+      border-color: var(--sage-600);
+      box-shadow: 0 6px 14px rgba(74, 124, 89, .3);
+    }
+
+    /* 选中态需要左右留白才能让高亮环完整可见。留白放在列表容器上（padding），
+       而不是行的左右 margin —— 后者会让行比容器宽出 8px，撑出一条横向滚动条。 */
+    .quick-mode-panel .list { padding: 0 4px; overflow-x: hidden; }
+
+    /* 学生行：学号与班级保持同一行，操作压一档给数据让位 */
+    .quick-mode-panel .student-item-meta { gap: 2px 10px; font-variant-numeric: tabular-nums; }
+    .quick-mode-panel .student-item-actions { gap: 4px; }
+    .quick-mode-panel .student-item-actions .quick-action-btn {
+      width: 28px;
+      height: 28px;
+      flex: 0 0 28px;
+    }
+    .quick-mode-panel .student-item-actions .quick-action-btn svg { width: 13px; height: 13px; }
+
+    /* 行内工具条（环境切换 + 图标托盘）约 240px，和身份信息挤同一行会把姓名压成省略号。
+       统一改成两行：身份占满首行，工具条独占次行右对齐。 */
+    .quick-mode-panel .quick-tenant-user-row,
+    .quick-mode-panel .lookup-teacher-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 7px;
+      align-items: start;
+    }
+    .quick-mode-panel .quick-tenant-user-row > .quick-user-toolbar,
+    .quick-mode-panel .lookup-teacher-item > .quick-user-toolbar {
+      width: 100%;
+      margin-left: 0;
+      justify-content: flex-end;
+    }
+    .quick-mode-panel .lookup-teacher-item .list-item-actions { padding-top: 2px; }
+    /* 任教徽标不能在词中间折行 */
+    .teacher-badge { white-space: nowrap; }
+
+    /* 教师列表里绝大多数是「在职」，每行都挂一枚绿徽标就成了糖果条纹。
+       常态压成安静的点标，只有「已停用」这种需要注意的例外保留实心底色。 */
+    .quick-mode-panel .teacher-item-header .teacher-badge.status-on {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0;
+      background: transparent;
+      color: var(--text-3);
+      font-weight: 500;
+    }
+    .quick-mode-panel .teacher-item-header .teacher-badge.status-on::before {
+      content: '';
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--sage-400);
+    }
+    .quick-mode-panel .teacher-item.selected .teacher-badge.status-on { color: var(--sage-600); }
+    .quick-mode-panel .teacher-item.selected .teacher-badge.status-on::before { background: var(--sage-500); }
+
+    /* 租户步骤收起后，组织架构不能裸露在托盘上，给它与摘要条同款的卡片 */
+    .quick-stage.is-complete:not(.is-current) > .quick-dept-field {
+      margin-top: 6px;
+      padding: 10px 12px;
+      border-radius: calc(var(--radius-xl) - 6px);
+      background: rgba(253, 254, 252, .72);
+      box-shadow: inset 0 0 0 1px var(--border), inset 0 1px 0 rgba(255, 255, 255, .7);
+    }
+
+    /* 次级按钮改成药丸岛，带按压回弹 */
+    .quick-secondary-btn {
+      min-height: 30px;
+      padding: 0 13px;
+      border-radius: 999px;
+      font-size: 11px;
+    }
+    .quick-secondary-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
+    .quick-secondary-btn:active:not(:disabled) { transform: scale(.97); }
+
+    .quick-stage-title { color: var(--text-1); font-size: 12.5px; letter-spacing: .01em; }
+    .quick-summary-title { font-size: 12.5px; }
 
     .token-shell { margin-top: 0; }
     .utility-screen .callout {
@@ -2398,7 +2820,7 @@
     .admin-history-domain { margin-top: 5px; font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
     .admin-history-meta { margin-top: 7px; font-size: 11px; line-height: 1.7; color: var(--text-3); }
     .admin-history-item .btn { flex-shrink: 0; }
-    .quick-dept-field { margin-top: 14px; }
+    .quick-dept-field { margin-top: 10px; }
     .quick-dept-status-row { display: flex; align-items: center; gap: 8px; }
     .quick-dept-status-row .quick-inline-status { flex: 1; min-width: 0; }
     .utility-screen .workspace-subview {
@@ -2744,21 +3166,24 @@
               </div>
             </section>
 
-            <div class="quick-mode-switcher" role="tablist" aria-label="查询任务">
-              <button class="env-btn active" id="modeTeacherBtn" type="button" role="tab" aria-controls="teacherModePanel">
-                <span class="quick-mode-name">教师 -> 学生</span>
-                <span class="quick-mode-desc">选老师，查他班里的学生</span>
-              </button>
-              <button class="env-btn" id="modeStudentBtn" type="button" role="tab" aria-controls="studentModePanel">
-                <span class="quick-mode-name">学生 -> 教师</span>
-                <span class="quick-mode-desc">选学生，查班里的老师</span>
-              </button>
-            </div>
+            <!-- 指令轨：模式切换与步骤进度合成一个双层壳，外托盘 + 内核，避免两条等重控件条互相打架 -->
+            <div class="quick-command-rail">
+              <div class="quick-mode-switcher" role="tablist" aria-label="查询任务">
+                <button class="env-btn active" id="modeTeacherBtn" type="button" role="tab" aria-controls="teacherModePanel">
+                  <span class="quick-mode-name">教师 -> 学生</span>
+                  <span class="quick-mode-desc">选老师，查他班里的学生</span>
+                </button>
+                <button class="env-btn" id="modeStudentBtn" type="button" role="tab" aria-controls="studentModePanel">
+                  <span class="quick-mode-name">学生 -> 教师</span>
+                  <span class="quick-mode-desc">选学生，查班里的老师</span>
+                </button>
+              </div>
 
-            <nav class="quick-step-progress" id="quickStepProgress" aria-label="查询步骤">
-              <div class="quick-step-progress-track" id="quickStepProgressTrack"></div>
-              <div class="quick-progress-compact" id="quickProgressCompact"></div>
-            </nav>
+              <nav class="quick-step-progress" id="quickStepProgress" aria-label="查询步骤">
+                <div class="quick-step-progress-track" id="quickStepProgressTrack"></div>
+                <div class="quick-progress-compact" id="quickProgressCompact"></div>
+              </nav>
+            </div>
 
             <div id="teacherModePanel" class="quick-mode-panel" role="tabpanel" aria-labelledby="modeTeacherBtn">
               <section class="quick-stage" id="teacherTenantStep">
@@ -2774,7 +3199,7 @@
                   <button class="btn btn-ghost quick-secondary-btn" id="changeTeacherTenantBtn" type="button">更换</button>
                 </div>
                 <div class="quick-stage-body" id="teacherTenantStepBody">
-                  <label class="quick-label" for="tenantSearch">租户</label>
+                  <label class="quick-sr-only" for="tenantSearch">租户</label>
                   <input class="field-input" id="tenantSearch" type="text" autocomplete="off" placeholder="搜索租户名称 / 域名 / 联系人">
                   <div class="quick-inline-status" id="tenantSearchStatus" role="status" aria-live="polite"></div>
                   <div class="list hidden" id="tenantList" role="list"></div>
@@ -2806,7 +3231,7 @@
                   <div class="quick-summary-actions quick-target-container" id="teacherUserSummaryActions"></div>
                 </div>
                 <div class="quick-stage-body" id="teacherUserStepBody">
-                  <label class="quick-label" for="userSearch">租户用户</label>
+                  <label class="quick-sr-only" for="userSearch">租户用户</label>
                   <input class="field-input" id="userSearch" type="text" autocomplete="off" placeholder="姓名 / 手机号">
                   <div class="quick-inline-status" id="teacherSessionStatus" role="status" aria-live="polite"></div>
                   <div class="list hidden" id="userList" role="list"></div>
@@ -2856,11 +3281,28 @@
                     <input class="field-input" id="studentAppSiteUrl" type="text" autocomplete="off"
                       placeholder="http://localhost:5173" aria-invalid="false">
                   </div>
-                  <div class="quick-field-grid equal">
+                  <!-- 姓名/学号是主检索，常驻；学科～班级四级 scope 收进披露区，靠计数徽标回述已生效的条件 -->
+                  <div class="quick-search-bar">
                     <label class="quick-sr-only" for="studentNameSearch">学生姓名</label>
                     <input class="field-input" id="studentNameSearch" type="text" autocomplete="off" placeholder="姓名">
                     <label class="quick-sr-only" for="studentCodeSearch">学生学号</label>
                     <input class="field-input" id="studentCodeSearch" type="text" autocomplete="off" placeholder="学号">
+                    <button class="quick-filter-toggle hidden" id="studentScopeToggle" type="button"
+                      aria-expanded="false" aria-controls="studentScopeFilters" title="按学科 / 学段 / 年级 / 班级筛选">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h17M6.5 12h11M10 17.5h4"/></svg>
+                      <span class="quick-filter-toggle-text">筛选</span>
+                      <span class="quick-filter-count" id="studentScopeCount" hidden>0</span>
+                    </button>
+                  </div>
+                  <div class="quick-field-grid equal quick-scope-grid hidden" id="studentScopeFilters">
+                    <label class="quick-sr-only" for="studentSubjectFilter">学科</label>
+                    <select class="field-input" id="studentSubjectFilter"><option value="">全部学科</option></select>
+                    <label class="quick-sr-only" for="studentStageFilter">学段</label>
+                    <select class="field-input" id="studentStageFilter"><option value="">全部学段</option></select>
+                    <label class="quick-sr-only" for="studentGradeFilter">年级</label>
+                    <select class="field-input" id="studentGradeFilter"><option value="">全部年级</option></select>
+                    <label class="quick-sr-only" for="studentClassFilter">班级</label>
+                    <select class="field-input" id="studentClassFilter"><option value="">全部班级</option></select>
                   </div>
                   <div class="list hidden" id="studentList" role="list"></div>
                   <div class="list-empty" id="studentEmpty">选择 AI 教师后加载相关学生</div>

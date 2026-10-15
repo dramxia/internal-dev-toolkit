@@ -19,19 +19,22 @@
 
   function transitionView(update, kind = 'content') {
     if (typeof update !== 'function') return null;
-    activeContentAnimation?.cancel();
+    // finish 而非 cancel：被打断的动画落到自然终态，连点时不会先弹回起点再重放。
+    activeContentAnimation?.finish();
     activeContentAnimation = null;
     update();
 
     const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     const target = transitionTarget(kind);
-    if (reduceMotion || typeof target?.animate !== 'function') return null;
+    if (reduceMotion || !target || typeof target.animate !== 'function') return null;
 
+    // 只做位移、不碰透明度：对整块面板做透明度下潜本身就会被看成一次闪光，
+    // 而 transform 走合成层，不会重绘面板内容。
     const animation = target.animate([
-      { opacity: 0.88, transform: 'translate3d(0, 4px, 0)' },
-      { opacity: 1, transform: 'translate3d(0, 0, 0)' },
+      { transform: 'translate3d(0, 5px, 0)' },
+      { transform: 'translate3d(0, 0, 0)' },
     ], {
-      duration: 150,
+      duration: 170,
       easing: 'cubic-bezier(.2, .8, .2, 1)',
     });
     activeContentAnimation = animation;
@@ -220,21 +223,35 @@
     row.dataset.compactSignature = signature;
   }
 
+  const COMPACT_ROW_SELECTOR =
+    '.recent-item, .list-item, .quick-action-row, .student-item, .quick-stage-summary, .lookup-teacher-item';
+
   function compactActions(root = document) {
-    root.querySelectorAll(
-      '.recent-item, .list-item, .quick-action-row, .student-item, .quick-stage-summary, .lookup-teacher-item'
-    ).forEach(compactRowActions);
+    root.querySelectorAll(COMPACT_ROW_SELECTOR).forEach(compactRowActions);
+    // 传入的 root 本身可能就是一行（来自 MutationObserver 的局部扫描）。
+    if (typeof root.matches === 'function' && root.matches(COMPACT_ROW_SELECTOR)) compactRowActions(root);
   }
 
   function observeActions() {
     if (observed || typeof MutationObserver === 'undefined') return;
     observed = true;
-    const observer = new MutationObserver(() => {
-      if (compactScheduled) return;
+    const pendingRoots = new Set();
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        const target = mutation.target?.nodeType === 1 ? mutation.target : null;
+        if (target) pendingRoots.add(target);
+      });
+      if (compactScheduled || !pendingRoots.size) return;
       compactScheduled = true;
       requestAnimationFrame(() => {
         compactScheduled = false;
-        compactActions();
+        const roots = [...pendingRoots];
+        pendingRoots.clear();
+        // 只扫本轮真正变动过的子树，不再每次都把整个文档重扫一遍。
+        roots.forEach((root) => { if (root.isConnected) compactActions(root); });
+        // 折叠逻辑自身要插/删 "..." 按钮。这些记录是同步产生的，若不在这里丢弃就会在下一个
+        // 微任务检查点把 observer 再唤醒一轮（虽然会被 compactSignature 挡掉，但白跑一趟）。
+        observer.takeRecords();
       });
     });
     observer.observe(document.body, { childList: true, subtree: true });

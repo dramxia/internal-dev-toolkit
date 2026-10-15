@@ -163,8 +163,20 @@ assert.match(renderProgress[1], /track\.querySelectorAll\('\.quick-progress-step
 assert.match(quickUi, /persistenceTimer = setTimeout\(flushPersistedState, 250\)/, '查询快照写入应使用 250ms debounce');
 assert.match(quickUi, /if \(signature === lastPersistedSignature\) return;/, '相同查询快照不得重复写 storage');
 assert.doesNotMatch(persistedStateBlock[1], /regularAccountsByTenant|relationTeacherCache/, '大型运行时关系缓存不得写入持久化快照');
-assert.match(quickUi, /shouldRender\('teacher-users'/, '教师账号列表应按数据签名跳过无关重绘');
-assert.match(quickUi, /shouldRender\('student-accounts'/, '学生账号列表应按数据签名跳过无关重绘');
+// 列表行改为按 key 就地复用：选中态不进签名，所以「换个选中项」不再整列拆掉重建
+// （点击时焦点会随行一起消失，那正是面板闪烁的来源）。
+assert.match(quickUi, /function reconcileList\(listEl, items, spec = \{\}\)/, '应提供按 key 复用列表行的工具');
+assert.match(quickUi, /row\.dataset\.rowSignature === signature/, '内容签名未变的行必须原样复用');
+const teacherUsersRenderer = quickUi.match(/function renderTeacherUsers\(deps\) \{([\s\S]*?)\n  \}\n\n  async function selectTeacherUser/);
+assert.ok(teacherUsersRenderer, '应能提取教师账号列表渲染逻辑');
+assert.match(teacherUsersRenderer[1], /reconcileList\(list, normalized/, '教师账号列表应复用行而非整列重建');
+assert.match(teacherUsersRenderer[1], /sync: \(row, user\)[\s\S]*classList\.toggle\('active', selected\)/, '教师账号选中态应就地改写');
+const accountUsersRenderer = quickUi.match(/function renderAccountUsers\(\) \{([\s\S]*?)\n  \}\n\n  async function selectStudentAccount/);
+assert.ok(accountUsersRenderer, '应能提取学生账号列表渲染逻辑');
+assert.match(accountUsersRenderer[1], /reconcileList\(list, s\.accountPage\.records/, '学生账号列表应复用行而非整列重建');
+assert.match(accountUsersRenderer[1], /sync: \(row, account\)[\s\S]*classList\.toggle\('active', selected\)/, '学生账号选中态应就地改写');
+assert.match(quickUi, /el\.dataset\.pagerSignature === signature/, '分页结构未变时不得重建分页器');
+assert.match(quickUi, /resultList\?\.dataset\.relationRenderKey === renderKey/, '班级与学生都没变时不得重放关联教师列表');
 assert.match(quickUi, /transitionView\(update, 'quick'\)/, '关系模式和步骤切换应使用显式视图过渡');
 assert.match(buildScript, /'src\/common\/quick-login-state\.js'[\s\S]*'src\/popup\/quick-login-ui\.js'/, '查询状态存储模块应先于 UI 打包');
 assert.match(quickUi, /await loadPersistedState\(\);[\s\S]*renderShell\(\);[\s\S]*bindEvents\(\);/, '首次渲染前应恢复查询快照');
@@ -336,6 +348,12 @@ assert.match(quickUi, /request\('QUICK_LOGIN', Object\.assign\(\{\}, meta, \{ en
 assert.match(quickUi, /buildDirectUrl\(url, targetLocalPort\)/);
 assert.match(quickUi, /action === 'copy'[\s\S]*request\('RESOLVE_USER_SESSION'/, '复制应只解析运行时会话');
 assert.match(quickUi, /request\('QUICK_LOGIN',[\s\S]*request\('OPEN_LOGIN_URL'/, '打开和评价应继续执行 QUICK_LOGIN 后打开 URL');
+assert.match(
+  quickUi,
+  /request\('OPEN_LOGIN_URL', \{ url: target, reuseCurrentTab: action === 'open' \}\)/,
+  '仅「打开 AI 平台」允许在同源时复用当前标签页',
+);
+assert.match(quickUi, /opened\?\.reused \? '已在当前标签页打开 AI 平台' : '已打开 AI 平台'/, '应区分原地跳转与新开标签页的提示');
 assert.doesNotMatch(quickUi, /chrome\.storage\.local\.(?:set|remove)/, 'quick UI 不得直接持久化 token 或会话');
 assert.doesNotMatch(quickUi, /ns\.token\.saveToken/, 'quick UI 不得写入 admin token');
 
@@ -459,9 +477,11 @@ async function testImmediateInvalidationBeforeDebouncedLoad() {
 assert.match(quickUi, /createDebouncedSearch\(\(keyword\) => \{[\s\S]*t\.tenantRequestId \+= 1/);
 assert.match(quickUi, /renderTeacherStudentArea\(message\)[\s\S]*pager\.classList\.add\('hidden'\)/);
 assert.match(quickUi, /class="action-btn quick-action-btn student-copy-btn"/);
+// 行会被 reconcileList 复用，所以处理器读 row.__item（每轮渲染都会刷新）而不是捕获
+// 创建当时的 student，避免复用行上挂着上一轮的数据。
 assert.match(
   quickUi,
-  /row\.querySelector\('\.student-copy-btn'\)[\s\S]*addEventListener\('click'[\s\S]*buildStudentCredentialsText\(student, t\.selectedTenant\?\.tenantName\)[\s\S]*copyToClipboard\(credentials\)/,
+  /row\.querySelector\('\.student-copy-btn'\)[\s\S]*addEventListener\('click'[\s\S]*buildStudentCredentialsText\(row\.__item, t\.selectedTenant\?\.tenantName\)[\s\S]*copyToClipboard\(credentials\)/,
   '学生复制按钮应复制当前行的登录信息',
 );
 assert.equal(
@@ -499,7 +519,7 @@ assert.throws(
 assert.match(quickUi, /type: 'APP_GET_CREDENTIALS'/, '相关学生区域应读取 APP 默认站点地址');
 assert.match(
   quickUi,
-  /student-app-login-btn[\s\S]*performStudentAppLogin\(student, event\.currentTarget, row\)/,
+  /student-app-login-btn[\s\S]*performStudentAppLogin\(row\.__item, event\.currentTarget, row\)/,
   '相关学生项应提供 APP 登录图标并绑定当前学生',
 );
 assert.match(
@@ -510,7 +530,7 @@ assert.match(
 assert.match(popupHtml, /\.student-app-login-btn\.is-loading:disabled[\s\S]*cursor: wait;/);
 assert.match(popupHtml, /id="studentAppSiteUrl"[^>]*aria-invalid="false"/, '相关学生区域应提供可校验的 APP 站点地址');
 assert.match(quickUi, /s\.resolvingTeachers = true;\s*updateRelationBusy\(\)/);
-const relationRenderer = quickUi.match(/async function renderRelationTeachers\(classId\) \{([\s\S]*?)\n  \}\n\n  async function refreshStudentRelation/);
+const relationRenderer = quickUi.match(/async function renderRelationTeachers\(classId[^)]*\) \{([\s\S]*?)\n  \}\n\n  async function refreshStudentRelation/);
 assert.ok(relationRenderer, '应能提取教师账号反查流程');
 assert.ok(
   relationRenderer[1].indexOf('invalidateRelationTeacherResolution()') < relationRenderer[1].indexOf('if (!cls)'),
@@ -623,6 +643,21 @@ async function testTenantUserRowRender() {
       return out;
     }
     appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+    removeChild(child) {
+      const index = this.children.indexOf(child);
+      if (index >= 0) this.children.splice(index, 1);
+      child.parentNode = null;
+      return child;
+    }
+    insertBefore(child, ref) {
+      const existing = this.children.indexOf(child);
+      if (existing >= 0) this.children.splice(existing, 1);
+      const at = ref ? this.children.indexOf(ref) : -1;
+      if (at >= 0) this.children.splice(at, 0, child);
+      else this.children.push(child);
+      child.parentNode = this;
+      return child;
+    }
     addEventListener() {}
   }
   function matchesSelector(el, selector) {
@@ -701,6 +736,29 @@ async function testTenantUserRowRender() {
   assert.equal(pagerCalls.length, 1, '应渲染分页');
   assert.equal(pagerCalls[0].el, pagerEl);
   assert.equal(typeof pagerCalls[0].cb, 'function');
+
+  // 面板闪烁的根因就在这里：以前换个选中项会把整列拆掉重建，正在被点击的按钮随之
+  // 从 DOM 消失（焦点掉回 body、每行重排）。现在必须原地复用同一批节点。
+  const rowsBefore = [...listEl.children];
+  state.teacher.selectedUser = { id: 'u-2' };
+  renderTeacherUsers(deps);
+  assert.equal(listEl.children.length, 2, '换选中项后行数不变');
+  assert.ok(listEl.children[0] === rowsBefore[0] && listEl.children[1] === rowsBefore[1],
+    '换选中项不得重建列表行');
+  assert.ok(!listEl.children[0].classList.contains('active'), '旧选中行应取消高亮');
+  assert.ok(listEl.children[1].classList.contains('active'), '新选中行应就地高亮');
+  assert.equal(listEl.children[1].querySelector('.quick-row-select').getAttribute('aria-pressed'), 'true',
+    '选中态应同步到行内按钮');
+
+  // 记录变化时该行重建，未变的行继续复用。
+  state.teacher.userPage.records = [
+    { id: 'u-1', username: '王丽华', account: 'wanglihua01', roleName: '校长' },
+    { id: 'u-3', username: '李雷', account: '13900002222', roleName: '' },
+  ];
+  renderTeacherUsers(deps);
+  assert.ok(listEl.children[0] === rowsBefore[0], '数据未变的行应继续复用');
+  assert.ok(listEl.children[1] !== rowsBefore[1], '换成新记录的行应重建');
+  assert.equal(listEl.children.length, 2, '重建后行数仍为 2');
 
   delete require.cache[quickUiModulePath];
   delete require.cache[tenantModulePath];
