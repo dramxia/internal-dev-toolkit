@@ -15,7 +15,9 @@
     "scripting",
     "tabs",
     "cookies",
-    "sidePanel"
+    "sidePanel",
+    "nativeMessaging",
+    "webNavigation"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -46,6 +48,17 @@
         "styles.css"
       ],
       "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "component-document-ready.js"
+      ],
+      "run_at": "document_end",
+      "all_frames": true
     }
   ]
 }

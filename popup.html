@@ -212,12 +212,11 @@
       font: inherit;
       font-size: 20px;
       cursor: pointer;
-      transition: background var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast);
+      transition: background var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
     }
     .workspace-back:hover {
       background: var(--sage-50);
       border-color: var(--border-strong);
-      transform: translateX(-2px);
       box-shadow: var(--shadow-sm);
     }
     .workspace-back[hidden] { display: none; }
@@ -234,9 +233,8 @@
       line-height: 1.1;
       text-overflow: ellipsis;
       white-space: nowrap;
-      transition: letter-spacing .4s var(--ease-breathe);
     }
-    .workspace-title:hover { letter-spacing: .02em; }
+
     /* 项目附注：虚线小章，与状态药丸拉开材质层级 */
     .workspace-project {
       flex-shrink: 0;
@@ -299,13 +297,12 @@
       background: transparent;
       color: var(--text-2);
       cursor: pointer;
-      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast);
+      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), box-shadow var(--dur-fast);
     }
     .workspace-icon-btn:hover {
       border-color: var(--border);
       background: var(--panel);
       color: var(--sage-700);
-      transform: translateY(-2px);
       box-shadow: var(--shadow-sm), 0 0 0 4px var(--success-bg);
     }
     .workspace-icon-btn[hidden] { display: none; }
@@ -381,7 +378,7 @@
       font-weight: 600;
       letter-spacing: .02em;
       cursor: pointer;
-      transition: background var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--ease-spring), border-color var(--dur-fast);
+      transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
     }
     .workspace-dock-item:first-child {
       grid-row: 1 / 3;
@@ -409,9 +406,7 @@
     .workspace-dock-item:hover {
       background: var(--sage-50);
       color: var(--sage-700);
-      transform: translateY(-2px);
     }
-    .workspace-dock-item:active { transform: translateY(1px); }
     .workspace-dock-item.active {
       border-color: var(--border);
       background: var(--panel);
@@ -454,7 +449,7 @@
       overflow: hidden;
       margin-bottom: 14px;
       box-shadow: var(--shadow-sm);
-      transition: box-shadow var(--dur-med) var(--ease-breathe), transform var(--dur-med) var(--ease-spring);
+      transition: box-shadow var(--dur-med) var(--ease-breathe);
     }
     .section-block:last-child { margin-bottom: 0; }
     .section-block:hover { box-shadow: var(--shadow-md); }
@@ -482,9 +477,7 @@
       font-size: 16px;
       flex-shrink: 0;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6);
-      transition: transform var(--dur-med) var(--ease-spring);
     }
-    .section-header:hover .section-icon { transform: scale(1.08) rotate(-4deg); }
     .section-icon svg {
       width: 16px; height: 16px;
       fill: none;
@@ -606,7 +599,7 @@
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
-      transition: transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast) var(--ease-breathe),
+      transition: box-shadow var(--dur-fast) var(--ease-breathe),
         background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), opacity var(--dur-fast);
       font-family: inherit;
       letter-spacing: .02em;
@@ -615,7 +608,6 @@
       justify-content: center;
       gap: 5px;
     }
-    .btn:active:not(:disabled) { transform: scale(.96); }
     .btn:disabled { opacity: .4; cursor: not-allowed; }
 
     .btn-primary {
@@ -626,7 +618,6 @@
     .btn-primary:hover:not(:disabled) {
       background: var(--sage-600);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 18px 36px rgba(74, 124, 89, .3), 0 0 0 5px var(--success-bg);
-      transform: translateY(-2px);
     }
 
     .btn-ghost {
@@ -695,12 +686,11 @@
       overflow: hidden;
       border: 1px solid var(--border);
       box-shadow: var(--shadow-sm);
-      transition: border-color var(--dur-med) var(--ease-breathe), box-shadow var(--dur-med) var(--ease-breathe), transform var(--dur-med) var(--ease-spring);
+      transition: border-color var(--dur-med) var(--ease-breathe), box-shadow var(--dur-med) var(--ease-breathe);
     }
     .token-shell:hover {
       border-color: var(--border-strong);
       box-shadow: var(--shadow-md);
-      transform: translateY(-1px);
     }
     .token-shell.empty {
       border-color: var(--border);
@@ -968,13 +958,12 @@
       font-size: 11px;
       font-weight: 600;
       cursor: pointer;
-      transition: background var(--dur-fast), transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast);
+      transition: background var(--dur-fast), box-shadow var(--dur-fast);
       flex-shrink: 0;
       font-family: inherit;
     }
     .list-item-btn:hover:not(:disabled) {
       background: var(--sage-600);
-      transform: translateY(-1px);
       box-shadow: 0 8px 18px rgba(74, 124, 89, .28);
     }
     .list-item-btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -991,7 +980,7 @@
       font-size: 13px;
       line-height: 1;
       cursor: pointer;
-      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast);
+      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), box-shadow var(--dur-fast);
       font-family: inherit;
       display: flex; align-items: center; justify-content: center;
     }
@@ -999,7 +988,6 @@
       background: var(--sage-50);
       border-color: var(--sage-400);
       color: var(--sage-700);
-      transform: translateY(-1px);
       box-shadow: var(--shadow-sm);
     }
     .action-btn.primary {
@@ -1069,7 +1057,7 @@
       font-weight: 500;
       font-family: inherit;
       cursor: pointer;
-      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast);
+      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), box-shadow var(--dur-fast);
     }
     .pager-btn:hover:not(:disabled):not(.active) {
       background: var(--sage-50);
@@ -1113,7 +1101,7 @@
       background: var(--panel);
       border-radius: var(--radius-sm);
       border: 1px solid var(--border);
-      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast);
+      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), box-shadow var(--dur-fast);
       display: flex;
       justify-content: space-between;
       align-items: center;
@@ -1122,7 +1110,6 @@
     .recent-item:hover {
       background: var(--sage-50);
       border-color: var(--border-strong);
-      transform: translateY(-1px);
       box-shadow: var(--shadow-sm);
     }
 
@@ -1178,7 +1165,7 @@
       font-size: 12px;
       line-height: 1;
       cursor: pointer;
-      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast);
+      transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast), box-shadow var(--dur-fast);
       font-family: inherit;
       display: flex; align-items: center; justify-content: center;
     }
@@ -2356,7 +2343,7 @@
       border: 0;
       border-radius: calc(var(--radius-xl) - 8px);
       transition: background var(--dur-med) var(--ease-breathe), color var(--dur-fast),
-        box-shadow var(--dur-med) var(--ease-breathe), transform var(--dur-fast) var(--ease-spring);
+        box-shadow var(--dur-med) var(--ease-breathe);
     }
     .quick-mode-switcher .env-btn.active {
       border: 0;
@@ -2364,7 +2351,6 @@
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 1px 2px rgba(28, 46, 32, .05),
         0 6px 16px rgba(74, 124, 89, .14);
     }
-    .quick-mode-switcher .env-btn:active { transform: scale(.985); }
     .quick-mode-name { font-size: 12px; letter-spacing: .01em; }
 
     /* 步骤轨：连线 + 圆点，不再是 4 个各自带边框的按钮 */
@@ -2429,7 +2415,7 @@
       border: 1.5px solid var(--sage-200);
       border-radius: 50%;
       background: var(--panel);
-      transition: transform .42s var(--ease-spring), background var(--dur-med) var(--ease-breathe),
+      transition: background var(--dur-med) var(--ease-breathe),
         border-color var(--dur-med), box-shadow var(--dur-med) var(--ease-breathe);
     }
     .quick-progress-step.complete {
@@ -2455,7 +2441,6 @@
       border-color: var(--sage-600);
       background: var(--panel);
       box-shadow: 0 0 0 4px var(--success-bg), 0 4px 10px rgba(74, 124, 89, .22);
-      transform: scale(1.14);
     }
     .quick-progress-compact { display: none; color: var(--text-2); font-size: 11px; font-weight: 600; }
 
@@ -2561,7 +2546,7 @@
       cursor: pointer;
       box-shadow: inset 0 1px 2px rgba(28, 46, 32, .03);
       transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast),
-        box-shadow var(--dur-med) var(--ease-breathe), transform var(--dur-fast) var(--ease-spring);
+        box-shadow var(--dur-med) var(--ease-breathe);
     }
     .quick-filter-toggle svg {
       width: 13px;
@@ -2571,16 +2556,13 @@
       stroke: currentColor;
       stroke-width: var(--icon-stroke);
       stroke-linecap: round;
-      transition: transform var(--dur-med) var(--ease-spring);
     }
     .quick-filter-toggle:hover {
       border-color: var(--sage-400);
       background: var(--panel);
       color: var(--sage-700);
-      transform: translateY(-1px);
       box-shadow: var(--shadow-sm);
     }
-    .quick-filter-toggle:active { transform: scale(.97); }
     .quick-filter-toggle:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 2px; }
     .quick-filter-toggle.has-filters { border-color: var(--sage-400); color: var(--sage-700); }
     .quick-filter-toggle.is-open {
@@ -2704,7 +2686,6 @@
     .quick-summary-actions .list-item-actions .quick-action-btn:hover:not(:disabled) {
       background: var(--panel);
       border-color: transparent;
-      transform: translateY(-1px);
       box-shadow: 0 4px 10px rgba(74, 124, 89, .16);
     }
     .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn.primary,
@@ -2783,15 +2764,14 @@
       box-shadow: inset 0 0 0 1px var(--border), inset 0 1px 0 rgba(255, 255, 255, .7);
     }
 
-    /* 次级按钮改成药丸岛，带按压回弹 */
+    /* 次级按钮使用统一圆角和颜色反馈。 */
     .quick-secondary-btn {
       min-height: 30px;
       padding: 0 13px;
       border-radius: 999px;
       font-size: 11px;
     }
-    .quick-secondary-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
-    .quick-secondary-btn:active:not(:disabled) { transform: scale(.97); }
+    .quick-secondary-btn:hover:not(:disabled) {  box-shadow: var(--shadow-sm); }
 
     .quick-stage-title { color: var(--text-1); font-size: 12.5px; letter-spacing: .01em; }
     .quick-summary-title { font-size: 12.5px; }
@@ -2950,6 +2930,92 @@
     .admin-verification-dialog .btn-row { margin-top: 20px; justify-content: flex-end; }
     .admin-verification-dialog .field-input[aria-invalid="true"] { border-color: var(--error); }
 
+    /* 组件定位：启停和使用说明在前，低频设置按需展开。 */
+    #panel-component { font-size: 14px; }
+    #panel-component [hidden] { display: none !important; }
+    .component-status { padding: 18px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--panel); }
+    .component-status[data-state="on"] { background: var(--sage-100); border-color: var(--sage-100); }
+    .component-status[data-state="setup"],
+    .component-status[data-state="paused"] { background: var(--warn-bg); border-color: transparent; }
+    .component-status-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .component-muted { color: var(--text-2); font-size: 13px; line-height: 1.7; }
+    .component-status-label { margin-bottom: 5px; }
+    .component-page-state { display: flex; align-items: center; gap: 9px; font-size: 26px; line-height: 1.3; font-weight: 600; }
+    .component-page-state::before { content: ''; width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: var(--text-3); }
+    .component-status[data-state="on"] .component-page-state::before { background: var(--sage-600); }
+    .component-status[data-state="setup"] .component-page-state,
+    .component-status[data-state="paused"] .component-page-state { color: var(--warn); }
+    .component-status[data-state="setup"] .component-page-state::before,
+    .component-status[data-state="paused"] .component-page-state::before { background: var(--warn); }
+    .component-switch { position: relative; width: 52px; height: 30px; flex-shrink: 0; padding: 0; border: 0; border-radius: 18px; background: var(--sage-300); cursor: pointer; }
+    .component-switch::after { content: ''; position: absolute; top: 4px; left: 4px; width: 22px; height: 22px; border-radius: 50%; background: var(--panel); }
+    .component-switch[aria-checked="true"] { background: var(--sage-500); }
+    .component-switch[aria-checked="true"]::after { left: 26px; }
+    .component-switch:disabled { opacity: .45; cursor: not-allowed; }
+    .component-status-note { margin-top: 11px; }
+    .component-notice { margin-top: 12px; color: var(--error); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+    .component-refresh-error { margin-top: 12px; }
+    .component-page { margin-top: 16px; }
+    .component-page summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; list-style: none; cursor: pointer; }
+    .component-page summary::-webkit-details-marker,
+    .component-setting > summary::-webkit-details-marker { display: none; }
+    .component-page-origin { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+    .component-page-more { display: flex; align-items: center; gap: 5px; color: var(--text-2); font-size: 13px; flex-shrink: 0; }
+    .component-chevron { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+    .component-page[open] .component-chevron,
+    .component-setting[open] > summary .component-chevron { rotate: 90deg; }
+    .component-project-details { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .component-detail-label { margin-top: 10px; }
+    .component-path { font: 12px/1.7 ui-monospace, SFMono-Regular, monospace; color: var(--text-2); overflow-wrap: anywhere; }
+    .component-usage { padding: 22px 0 18px; border-bottom: 1px solid var(--border); }
+    .component-section-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+    .component-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; }
+    .component-row > :first-child { min-width: 0; }
+    .component-key-line { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; color: var(--text-2); }
+    .component-key-line kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); color: var(--text-1); font-family: inherit; font-size: 13px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
+    .component-mouse-action { white-space: nowrap; }
+    .component-settings { padding-top: 20px; }
+    .component-setting { border-bottom: 1px solid var(--border); }
+    .component-setting:last-child { border-bottom: 0; }
+    .component-setting > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 56px; list-style: none; cursor: pointer; }
+    .component-setting-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .component-setting-title .icon-svg { width: 18px; height: 18px; color: var(--text-2); }
+    .component-setting-value { display: flex; align-items: center; gap: 8px; flex-shrink: 0; color: var(--text-2); font-size: 13px; }
+    .component-setting-value [data-pending="true"] { color: var(--warn); }
+    .component-setting-body { padding: 0 0 16px 28px; }
+    .component-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    #panel-component .btn { min-height: 38px; padding: 7px 12px; border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: none; font-size: 13px; letter-spacing: 0; flex: 0 0 auto; }
+    #panel-component .btn-primary { border-color: var(--sage-500); }
+    #panel-component .btn-primary:hover:not(:disabled) { box-shadow: none; }
+    #panel-component .component-text-btn { border-color: transparent; background: transparent; padding-inline: 8px; }
+    #panel-component .btn:focus-visible,
+    .component-switch:focus-visible,
+    .component-page summary:focus-visible,
+    .component-setting summary:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 3px; }
+    .component-copy-hint { margin-top: 10px; }
+    .component-install { margin-top: 12px; }
+    .component-install summary { cursor: pointer; font-size: 13px; color: var(--sage-600); }
+    .component-install code { display: block; padding: 10px; margin: 10px 0; background: var(--sage-50); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .component-command-preview { display: block; width: 100%; min-height: 150px; margin-top: 10px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text-2); font: 12px/1.6 ui-monospace, monospace; resize: vertical; }
+    .component-setup { margin: 12px 0; padding-left: 20px; color: var(--text-2); font-size: 13px; line-height: 1.8; }
+    .component-setup li + li { margin-top: 5px; }
+    .component-confirm { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .component-shortcut { max-width: 65%; overflow-wrap: anywhere; }
+    .component-origin-form { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+    .component-origin-form .field-input { min-width: 0; padding: 8px 10px; font-size: 14px; }
+    .component-origin-label { display: block; margin-top: 10px; }
+    .component-origins { list-style: none; padding: 0; margin: 8px 0 0; }
+    .component-origins li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; font-size: 13px; overflow-wrap: anywhere; }
+    #componentSetupMessage { margin-top: 10px; }
+    @media (max-width: 360px) {
+      .component-setting-body { padding-left: 0; }
+      .component-page-state { font-size: 24px; }
+    }
+    .workspace-dock.is-scrollable { grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-rows: auto; overflow-x: auto; }
+    .workspace-dock.is-scrollable .workspace-dock-item,
+    .workspace-dock.is-scrollable .workspace-dock-item:first-child { min-width: 0; padding: 7px 2px; gap: 4px; flex-direction: column; justify-content: center; font-size: 10px; grid-row: auto; white-space: nowrap; }
+    .workspace-dock.is-scrollable .workspace-dock-item::after { display: none; }
+    .workspace-dock.is-scrollable .workspace-dock-item:first-child .workspace-dock-icon svg { width: 17px; height: 17px; }
     .hidden { display: none !important; }
 
     /* 动态列表直接更新；视图级过渡由 View Transition 统一处理。 */
@@ -3605,6 +3671,92 @@
 
     </div><!-- /panel-app -->
 
+    <div class="panel" id="panel-component" aria-hidden="true" inert>
+      <section class="component-status" id="componentStatus" data-state="off" aria-label="当前页面启用状态">
+        <div class="component-status-top">
+          <div><p class="component-muted component-status-label">当前标签页</p><p class="component-page-state" id="componentPageState" role="status">正在检查</p></div>
+          <button class="component-switch" id="componentToggle" type="button" role="switch" aria-label="启用当前页面的组件定位" aria-checked="false" aria-describedby="componentStatusHint componentNotice" disabled></button>
+        </div>
+        <p class="component-muted component-status-note" id="componentStatusHint">正在检查本机辅助程序与页面状态。</p>
+        <p class="component-notice" id="componentNotice" hidden></p>
+      </section>
+      <div class="component-refresh-error" id="componentRefreshError" hidden>
+        <p class="component-notice" id="componentRefreshMessage" role="alert"></p>
+        <button class="btn btn-ghost" id="componentRetry" type="button">重新检查</button>
+      </div>
+      <details class="component-page" id="componentPageDetails">
+        <summary aria-label="查看当前页面与项目目录"><span class="component-page-origin" id="componentPageOrigin">正在读取页面…</span><span class="component-page-more"><span id="componentFrameworkSummary">页面信息</span><svg class="component-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span></summary>
+        <div class="component-project-details">
+          <p class="component-muted">当前页面</p><p class="component-path" id="componentPageUrl">正在读取当前页面…</p>
+          <p class="component-muted component-detail-label">框架</p><p class="component-path" id="componentFramework">开启时自动识别</p>
+          <p class="component-muted component-detail-label">项目目录</p><p class="component-path" id="componentProjectRoot">开启时自动识别</p>
+          <p class="component-path component-detail-label" id="componentLastOpened" hidden></p>
+        </div>
+      </details>
+      <section class="component-usage" aria-label="快捷操作">
+        <h2 class="component-section-title">在网页上操作</h2>
+        <div class="component-row"><span>打开源码</span><span class="component-key-line"><kbd id="componentOpenShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 单击</span></span></div>
+        <div class="component-row"><span>查看父组件</span><span class="component-key-line"><kbd id="componentMenuShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 右键</span></span></div>
+      </section>
+      <section class="component-settings" aria-label="定位设置">
+        <h2 class="component-section-title">设置</h2>
+        <div id="componentSettingsList">
+          <details class="component-setting" id="componentEditorSection">
+            <summary><span class="component-setting-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>编辑器</span><span class="component-setting-value"><span id="componentEditorName">待选择</span><svg class="component-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span></summary>
+            <div class="component-setting-body">
+              <p class="component-path" id="componentEditorPath" hidden></p>
+              <p class="component-muted" id="componentEditorHint">从“应用程序”中选择编辑器 .app 文件。</p>
+              <div class="component-actions"><button class="btn btn-ghost" id="componentChooseEditor" type="button" disabled>选择编辑器</button><button class="btn btn-ghost component-text-btn" id="componentClearEditor" type="button" hidden disabled>清空</button></div>
+            </div>
+          </details>
+          <details class="component-setting" id="componentShortcutSection">
+            <summary><span class="component-setting-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M8 16h8"/></svg>快捷键</span><span class="component-setting-value">修改<svg class="component-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span></summary>
+            <div class="component-setting-body">
+              <div class="component-row"><span>打开源码</span><button class="btn btn-ghost component-shortcut" id="componentOpenShortcut" type="button">⌘ Command</button></div>
+              <div class="component-row"><span>查看父组件</span><button class="btn btn-ghost component-shortcut" id="componentMenuShortcut" type="button">⌘ Command</button></div>
+              <p class="component-muted component-copy-hint" id="componentShortcutHint" role="status" hidden></p>
+              <button class="btn btn-ghost component-text-btn" id="componentResetShortcuts" type="button">恢复默认</button>
+            </div>
+          </details>
+          <details class="component-setting" id="componentOriginSection">
+            <summary><span class="component-setting-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a18 18 0 0 1 0 18 18 18 0 0 1 0-18Z"/></svg>开发地址</span><span class="component-setting-value"><span id="componentOriginSummary">默认本地地址</span><svg class="component-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span></summary>
+            <div class="component-setting-body">
+              <p class="component-muted">已支持 localhost、127.0.0.1 和 ::1。</p>
+              <label class="component-muted component-origin-label" for="componentOriginInput">添加其他开发地址</label>
+              <form class="component-origin-form" id="componentOriginForm"><input class="field-input" id="componentOriginInput" type="url" placeholder="http://dev.local:5173" required aria-describedby="componentOriginMessage"><button class="btn btn-ghost" id="componentAddOrigin" type="submit">添加</button></form>
+              <p class="component-notice" id="componentOriginMessage" role="status" hidden></p>
+              <ul class="component-origins" id="componentOrigins"></ul>
+            </div>
+          </details>
+          <details class="component-setting" id="componentHostSection">
+            <summary><span class="component-setting-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5m6-5v5M7 8h10v4a5 5 0 0 1-10 0V8Zm5 9v4"/></svg>辅助程序</span><span class="component-setting-value"><span id="componentHostSummary">检查中</span><svg class="component-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span></summary>
+            <div class="component-setting-body">
+              <div id="componentInstallGuide"><p class="component-muted">安装一次，即可识别本机项目并打开编辑器。</p></div>
+              <p class="component-notice" id="componentHostUpdateHint" hidden></p>
+              <div class="component-actions" id="componentInstallActions"><button class="btn btn-primary" id="componentCopyInstall" type="button">复制安装命令</button></div>
+              <p class="component-muted component-copy-hint" id="componentInstallHint">到终端粘贴并执行，完成后返回本页。</p>
+              <p class="component-muted component-copy-hint" id="componentHostStatus">正在检查连接…</p>
+              <div class="component-actions"><button class="btn btn-ghost" id="componentCheckHost" type="button">检查连接</button><button class="btn btn-ghost component-text-btn" id="componentUninstallHost" type="button">复制卸载命令</button></div>
+              <p class="component-muted" id="componentSetupMessage" role="status" hidden></p>
+              <details class="component-install" id="componentCommandDetails" hidden><summary id="componentCommandTitle">查看完整安装命令</summary><textarea class="component-command-preview" id="componentCommandPreview" aria-label="完整终端命令" readonly spellcheck="false"></textarea></details>
+              <div class="component-confirm" id="componentUninstallConfirm" hidden><p class="component-muted">卸载后，所有页面的定位都会停止。编辑器设置会保留。</p><div class="component-actions"><button class="btn btn-danger" id="componentConfirmUninstall" type="button">确认卸载</button><button class="btn btn-ghost" id="componentCancelUninstall" type="button">取消</button></div></div>
+              <details class="component-install" id="componentInstallHelp"><summary>安装帮助与修复</summary>
+                <div id="componentRepairActions"></div>
+                <p class="component-muted component-copy-hint">需要 macOS、Chrome 和 Node.js 18 及以上版本。若终端提示找不到 node，请先安装 Node.js。</p>
+                <p class="component-muted component-copy-hint">也可以在工具箱项目目录执行：</p><code id="componentInstallCommand" class="component-path"></code>
+                <button class="btn btn-ghost" id="componentDownloadInstall" type="button">下载备用安装包</button>
+                <p class="component-muted component-copy-hint">若出现“Apple 无法验证”，可按以下步骤处理本次安装包：</p>
+                <button class="btn btn-ghost" id="componentCopyQuarantine" type="button">复制解除隔离命令</button>
+                <ol class="component-setup"><li>粘贴到终端，末尾保留一个空格。</li><li>把解压得到的 component-helper 文件夹拖到命令末尾，按回车。</li><li>重新双击“安装.command”。</li></ol>
+                <p class="component-muted">命令删除所选安装包的 com.apple.quarantine 属性。<a href="https://support.apple.com/zh-cn/102445" target="_blank" rel="noopener noreferrer">查看 Apple 说明</a></p>
+                <p class="component-muted component-copy-hint">旧版辅助程序需手动重装一次，之后自动更新。更新失败时，可检查连接重试，或复制重装命令修复。</p>
+                <p class="component-muted component-copy-hint">扩展编号：<span id="componentExtensionId" class="component-path"></span></p>
+              </details>
+            </div>
+          </details>
+        </div>
+      </section>
+    </div><!-- /panel-component -->
     </div><!-- /panels -->
     <div class="utility-host" id="utilityHost"></div>
   </main>

@@ -1,4 +1,985 @@
+var IDTComponentSources = (() => {
+  var __create = Object.create;
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getProtoOf = Object.getPrototypeOf;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __commonJS = (cb, mod) => function __require() {
+    try {
+      return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+    } catch (e) {
+      throw mod = 0, e;
+    }
+  };
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+    // If the importer is in node compatibility mode or this is not an ESM
+    // file that has been converted to a CommonJS file using a Babel-
+    // compatible transform (i.e. "__esModule" has not been set), then set
+    // "default" to the CommonJS "module.exports" for node compatibility.
+    isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+    mod
+  ));
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // node_modules/.pnpm/@jridgewell+resolve-uri@3.1.2/node_modules/@jridgewell/resolve-uri/dist/resolve-uri.umd.js
+  var require_resolve_uri_umd = __commonJS({
+    "node_modules/.pnpm/@jridgewell+resolve-uri@3.1.2/node_modules/@jridgewell/resolve-uri/dist/resolve-uri.umd.js"(exports, module) {
+      (function(global, factory) {
+        typeof exports === "object" && typeof module !== "undefined" ? module.exports = factory() : typeof define === "function" && define.amd ? define(factory) : (global = typeof globalThis !== "undefined" ? globalThis : global || self, global.resolveURI = factory());
+      })(exports, (function() {
+        "use strict";
+        const schemeRegex = /^[\w+.-]+:\/\//;
+        const urlRegex = /^([\w+.-]+:)\/\/([^@/#?]*@)?([^:/#?]*)(:\d+)?(\/[^#?]*)?(\?[^#]*)?(#.*)?/;
+        const fileRegex = /^file:(?:\/\/((?![a-z]:)[^/#?]*)?)?(\/?[^#?]*)(\?[^#]*)?(#.*)?/i;
+        function isAbsoluteUrl(input) {
+          return schemeRegex.test(input);
+        }
+        function isSchemeRelativeUrl(input) {
+          return input.startsWith("//");
+        }
+        function isAbsolutePath(input) {
+          return input.startsWith("/");
+        }
+        function isFileUrl(input) {
+          return input.startsWith("file:");
+        }
+        function isRelative(input) {
+          return /^[.?#]/.test(input);
+        }
+        function parseAbsoluteUrl(input) {
+          const match = urlRegex.exec(input);
+          return makeUrl(match[1], match[2] || "", match[3], match[4] || "", match[5] || "/", match[6] || "", match[7] || "");
+        }
+        function parseFileUrl(input) {
+          const match = fileRegex.exec(input);
+          const path = match[2];
+          return makeUrl("file:", "", match[1] || "", "", isAbsolutePath(path) ? path : "/" + path, match[3] || "", match[4] || "");
+        }
+        function makeUrl(scheme, user, host, port, path, query, hash) {
+          return {
+            scheme,
+            user,
+            host,
+            port,
+            path,
+            query,
+            hash,
+            type: 7
+          };
+        }
+        function parseUrl(input) {
+          if (isSchemeRelativeUrl(input)) {
+            const url2 = parseAbsoluteUrl("http:" + input);
+            url2.scheme = "";
+            url2.type = 6;
+            return url2;
+          }
+          if (isAbsolutePath(input)) {
+            const url2 = parseAbsoluteUrl("http://foo.com" + input);
+            url2.scheme = "";
+            url2.host = "";
+            url2.type = 5;
+            return url2;
+          }
+          if (isFileUrl(input))
+            return parseFileUrl(input);
+          if (isAbsoluteUrl(input))
+            return parseAbsoluteUrl(input);
+          const url = parseAbsoluteUrl("http://foo.com/" + input);
+          url.scheme = "";
+          url.host = "";
+          url.type = input ? input.startsWith("?") ? 3 : input.startsWith("#") ? 2 : 4 : 1;
+          return url;
+        }
+        function stripPathFilename(path) {
+          if (path.endsWith("/.."))
+            return path;
+          const index = path.lastIndexOf("/");
+          return path.slice(0, index + 1);
+        }
+        function mergePaths(url, base) {
+          normalizePath(base, base.type);
+          if (url.path === "/") {
+            url.path = base.path;
+          } else {
+            url.path = stripPathFilename(base.path) + url.path;
+          }
+        }
+        function normalizePath(url, type) {
+          const rel = type <= 4;
+          const pieces = url.path.split("/");
+          let pointer = 1;
+          let positive = 0;
+          let addTrailingSlash = false;
+          for (let i = 1; i < pieces.length; i++) {
+            const piece = pieces[i];
+            if (!piece) {
+              addTrailingSlash = true;
+              continue;
+            }
+            addTrailingSlash = false;
+            if (piece === ".")
+              continue;
+            if (piece === "..") {
+              if (positive) {
+                addTrailingSlash = true;
+                positive--;
+                pointer--;
+              } else if (rel) {
+                pieces[pointer++] = piece;
+              }
+              continue;
+            }
+            pieces[pointer++] = piece;
+            positive++;
+          }
+          let path = "";
+          for (let i = 1; i < pointer; i++) {
+            path += "/" + pieces[i];
+          }
+          if (!path || addTrailingSlash && !path.endsWith("/..")) {
+            path += "/";
+          }
+          url.path = path;
+        }
+        function resolve(input, base) {
+          if (!input && !base)
+            return "";
+          const url = parseUrl(input);
+          let inputType = url.type;
+          if (base && inputType !== 7) {
+            const baseUrl = parseUrl(base);
+            const baseType = baseUrl.type;
+            switch (inputType) {
+              case 1:
+                url.hash = baseUrl.hash;
+              // fall through
+              case 2:
+                url.query = baseUrl.query;
+              // fall through
+              case 3:
+              case 4:
+                mergePaths(url, baseUrl);
+              // fall through
+              case 5:
+                url.user = baseUrl.user;
+                url.host = baseUrl.host;
+                url.port = baseUrl.port;
+              // fall through
+              case 6:
+                url.scheme = baseUrl.scheme;
+            }
+            if (baseType > inputType)
+              inputType = baseType;
+          }
+          normalizePath(url, inputType);
+          const queryHash = url.query + url.hash;
+          switch (inputType) {
+            // This is impossible, because of the empty checks at the start of the function.
+            // case UrlType.Empty:
+            case 2:
+            case 3:
+              return queryHash;
+            case 4: {
+              const path = url.path.slice(1);
+              if (!path)
+                return queryHash || ".";
+              if (isRelative(base || input) && !isRelative(path)) {
+                return "./" + path + queryHash;
+              }
+              return path + queryHash;
+            }
+            case 5:
+              return url.path + queryHash;
+            default:
+              return url.scheme + "//" + url.user + url.host + url.port + url.path + queryHash;
+          }
+        }
+        return resolve;
+      }));
+    }
+  });
+
+  // src/inspector/source-resolver.mjs
+  var source_resolver_exports = {};
+  __export(source_resolver_exports, {
+    clearSourceCache: () => clearSourceCache,
+    parseStack: () => parseStack,
+    resolveComponentSource: () => resolveComponentSource
+  });
+
+  // node_modules/.pnpm/@jridgewell+sourcemap-codec@1.6.0/node_modules/@jridgewell/sourcemap-codec/dist/sourcemap-codec.mjs
+  var comma = ",".charCodeAt(0);
+  var semicolon = ";".charCodeAt(0);
+  var chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var intToChar = new Uint8Array(64);
+  var charToInt = new Uint8Array(128);
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars.charCodeAt(i);
+    intToChar[i] = c;
+    charToInt[c] = i;
+  }
+  function decodeInteger(reader) {
+    let value = 0;
+    let shift = 0;
+    let integer = 0;
+    do {
+      const c = reader.next();
+      integer = charToInt[c];
+      value |= (integer & 31) << shift;
+      shift += 5;
+    } while (integer & 32);
+    return value;
+  }
+  function decodeSign(num) {
+    return num & 1 ? -2147483648 | -(num >>> 1) : num >>> 1;
+  }
+  function hasMoreVlq(reader, max) {
+    if (reader.pos >= max) return false;
+    return reader.peek() !== comma;
+  }
+  var bufLength = 1024 * 16;
+  var StringReader = class {
+    constructor(buffer) {
+      this.pos = 0;
+      this.buffer = buffer;
+    }
+    next() {
+      return this.buffer.charCodeAt(this.pos++);
+    }
+    peek() {
+      return this.buffer.charCodeAt(this.pos);
+    }
+    indexOf(char) {
+      const { buffer, pos } = this;
+      const idx = buffer.indexOf(char, pos);
+      return idx === -1 ? buffer.length : idx;
+    }
+  };
+  function decode(mappings) {
+    const { length } = mappings;
+    const reader = new StringReader(mappings);
+    const decoded = [];
+    let genColumn = 0;
+    let sourcesIndex = 0;
+    let sourceLine = 0;
+    let sourceColumn = 0;
+    let namesIndex = 0;
+    do {
+      const semi = reader.indexOf(";");
+      const line = [];
+      let sorted = true;
+      let lastCol = 0;
+      genColumn = 0;
+      while (reader.pos < semi) {
+        let seg;
+        genColumn += decodeSign(decodeInteger(reader));
+        if (genColumn < lastCol) sorted = false;
+        lastCol = genColumn;
+        if (hasMoreVlq(reader, semi)) {
+          sourcesIndex += decodeSign(decodeInteger(reader));
+          sourceLine += decodeSign(decodeInteger(reader));
+          sourceColumn += decodeSign(decodeInteger(reader));
+          if (hasMoreVlq(reader, semi)) {
+            namesIndex += decodeSign(decodeInteger(reader));
+            seg = [genColumn, sourcesIndex, sourceLine, sourceColumn, namesIndex];
+          } else {
+            seg = [genColumn, sourcesIndex, sourceLine, sourceColumn];
+          }
+        } else {
+          seg = [genColumn];
+        }
+        line.push(seg);
+        reader.pos++;
+      }
+      if (!sorted) sort(line);
+      decoded.push(line);
+      reader.pos = semi + 1;
+    } while (reader.pos <= length);
+    return decoded;
+  }
+  function sort(line) {
+    line.sort(sortComparator);
+  }
+  function sortComparator(a, b) {
+    return a[0] - b[0];
+  }
+
+  // node_modules/.pnpm/@jridgewell+trace-mapping@0.3.31/node_modules/@jridgewell/trace-mapping/dist/trace-mapping.mjs
+  var import_resolve_uri = __toESM(require_resolve_uri_umd(), 1);
+  function stripFilename(path) {
+    if (!path) return "";
+    const index = path.lastIndexOf("/");
+    return path.slice(0, index + 1);
+  }
+  function resolver(mapUrl, sourceRoot) {
+    const from = stripFilename(mapUrl);
+    const prefix = sourceRoot ? sourceRoot + "/" : "";
+    return (source) => (0, import_resolve_uri.default)(prefix + (source || ""), from);
+  }
+  var COLUMN = 0;
+  var SOURCES_INDEX = 1;
+  var SOURCE_LINE = 2;
+  var SOURCE_COLUMN = 3;
+  var NAMES_INDEX = 4;
+  function maybeSort(mappings, owned) {
+    const unsortedIndex = nextUnsortedSegmentLine(mappings, 0);
+    if (unsortedIndex === mappings.length) return mappings;
+    if (!owned) mappings = mappings.slice();
+    for (let i = unsortedIndex; i < mappings.length; i = nextUnsortedSegmentLine(mappings, i + 1)) {
+      mappings[i] = sortSegments(mappings[i], owned);
+    }
+    return mappings;
+  }
+  function nextUnsortedSegmentLine(mappings, start) {
+    for (let i = start; i < mappings.length; i++) {
+      if (!isSorted(mappings[i])) return i;
+    }
+    return mappings.length;
+  }
+  function isSorted(line) {
+    for (let j = 1; j < line.length; j++) {
+      if (line[j][COLUMN] < line[j - 1][COLUMN]) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function sortSegments(line, owned) {
+    if (!owned) line = line.slice();
+    return line.sort(sortComparator2);
+  }
+  function sortComparator2(a, b) {
+    return a[COLUMN] - b[COLUMN];
+  }
+  var found = false;
+  function binarySearch(haystack, needle, low, high) {
+    while (low <= high) {
+      const mid = low + (high - low >> 1);
+      const cmp = haystack[mid][COLUMN] - needle;
+      if (cmp === 0) {
+        found = true;
+        return mid;
+      }
+      if (cmp < 0) {
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    found = false;
+    return low - 1;
+  }
+  function upperBound(haystack, needle, index) {
+    for (let i = index + 1; i < haystack.length; index = i++) {
+      if (haystack[i][COLUMN] !== needle) break;
+    }
+    return index;
+  }
+  function lowerBound(haystack, needle, index) {
+    for (let i = index - 1; i >= 0; index = i--) {
+      if (haystack[i][COLUMN] !== needle) break;
+    }
+    return index;
+  }
+  function memoizedState() {
+    return {
+      lastKey: -1,
+      lastNeedle: -1,
+      lastIndex: -1
+    };
+  }
+  function memoizedBinarySearch(haystack, needle, state, key) {
+    const { lastKey, lastNeedle, lastIndex } = state;
+    let low = 0;
+    let high = haystack.length - 1;
+    if (key === lastKey) {
+      if (needle === lastNeedle) {
+        found = lastIndex !== -1 && haystack[lastIndex][COLUMN] === needle;
+        return lastIndex;
+      }
+      if (needle >= lastNeedle) {
+        low = lastIndex === -1 ? 0 : lastIndex;
+      } else {
+        high = lastIndex;
+      }
+    }
+    state.lastKey = key;
+    state.lastNeedle = needle;
+    return state.lastIndex = binarySearch(haystack, needle, low, high);
+  }
+  function parse(map) {
+    return typeof map === "string" ? JSON.parse(map) : map;
+  }
+  var LINE_GTR_ZERO = "`line` must be greater than 0 (lines start at line 1)";
+  var COL_GTR_EQ_ZERO = "`column` must be greater than or equal to 0 (columns start at column 0)";
+  var LEAST_UPPER_BOUND = -1;
+  var GREATEST_LOWER_BOUND = 1;
+  var TraceMap = class {
+    constructor(map, mapUrl) {
+      const isString = typeof map === "string";
+      if (!isString && map._decodedMemo) return map;
+      const parsed = parse(map);
+      const { version, file, names, sourceRoot, sources, sourcesContent } = parsed;
+      this.version = version;
+      this.file = file;
+      this.names = names || [];
+      this.sourceRoot = sourceRoot;
+      this.sources = sources;
+      this.sourcesContent = sourcesContent;
+      this.ignoreList = parsed.ignoreList || parsed.x_google_ignoreList || void 0;
+      const resolve = resolver(mapUrl, sourceRoot);
+      this.resolvedSources = sources.map(resolve);
+      const { mappings } = parsed;
+      if (typeof mappings === "string") {
+        this._encoded = mappings;
+        this._decoded = void 0;
+      } else if (Array.isArray(mappings)) {
+        this._encoded = void 0;
+        this._decoded = maybeSort(mappings, isString);
+      } else if (parsed.sections) {
+        throw new Error(`TraceMap passed sectioned source map, please use FlattenMap export instead`);
+      } else {
+        throw new Error(`invalid source map: ${JSON.stringify(parsed)}`);
+      }
+      this._decodedMemo = memoizedState();
+      this._bySources = void 0;
+      this._bySourceMemos = void 0;
+    }
+  };
+  function cast(map) {
+    return map;
+  }
+  function decodedMappings(map) {
+    var _a;
+    return (_a = cast(map))._decoded || (_a._decoded = decode(cast(map)._encoded));
+  }
+  function originalPositionFor(map, needle) {
+    let { line, column, bias } = needle;
+    line--;
+    if (line < 0) throw new Error(LINE_GTR_ZERO);
+    if (column < 0) throw new Error(COL_GTR_EQ_ZERO);
+    const decoded = decodedMappings(map);
+    if (line >= decoded.length) return OMapping(null, null, null, null);
+    const segments = decoded[line];
+    const index = traceSegmentInternal(
+      segments,
+      cast(map)._decodedMemo,
+      line,
+      column,
+      bias || GREATEST_LOWER_BOUND
+    );
+    if (index === -1) return OMapping(null, null, null, null);
+    const segment = segments[index];
+    if (segment.length === 1) return OMapping(null, null, null, null);
+    const { names, resolvedSources } = map;
+    return OMapping(
+      resolvedSources[segment[SOURCES_INDEX]],
+      segment[SOURCE_LINE] + 1,
+      segment[SOURCE_COLUMN],
+      segment.length === 5 ? names[segment[NAMES_INDEX]] : null
+    );
+  }
+  function OMapping(source, line, column, name) {
+    return { source, line, column, name };
+  }
+  function traceSegmentInternal(segments, memo, line, column, bias) {
+    let index = memoizedBinarySearch(segments, column, memo, line);
+    if (found) {
+      index = (bias === LEAST_UPPER_BOUND ? upperBound : lowerBound)(segments, column, index);
+    } else if (bias === LEAST_UPPER_BOUND) index++;
+    if (index === -1 || index === segments.length) return -1;
+    return index;
+  }
+
+  // src/inspector/source-resolver.mjs
+  var MAX_RESOURCE = 8 * 1024 * 1024;
+  var MAX_CACHE_BYTES = 16 * 1024 * 1024;
+  var MAX_CACHE_ENTRIES = 32;
+  var CACHE_IDLE_TIME = 5 * 60 * 1e3;
+  var cache = /* @__PURE__ */ new Map();
+  var pending = /* @__PURE__ */ new Map();
+  var cacheBytes = 0;
+  var expiryTimer = null;
+  function removeCached(url) {
+    const entry = cache.get(url);
+    if (!entry) return;
+    cacheBytes -= entry.bytes;
+    cache.delete(url);
+  }
+  function expireCache() {
+    const now = Date.now();
+    for (const [url, entry] of cache) {
+      if (entry.usedAt + CACHE_IDLE_TIME > now) break;
+      removeCached(url);
+    }
+  }
+  function scheduleExpiry() {
+    clearTimeout(expiryTimer);
+    expiryTimer = null;
+    const first = cache.values().next().value;
+    if (first) {
+      expiryTimer = setTimeout(() => {
+        expireCache();
+        scheduleExpiry();
+      }, Math.max(1, first.usedAt + CACHE_IDLE_TIME - Date.now()));
+      expiryTimer.unref?.();
+    }
+  }
+  function rememberResource(url, text) {
+    const bytes = text.length * 2;
+    if (bytes > MAX_CACHE_BYTES) return;
+    expireCache();
+    removeCached(url);
+    while (cache.size && (cacheBytes + bytes > MAX_CACHE_BYTES || cache.size >= MAX_CACHE_ENTRIES)) removeCached(cache.keys().next().value);
+    cache.set(url, { text, bytes, usedAt: Date.now() });
+    cacheBytes += bytes;
+    scheduleExpiry();
+  }
+  function parseStack(stack) {
+    const frames = [];
+    for (const line of String(stack || "").split("\n").slice(0, 60)) {
+      const match = line.match(/((?:https?:\/\/|file:\/\/|webpack(?:-internal)?:\/\/|\/)[^\s)]+):(\d+):(\d+)\)?\s*$/);
+      if (!match || /node_modules|react(?:-dom)?[._/-]|<anonymous>|__vite|next\/dist/.test(match[1])) continue;
+      frames.push({ file: match[1], line: Number(match[2]), column: Number(match[3]), kind: "generated" });
+    }
+    return frames;
+  }
+  function allowedResource(value, origin) {
+    try {
+      const url = new URL(value, origin);
+      return ["http:", "https:"].includes(url.protocol) && url.origin === origin ? url.href : "";
+    } catch (_) {
+      return "";
+    }
+  }
+  async function readResource(value, origin) {
+    const url = allowedResource(value, origin);
+    if (!url) throw new Error("\u6E90\u7801\u6620\u5C04\u5730\u5740\u4E0E\u5F53\u524D\u5F00\u53D1\u9875\u9762\u4E0D\u4E00\u81F4");
+    expireCache();
+    const cached = cache.get(url);
+    if (cached) {
+      cache.delete(url);
+      cached.usedAt = Date.now();
+      cache.set(url, cached);
+      scheduleExpiry();
+      return cached.text;
+    }
+    if (pending.has(url)) return pending.get(url).promise;
+    const request = { controller: new AbortController() };
+    pending.set(url, request);
+    request.promise = (async () => {
+      const timer = setTimeout(() => request.controller.abort(), 5e3);
+      try {
+        const response = await fetch(url, { credentials: "omit", redirect: "error", signal: request.controller.signal });
+        if (!response.ok) throw new Error(`\u6E90\u7801\u8BFB\u53D6\u5931\u8D25\uFF08${response.status}\uFF09`);
+        if (Number(response.headers.get("content-length")) > MAX_RESOURCE) throw new Error("\u6E90\u7801\u6620\u5C04\u8D85\u8FC7\u8BFB\u53D6\u4E0A\u9650");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let result = "", size = 0;
+        try {
+          while (true) {
+            const { value: chunk, done } = await reader.read();
+            if (done) break;
+            size += chunk.byteLength;
+            if (size > MAX_RESOURCE) throw new Error("\u6E90\u7801\u6620\u5C04\u8D85\u8FC7\u8BFB\u53D6\u4E0A\u9650");
+            result += decoder.decode(chunk, { stream: true });
+          }
+          result += decoder.decode();
+          if (pending.get(url) === request) rememberResource(url, result);
+          return result;
+        } finally {
+          await reader.cancel().catch(() => {
+          });
+        }
+      } catch (error) {
+        request.controller.abort();
+        throw error;
+      } finally {
+        clearTimeout(timer);
+        if (pending.get(url) === request) pending.delete(url);
+      }
+    })();
+    return request.promise;
+  }
+  function clearSourceCache(origin) {
+    for (const key of cache.keys()) if (!origin || key.startsWith(origin + "/")) removeCached(key);
+    for (const [key, request] of pending) if (!origin || key.startsWith(origin + "/")) {
+      pending.delete(key);
+      request.controller.abort();
+    }
+    scheduleExpiry();
+  }
+  async function mapFromCode(code, generatedUrl, origin) {
+    const refs = [...code.matchAll(/[#@]\s*sourceMappingURL=([^\s*]+)/g)];
+    const reference = refs.at(-1)?.[1];
+    if (!reference) return null;
+    let json, mapUrl = generatedUrl;
+    if (reference.startsWith("data:")) {
+      const comma2 = reference.indexOf(",");
+      if (comma2 < 0) return null;
+      const data = reference.slice(comma2 + 1);
+      json = reference.slice(0, comma2).includes(";base64") ? new TextDecoder().decode(Uint8Array.from(atob(data), (char) => char.charCodeAt(0))) : decodeURIComponent(data);
+    } else {
+      mapUrl = new URL(reference, generatedUrl).href;
+      json = await readResource(mapUrl, origin);
+    }
+    if (json.length > MAX_RESOURCE) throw new Error("\u6E90\u7801\u6620\u5C04\u8D85\u8FC7\u8BFB\u53D6\u4E0A\u9650");
+    return new TraceMap(JSON.parse(json), mapUrl);
+  }
+  function sourcePath(value, origin) {
+    if (value.startsWith(origin + "/")) return new URL(value).pathname;
+    return value;
+  }
+  async function resolveFrame(frame, origin, scripts) {
+    if (frame.file.startsWith("file://") || frame.file.startsWith("/")) return { ...frame, precision: frame.line ? "line" : "file" };
+    let code, generatedUrl = frame.file;
+    if (/^https?:/.test(frame.file)) {
+      code = await readResource(frame.file, origin);
+    } else if (/^webpack(?:-internal)?:/.test(frame.file)) {
+      const wanted = frame.file.replace(/^webpack(?:-internal)?:\/\/[^/]*\//, "").replace(/^\.\//, "");
+      for (const script of scripts.slice(-20).reverse()) {
+        if (!allowedResource(script, origin)) continue;
+        const bundle = await readResource(script, origin);
+        for (const match of bundle.matchAll(/\beval\(("(?:[^"\\]|\\.)*")\)/g)) {
+          let moduleCode;
+          try {
+            moduleCode = JSON.parse(match[1]);
+          } catch (_) {
+            continue;
+          }
+          const moduleUrl = [...moduleCode.matchAll(/[#@]\s*sourceURL=([^\s]+)/g)].at(-1)?.[1];
+          if (moduleUrl && moduleUrl.replace(/^webpack(?:-internal)?:\/\/[^/]*\//, "").replace(/^\.\//, "") === wanted) {
+            code = moduleCode;
+            generatedUrl = script;
+            break;
+          }
+        }
+        if (code) break;
+      }
+    }
+    if (code) {
+      const map = await mapFromCode(code, generatedUrl, origin);
+      if (map) {
+        const original = originalPositionFor(map, { line: frame.line, column: Math.max(0, (frame.column || 1) - 1) });
+        if (original.source && original.line) return { file: sourcePath(original.source, origin), line: original.line, column: original.column == null ? null : original.column + 1, precision: "line" };
+      }
+    }
+    return { file: sourcePath(frame.file, origin), line: null, column: null, precision: "file" };
+  }
+  async function resolveComponentSource(source, origin, scripts = []) {
+    if (!source) return null;
+    if (source.kind !== "stack") {
+      if (!source.file) return null;
+      return { file: sourcePath(source.file, origin), line: source.line || null, column: source.column || null, precision: source.line ? "line" : "file" };
+    }
+    const frames = parseStack(source.stack);
+    for (const frame of frames.slice(0, 12)) {
+      try {
+        const resolved = await resolveFrame(frame, origin, scripts);
+        if (/(?:^|\/)node_modules\/(?:react(?:-dom)?|scheduler)\//.test(resolved.file)) continue;
+        return resolved;
+      } catch (_) {
+      }
+    }
+    return frames[0] ? { file: sourcePath(frames[0].file, origin), line: null, column: null, precision: "file" } : null;
+  }
+  return __toCommonJS(source_resolver_exports);
+})();
+
 /* Generated by scripts/build.js. Source: src/background/*.js */
+
+/* ===== src/common/component-settings.js ===== */
+/* 组件定位的地址规则、快捷键与设置；扩展各上下文共用。 */
+(() => {
+  'use strict';
+  const ns = globalThis.InternalDevToolkit || (globalThis.InternalDevToolkit = {});
+  const SETTINGS_KEY = 'componentInspectorSettings';
+  const TAB_PREFIX = 'componentInspectorTab:';
+  const ORIGIN_PREFIX = 'componentInspectorEnabled:';
+  const MAX_ORIGINS = 50;
+  const DEFAULT_SHORTCUT = Object.freeze({ meta: true, ctrl: false, alt: false, shift: false, code: '' });
+
+  function originOf(value) {
+    try {
+      const url = new URL(value);
+      return /^https?:$/.test(url.protocol) && !url.username && !url.password ? url.origin : '';
+    } catch (_) { return ''; }
+  }
+
+  function isAllowed(value, extraOrigins = []) {
+    const origin = originOf(value);
+    if (!origin) return false;
+    const hostname = new URL(origin).hostname;
+    return ['localhost', '127.0.0.1', '[::1]'].includes(hostname) || extraOrigins.includes(origin);
+  }
+
+  function normalizeShortcut(value) {
+    const input = value || DEFAULT_SHORTCUT;
+    const code = input.code || '';
+    if (typeof code !== 'string' || (code && !/^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-2]))$/.test(code))) {
+      throw new Error('快捷键可搭配字母、数字或 F1 至 F12，也可单独使用修饰键');
+    }
+    const result = { meta: !!input.meta, ctrl: !!input.ctrl, alt: !!input.alt, shift: !!input.shift, code };
+    if (!result.meta && !result.ctrl && !result.alt) throw new Error('快捷键请至少包含 Command、Control 或 Option 中的一个');
+    return result;
+  }
+
+  function shortcutLabel(value) {
+    const shortcut = normalizeShortcut(value);
+    return [shortcut.meta && '⌘ Command', shortcut.ctrl && '⌃ Control', shortcut.alt && '⌥ Option', shortcut.shift && '⇧ Shift', shortcut.code.replace(/^(Key|Digit)/, '')].filter(Boolean).join(' + ');
+  }
+
+  function matchesShortcut(event, shortcut, pressed = new Set()) {
+    return !!event.metaKey === shortcut.meta && !!event.ctrlKey === shortcut.ctrl &&
+      !!event.altKey === shortcut.alt && !!event.shiftKey === shortcut.shift &&
+      (!shortcut.code || pressed.has(shortcut.code) || event.code === shortcut.code);
+  }
+
+  function normalizeSettings(value = {}) {
+    const origins = [...new Set((Array.isArray(value.origins) ? value.origins : []).map(originOf).filter(Boolean))];
+    if (origins.length > MAX_ORIGINS) throw new Error(`最多保存 ${MAX_ORIGINS} 个开发地址，请先移除旧地址`);
+    return { origins, openShortcut: normalizeShortcut(value.openShortcut), menuShortcut: normalizeShortcut(value.menuShortcut) };
+  }
+
+  async function getSettings() {
+    const data = await chrome.storage.local.get(SETTINGS_KEY);
+    try { return normalizeSettings(data[SETTINGS_KEY]); } catch (_) { return normalizeSettings(); }
+  }
+
+  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, DEFAULT_SHORTCUT, originOf, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
+  if (typeof module !== 'undefined' && module.exports) module.exports = ns.componentSettings;
+})();
+
+
+/* ===== src/common/component-runtime.js ===== */
+/* 辅助程序更新只读取当前扩展自带的固定文件。内容摘要随文件变化，无需手工调整版本号。 */
+(() => {
+  'use strict';
+  const files = ['host.cjs', 'lib.cjs', 'installation.cjs'];
+  let cached;
+  async function loadBundle() {
+    if (!cached) {
+      cached = (async () => {
+        const entries = await Promise.all(files.map(async (file) => {
+          const response = await fetch(chrome.runtime.getURL(`native-host/${file}`), { cache: 'no-store' });
+          if (!response.ok) throw new Error('辅助程序更新文件读取失败，请重新加载扩展');
+          return [file, await response.text()];
+        }));
+        const bytes = new TextEncoder().encode(JSON.stringify(entries));
+        if (bytes.length > 512 * 1024) throw new Error('辅助程序更新文件过大');
+        const hash = await crypto.subtle.digest('SHA-256', bytes);
+        return { revision: [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, '0')).join(''), files: Object.fromEntries(entries) };
+      })();
+      cached.catch(() => { cached = null; });
+    }
+    return cached;
+  }
+  (globalThis.InternalDevToolkit ||= {}).componentRuntime = { loadBundle };
+})();
+
+
+/* ===== src/inspector/page-probe.js ===== */
+/* React 的 Fiber 查找、owner 追溯与 _debugSource 读取参考 click-to-react-component。
+ * Copyright (c) 2022 Eric Clemmons, MIT；见 THIRD_PARTY_NOTICES.md。
+ * 该函数由 executeScript 序列化到 MAIN world。所有辅助函数必须位于函数内部。
+ * 只返回数据快照，不安装 hook，不保存框架对象或修改业务状态。
+ */
+function inspectComponentPage(options) {
+  'use strict';
+  options = options || {};
+  if (options.origin && location.origin !== options.origin) return { error: '页面地址已变化' };
+  const limit = 32;
+
+  function parentElement(element) {
+    return element.parentElement || element.getRootNode?.().host || null;
+  }
+
+  function reactFiber(element) {
+    const renderers = window.__REACT_DEVTOOLS_GLOBAL_HOOK__?.renderers;
+    if (renderers?.values) {
+      for (const renderer of renderers.values()) {
+        try {
+          const fiber = renderer.findFiberByHostInstance?.(element);
+          if (fiber) return fiber;
+        } catch (_) { /* React 正在提交时节点可能已卸载。 */ }
+      }
+    }
+    for (const key of Object.keys(element)) {
+      if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) return element[key];
+    }
+    return element._reactRootContainer?._internalRoot?.current?.child || null;
+  }
+
+  function snapshot(value) {
+    const seen = new WeakSet();
+    let remaining = 16000;
+    let entries = 0;
+    function visit(item, depth) {
+      if (remaining <= 0 || entries++ > 250) return '[内容已截断]';
+      if (item === null || typeof item === 'boolean' || typeof item === 'number') return item;
+      if (typeof item === 'string') { const text = item.slice(0, Math.min(remaining, 2000)); remaining -= text.length; return text + (text.length < item.length ? '…' : ''); }
+      if (typeof item === 'undefined') return '[undefined]';
+      if (typeof item === 'bigint') return `${item}n`;
+      if (typeof item === 'symbol') return String(item);
+      if (typeof item === 'function') return `[函数 ${item.name || '匿名'}]`;
+      if (item instanceof Element) return `<${item.tagName.toLowerCase()}>`;
+      if (depth > 4) return Array.isArray(item) ? `[数组 ${item.length} 项]` : '[对象]';
+      if (seen.has(item)) return '[循环引用]';
+      seen.add(item);
+      const result = Array.isArray(item) ? [] : Object.create(null);
+      try {
+        for (const key of Object.keys(item).slice(0, 50)) {
+          if (remaining <= 0) break;
+          const descriptor = Object.getOwnPropertyDescriptor(item, key);
+          result[key] = descriptor && 'value' in descriptor ? visit(descriptor.value, depth + 1) : '[访问器]';
+        }
+      } catch (_) { return '[暂时无法读取]'; }
+      return result;
+    }
+    return visit(value, 0);
+  }
+
+  function typeName(type) {
+    if (typeof type === 'string') return type;
+    return type?.displayName || type?.name || type?.render?.displayName || type?.render?.name || type?.type?.displayName || type?.type?.name || '匿名组件';
+  }
+
+  function sourceFromFiber(fiber) {
+    const source = fiber._debugSource;
+    if (source?.fileName) return { file: source.fileName, line: source.lineNumber || null, column: source.columnNumber || null, kind: 'source' };
+    const stack = fiber._debugStack?.stack;
+    return stack ? { stack: String(stack).slice(0, 24000), kind: 'stack' } : null;
+  }
+
+  function reactChain(fiber, includeProps) {
+    const visited = new Set();
+    const result = [];
+    while (fiber && result.length < limit && !visited.has(fiber)) {
+      visited.add(fiber);
+      const type = fiber.type || fiber.elementType;
+      if (type && typeof type !== 'symbol') {
+        result.push({ framework: 'React', name: typeName(type), source: sourceFromFiber(fiber), props: includeProps ? snapshot(fiber.memoizedProps || fiber.pendingProps || {}) : undefined });
+      }
+      fiber = fiber._debugOwner || fiber.return;
+    }
+    return result;
+  }
+
+  function vueChain(instance, version, includeProps) {
+    const result = [];
+    const visited = new Set();
+    while (instance && result.length < limit && !visited.has(instance)) {
+      visited.add(instance);
+      const type = version === 2 ? instance.$options : instance.type;
+      const file = type?.__file;
+      let props;
+      if (includeProps) {
+        if (version === 2) {
+          // Vue 2 的已声明 props 使用框架响应式 getter，需要先取出当前值。
+          const values = Object.create(null);
+          for (const key of Object.keys(type?.props || instance.$props || {}).slice(0, 50)) {
+            try { values[key] = instance.$props?.[key]; } catch (_) { values[key] = '[暂时无法读取]'; }
+          }
+          props = snapshot(values);
+        } else props = snapshot(instance.props || {});
+      }
+      result.push({ framework: `Vue ${version}`, name: type?.name || type?.__name || type?._componentTag || file?.split('/').pop()?.replace(/\.vue$/, '') || '匿名组件', source: file ? { file, line: null, column: null, kind: 'source' } : null, props });
+      instance = version === 2 ? instance.$parent : instance.parent;
+    }
+    return result;
+  }
+
+  function find(element, includeProps) {
+    const target = element;
+    for (let depth = 0; element && depth < 80; depth++, element = parentElement(element)) {
+      const fiber = reactFiber(element);
+      if (fiber) return reactChain(fiber, includeProps);
+      const vue3 = element.__vueParentComponent || element.__vue_app__?._instance;
+      if (vue3) return vueChain(vue3, 3, includeProps);
+      let vue2 = element.__vue__;
+      if (vue2) {
+        const visited = new Set();
+        while (!visited.has(vue2)) {
+          visited.add(vue2);
+          const child = vue2.$children?.find((item) => item.$el?.contains?.(target));
+          if (!child) break;
+          vue2 = child;
+        }
+        return vueChain(vue2, 2, includeProps);
+      }
+    }
+    return [];
+  }
+
+  const scripts = () => [...new Set([...Array.from(document.scripts, (script) => script.src), ...performance.getEntriesByType('resource').filter((entry) => entry.initiatorType === 'script').map((entry) => entry.name)])].filter(Boolean).slice(-40);
+  if (options.mode === 'detect') {
+    const frameworks = new Set();
+    const hints = new Set();
+    const sources = new Map();
+    const walker = document.createTreeWalker(document.documentElement, NodeFilter.SHOW_ELEMENT);
+    let element = walker.currentNode;
+    for (let count = 0; element && count < 3000; count++, element = walker.nextNode()) {
+      const chain = find(element, false);
+      for (const item of chain) {
+        frameworks.add(item.framework);
+        if (item.source?.file) hints.add(item.source.file);
+        if (item.source && sources.size < 12) sources.set(JSON.stringify(item.source), item.source);
+      }
+      if (hints.size >= 16 || sources.size >= 12) break;
+    }
+    return { frameworks: [...frameworks], hints: [...hints].slice(0, 32), sources: [...sources.values()], scripts: scripts() };
+  }
+
+  let element;
+  if (/^data-idt-query-[a-f0-9]{32}$/.test(options.marker || '')) {
+    const roots = [document];
+    while (roots.length && !element) {
+      const root = roots.shift();
+      element = root.querySelector(`[${options.marker}]`);
+      if (!element) {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+        let item;
+        for (let count = 0; (item = walker.nextNode()) && count < 5000; count++) if (item.shadowRoot) roots.push(item.shadowRoot);
+      }
+    }
+    element?.removeAttribute(options.marker);
+    if (!element) return { components: [] };
+  } else element = document.elementFromPoint(options.x, options.y);
+  const visited = new Set();
+  while (!options.marker && element?.shadowRoot && !visited.has(element)) {
+    visited.add(element);
+    const inner = element.shadowRoot.elementFromPoint?.(options.x, options.y);
+    if (!inner || inner === element) break;
+    element = inner;
+  }
+  if (!element) return { components: [] };
+  const components = find(element, options.props !== false);
+  // 已存在的 Vue Inspector 标记可直接提供模板行列，无需改造业务项目。
+  const marker = element.closest?.('[data-v-inspector]')?.getAttribute('data-v-inspector');
+  const match = marker?.match(/^(.*):(\d+):(\d+)$/);
+  if (match && components[0]?.framework.startsWith('Vue')) {
+    components[0].source = { file: match[1], line: Number(match[2]), column: Number(match[3]), kind: 'source' };
+  }
+  const rect = element.getBoundingClientRect();
+  return { components, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, scripts: scripts() };
+}
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { inspectComponentPage };
+
 
 /* ===== src/common/projects.js ===== */
 /* ===== src/common/projects.js ===== */
@@ -5150,6 +6131,564 @@ if (typeof module !== 'undefined' && module.exports) {
     handleGetMockEnabled,
     handleSetMockEnabled,
   };
+})();
+
+
+/* ===== src/background/component-inspector.js ===== */
+/* 组件定位：按开发地址记住开关，同地址刷新时沿用项目并恢复页面脚本。 */
+(() => {
+  'use strict';
+  const ns = globalThis.InternalDevToolkit;
+  const policy = ns.componentSettings;
+  const HOST = 'com.internal_dev_toolkit.component_inspector';
+  const transitions = new Map();
+  const snapshots = new Map();
+  const projectChecks = new Map();
+  const CHECK_INTERVAL = 15000;
+  const retryDelay = (failures) => Math.min(1000 * 2 ** Math.min(Math.max(0, failures - 1), 4), CHECK_INTERVAL);
+  let port = null;
+  let serial = 0;
+  let uninstalling = false;
+  let checkingHost = null;
+  let updateFailure = '';
+  let updatedRevision = '';
+  const pending = new Map();
+  const tabKey = (id) => policy.TAB_PREFIX + id;
+  const token = () => crypto.randomUUID();
+  async function withTimeout(task, duration, message) {
+    let timer;
+    try {
+      return await Promise.race([task, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), duration); })]);
+    } finally { clearTimeout(timer); }
+  }
+  function executeScript(options) {
+    return withTimeout(chrome.scripting.executeScript({ ...options, injectImmediately: true }), 10000, '页面响应超时，请刷新页面或点击「检查连接」重试');
+  }
+  function canReuseProject(state, origin) {
+    return state.origin === origin && ['on', 'restoring'].includes(state.status) && !!state.project?.id && !!state.frameworks?.length;
+  }
+  async function originEnabled(origin) {
+    return !!(await chrome.storage.local.get(policy.ORIGIN_PREFIX + origin))[policy.ORIGIN_PREFIX + origin];
+  }
+
+  function nativeRequest(action, payload = {}) {
+    return new Promise((resolve, reject) => {
+      try {
+        if (!port) {
+          const connection = chrome.runtime.connectNative(HOST);
+          port = connection;
+          connection.onMessage.addListener((message) => {
+            const job = pending.get(message.id);
+            if (!job) return;
+            pending.delete(message.id); clearTimeout(job.timer);
+            message.ok ? job.resolve(message) : job.reject(Object.assign(new Error(message.error || '本机操作失败'), { code: message.code }));
+          });
+          connection.onDisconnect.addListener(() => {
+            const detail = chrome.runtime.lastError?.message || '';
+            const unexpected = port === connection;
+            if (unexpected) port = null;
+            const message = /not found|not registered|Specified native/i.test(detail) ? '请先安装本机辅助程序，再检查连接' : '本机辅助程序连接已断开，请检查连接后重试';
+            for (const [id, job] of pending) {
+              if (job.connection !== connection) continue;
+              clearTimeout(job.timer); job.reject(new Error(message)); pending.delete(id);
+            }
+            if (unexpected) pauseAll(message).catch(() => {});
+          });
+        }
+        const id = ++serial;
+        const timer = setTimeout(() => { pending.delete(id); reject(new Error('本机操作超时，请重试')); }, action === 'chooseEditor' ? 130000 : 25000);
+        pending.set(id, { resolve, reject, timer, connection: port });
+        port.postMessage({ ...payload, id, action });
+      } catch (error) { reject(error); }
+    });
+  }
+
+  function disconnectHost() {
+    if (port) { const previous = port; port = null; previous.disconnect(); }
+  }
+
+  async function readyHost() {
+    if (uninstalling) throw new Error('辅助程序正在卸载，请稍候');
+    if (!checkingHost) checkingHost = (async () => {
+      let host = await nativeRequest('status');
+      if (!host.capabilities?.includes('auto-update')) return { ...host, needsInstall: true };
+      try {
+        const bundle = await ns.componentRuntime.loadBundle();
+        if (host.revision === bundle.revision) { updateFailure = ''; return { ...host, updated: updatedRevision === bundle.revision }; }
+        if (updateFailure) return { ...host, updateError: updateFailure };
+        await nativeRequest('update', { bundle });
+        // 更新请求已经返回，此时再断开旧进程，Chrome 会从完整的新版本启动。
+        disconnectHost();
+        host = await nativeRequest('status');
+        if (host.revision !== bundle.revision) throw new Error('辅助程序版本核对失败');
+        updatedRevision = bundle.revision;
+        return { ...host, updated: true };
+      } catch (error) {
+        updateFailure = `自动更新未完成：${error.message}。点击「检查连接」重试。`;
+        return { ...host, updateError: updateFailure };
+      }
+    })().finally(() => { checkingHost = null; });
+    return checkingHost;
+  }
+
+  function assertHostReady(host) {
+    if (host.needsInstall) throw new Error('请最后复制并执行一次重装命令，启用辅助程序自动更新');
+    if (host.updateError) throw new Error(host.updateError);
+  }
+
+  function serviceChanged(error) {
+    return ['COMPONENT_SERVER_OFFLINE', 'COMPONENT_PROJECT_STALE'].includes(error.code) || /服务已重启|目录(?:记录)?已变化|未找到监听|开发服务的工作目录暂时无法读取/.test(error.message);
+  }
+
+  function serviceOffline(error) {
+    return error.code === 'COMPONENT_SERVER_OFFLINE' || /未找到监听|开发服务的工作目录暂时无法读取/.test(error.message);
+  }
+
+  async function checkProject(state, { force = false, minInterval = 0 } = {}) {
+    const previous = projectChecks.get(state.origin);
+    if (previous?.project && previous.projectId !== state.project.id) {
+      if (previous.pending) return previous.promise;
+      if (!previous.failures) return checkProject({ ...state, project: previous.project }, { force, minInterval });
+      if (serviceOffline(previous.error) && Date.now() < previous.nextAt && (!force || Date.now() - previous.checkedAt < minInterval)) return previous.promise;
+    }
+    if (previous?.projectId === state.project.id) {
+      if (previous.pending || (Date.now() < previous.nextAt && (!force || Date.now() - previous.checkedAt < minInterval))) return previous.promise;
+    }
+    const check = { projectId: state.project.id, project: state.project, pending: true, failures: previous?.failures || 0 };
+    check.promise = nativeRequest('checkProject', { origin: state.origin, projectId: state.project.id }).then((result) => {
+      check.failures = 0;
+      check.project = result.project;
+      check.nextAt = Date.now() + CHECK_INTERVAL;
+      return result;
+    }, (error) => {
+      check.error = error;
+      check.failures++;
+      check.nextAt = Date.now() + retryDelay(check.failures);
+      throw error;
+    }).finally(() => { check.pending = false; check.checkedAt = Date.now(); });
+    projectChecks.set(state.origin, check);
+    return check.promise;
+  }
+
+  function watchState(state) {
+    const nextAt = state.retryAt || projectChecks.get(state.origin)?.nextAt;
+    const retryAfter = state.status === 'on' ? CHECK_INTERVAL : state.status === 'recovering' && nextAt ? Math.max(1000, nextAt - Date.now()) : 1000;
+    return { watch: ['on', 'waiting', 'restoring', 'recovering'].includes(state.status), observe: state.status === 'waiting', retryAfter };
+  }
+
+  async function readState(tabId) {
+    const result = await chrome.storage.session.get(tabKey(tabId));
+    const state = result[tabKey(tabId)] || { status: 'off', origin: '', generation: '' };
+    return { ...state, enabled: !!state.origin && await originEnabled(state.origin) };
+  }
+  async function writeState(tabId, state) {
+    await chrome.storage.session.set({ [tabKey(tabId)]: state });
+    chrome.runtime.sendMessage({ type: 'COMPONENT_STATE_CHANGED', tabId }).catch(() => {});
+    return state;
+  }
+  function lock(tabId, task) {
+    const previous = transitions.get(tabId) || Promise.resolve();
+    const next = previous.catch(() => {}).then(task);
+    transitions.set(tabId, next);
+    next.finally(() => { if (transitions.get(tabId) === next) transitions.delete(tabId); }).catch(() => {});
+    return next;
+  }
+
+  async function stopRuntime(tabId) {
+    snapshots.delete(tabId);
+    try {
+      await executeScript({ target: { tabId, allFrames: true }, world: 'ISOLATED', func: () => globalThis.__IDT_COMPONENT_INSPECTOR__?.destroy() });
+    } catch (_) { /* 标签页关闭或离开可注入页面。 */ }
+  }
+
+  async function pause(tabId, error) {
+    const state = await readState(tabId);
+    await writeState(tabId, { ...state, status: 'paused', error, generation: token() });
+    await stopRuntime(tabId);
+  }
+  async function pauseAll(error) {
+    const states = await chrome.storage.session.get(null);
+    await Promise.all(Object.entries(states).filter(([key, state]) => key.startsWith(policy.TAB_PREFIX) && ['on', 'starting', 'restoring', 'waiting', 'recovering'].includes(state.status)).map(([key]) => {
+      const tabId = Number(key.slice(policy.TAB_PREFIX.length));
+      return lock(tabId, async () => {
+        if (['on', 'starting', 'restoring', 'waiting', 'recovering'].includes((await readState(tabId)).status)) await pause(tabId, error);
+      });
+    }));
+  }
+
+  async function assertTarget(tabId, origin, active = false) {
+    const tab = await chrome.tabs.get(tabId);
+    if (active && !tab.active) throw new Error('当前标签页已切换，请在目标页面重新操作');
+    if (policy.originOf(tab.pendingUrl || tab.url) !== origin) throw new Error('当前页面地址已变化，请重试');
+    const settings = await policy.getSettings();
+    if (!policy.isAllowed(origin, settings.origins)) throw new Error('请切换到允许的本地开发页面');
+    return { tab, settings };
+  }
+
+  async function installRuntime(tabId, state, settings, frameId) {
+    const target = frameId == null ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] };
+    await executeScript({ target, world: 'ISOLATED', files: ['component-inspector.js'] });
+    const results = await executeScript({ target, world: 'ISOLATED', func: (config) => {
+      if (location.origin === config.origin) globalThis.__IDT_COMPONENT_INSPECTOR__?.start(config);
+      else globalThis.__IDT_COMPONENT_INSPECTOR__?.destroy();
+      return globalThis.__IDT_COMPONENT_INSPECTOR__?.isRunning(config) === true;
+    }, args: [{ origin: state.origin, generation: state.generation, openShortcut: settings.openShortcut, menuShortcut: settings.menuShortcut }] });
+    if (!results.some((result) => result.frameId === (frameId ?? 0) && result.result === true)) throw new Error('定位脚本尚未启动，请等待页面加载完成后重试');
+  }
+
+  async function startTab(tabId, origin, explicit, previous = {}) {
+    if (uninstalling) throw new Error('辅助程序正在卸载，请稍候');
+    const { settings } = await assertTarget(tabId, origin, explicit);
+    if (!await originEnabled(origin)) return readState(tabId);
+    const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    const generation = token();
+    const reuse = canReuseProject(previous, origin);
+    const initial = { ...(reuse ? previous : {}), status: reuse ? 'restoring' : 'starting', origin, generation, documentId: frame?.documentId, error: '' };
+    IDTComponentSources.clearSourceCache(origin);
+    await writeState(tabId, initial);
+    try {
+      await stopRuntime(tabId);
+      const host = await readyHost();
+      if (!host.editor || !host.editorAvailable) throw new Error('请先选择有效的编辑器');
+      assertHostReady(host);
+      let project = previous.project, frameworks = previous.frameworks;
+      if (reuse) {
+        // 刷新只检查原服务是否仍有效；服务变化时才重新查找项目。
+        try { ({ project } = await checkProject(previous, { force: true })); }
+        catch (error) {
+          if (!serviceChanged(error)) throw error;
+          return startTab(tabId, origin, explicit);
+        }
+      } else {
+        const results = await executeScript({ target: { tabId, allFrames: true }, world: 'MAIN', func: inspectComponentPage, args: [{ mode: 'detect', origin }] });
+        const detections = results.map((result) => result.result).filter((result) => result && !result.error);
+        frameworks = [...new Set(detections.flatMap((result) => result.frameworks || []))];
+        if (!frameworks.length) {
+          return writeState(tabId, { status: 'waiting', origin, generation, documentId: frame?.documentId, error: '' });
+        }
+        const hints = new Set(detections.flatMap((result) => result.hints || []));
+        // React 19 通过调试栈提供路径；启动时也要还原源码，才能识别工作区中的子项目。
+        const sources = new Map();
+        for (const result of detections) {
+          for (const source of result.sources || []) {
+            if (sources.size < 12) sources.set(JSON.stringify(source), { source, scripts: result.scripts });
+          }
+        }
+        const resolved = await withTimeout(Promise.allSettled([...sources.values()].map(({ source, scripts }) => IDTComponentSources.resolveComponentSource(source, origin, scripts))), 8000, '组件源码读取超时，请点击「检查连接」重试');
+        for (const result of resolved) if (result.status === 'fulfilled' && result.value?.file) hints.add(result.value.file);
+        ({ project } = await nativeRequest('identifyProject', { origin, hints: [...hints].slice(0, 32) }));
+        projectChecks.set(origin, { projectId: project.id, project, promise: Promise.resolve({ project }), checkedAt: Date.now(), nextAt: Date.now() + CHECK_INTERVAL, failures: 0 });
+      }
+      if (uninstalling) throw new Error('辅助程序正在卸载，请稍候');
+      const state = { ...initial, status: 'on', project, frameworks, retryAt: 0, retryCount: 0 };
+      await installRuntime(tabId, state, settings);
+      await assertTarget(tabId, origin, explicit);
+      const currentFrame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+      if (frame?.documentId !== currentFrame?.documentId) throw new Error('页面正在切换，加载完成后会自动恢复定位');
+      if (!await originEnabled(origin)) return readState(tabId);
+      const latest = await readState(tabId);
+      if (latest.generation !== generation) throw new Error('页面加载状态已变化，请重试');
+      await writeState(tabId, state);
+      return state;
+    } catch (error) {
+      const latest = await readState(tabId);
+      if (latest.generation === generation && serviceChanged(error) && await originEnabled(origin)) {
+        const retryCount = (previous.retryCount || 0) + 1;
+        return writeState(tabId, { ...latest, status: 'recovering', retryCount, retryAt: Date.now() + retryDelay(retryCount), error: '开发服务暂时离线，服务恢复后会自动启用定位。' });
+      }
+      if (latest.generation === generation) await pause(tabId, error.message);
+      throw error;
+    }
+  }
+
+  async function restoreTab(tabId, sender, payload = {}) {
+    const tab = await chrome.tabs.get(tabId);
+    const origin = policy.originOf(tab.pendingUrl || tab.url);
+    let state = await readState(tabId);
+    if (!origin || !await originEnabled(origin) || !policy.isAllowed(origin, (await policy.getSettings()).origins)) return {};
+    const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+    if (sender && (policy.originOf(sender.url) !== origin || (sender.frameId === 0 && sender.documentId && sender.documentId !== frame?.documentId))) return {};
+    const activeCheck = payload.visible === true && ['visible', 'focus', 'pageshow', 'wake'].includes(payload.reason);
+    if (sender?.frameId > 0 && state.status === 'recovering') return {};
+    if (['on', 'recovering'].includes(state.status) && state.project?.id && state.origin === origin && state.documentId === frame?.documentId) {
+      try {
+        try {
+          const { project } = await checkProject(state, { force: activeCheck, minInterval: 1000 });
+          if (project.id !== state.project.id) {
+            await stopRuntime(tabId);
+            state = await writeState(tabId, { ...state, project, status: 'restoring', generation: token(), error: '', retryAt: 0, retryCount: 0 });
+          }
+        }
+        catch (error) {
+          if (!serviceChanged(error)) throw error;
+          if (serviceOffline(error)) {
+            let recovering = state;
+            if (state.status === 'on') {
+              await stopRuntime(tabId);
+              recovering = await writeState(tabId, { ...state, status: 'recovering', generation: token(), error: '开发服务暂时离线，服务恢复后会自动启用定位。' });
+            }
+            return sender?.frameId > 0 ? {} : watchState(recovering);
+          }
+          return watchState(await startTab(tabId, origin, false));
+        }
+        if (state.status === 'restoring') await installRuntime(tabId, state, await policy.getSettings());
+        else if (sender?.frameId > 0) {
+          const child = await chrome.webNavigation.getFrame({ tabId, frameId: sender.frameId });
+          if (sender.documentId && child?.documentId !== sender.documentId) return {};
+          await installRuntime(tabId, state, await policy.getSettings(), sender.frameId);
+        } else {
+          const results = await executeScript({ target: { tabId, documentIds: [frame.documentId] }, world: 'ISOLATED', func: (config) => globalThis.__IDT_COMPONENT_INSPECTOR__?.isRunning(config) === true, args: [{ origin, generation: state.generation }] });
+          if (!results[0]?.result) await installRuntime(tabId, state, await policy.getSettings());
+        }
+        if (['recovering', 'restoring'].includes(state.status)) {
+          const restored = await writeState(tabId, { ...state, status: 'on', retryAt: 0, retryCount: 0, error: '' });
+          return sender?.frameId > 0 ? {} : watchState(restored);
+        }
+      } catch (error) { await pause(tabId, error.message); throw error; }
+      return sender?.frameId > 0 ? {} : watchState(state);
+    }
+    if (sender?.frameId > 0) return {};
+    if (state.status === 'recovering' && state.retryAt > Date.now() && !activeCheck) return watchState(state);
+    const restored = await startTab(tabId, origin, false, ['restoring', 'recovering'].includes(state.status) ? state : {});
+    return watchState(restored);
+  }
+
+  async function matchingTabs(origin) {
+    return (await chrome.tabs.query({})).filter((tab) => policy.originOf(tab.pendingUrl || tab.url) === origin);
+  }
+
+  async function setOriginEnabled(tabId, origin, enabled) {
+    await assertTarget(tabId, origin, true);
+    await chrome.storage.local.set({ [policy.ORIGIN_PREFIX + origin]: enabled });
+    if (!enabled) { projectChecks.delete(origin); IDTComponentSources.clearSourceCache(origin); }
+    const tabs = await matchingTabs(origin);
+    const results = await Promise.allSettled(tabs.map((tab) => lock(tab.id, async () => {
+      if (!enabled) {
+        await writeState(tab.id, { status: 'off', origin, generation: token() });
+        await stopRuntime(tab.id);
+        return {};
+      }
+      // 已经打开的页面也要重新唤醒加载通知，等待尚未挂载的组件。
+      await executeScript({ target: { tabId: tab.id, allFrames: true }, world: 'ISOLATED', files: ['component-document-ready.js'] });
+      return startTab(tab.id, origin, tab.id === tabId);
+    })));
+    const current = results[tabs.findIndex((tab) => tab.id === tabId)];
+    if (current?.status === 'rejected') throw current.reason;
+    return current?.value || {};
+  }
+
+  async function restoreEnabledTabs() {
+    const tabs = await chrome.tabs.query({});
+    await Promise.allSettled(tabs.filter((tab) => tab.status !== 'loading').map((tab) => lock(tab.id, async () => {
+      const origin = policy.originOf(tab.url);
+      if (!origin || !await originEnabled(origin)) return;
+      await executeScript({ target: { tabId: tab.id, allFrames: true }, world: 'ISOLATED', files: ['component-document-ready.js'] });
+      await restoreTab(tab.id);
+    })));
+  }
+
+  async function inspect(sender, payload) {
+    const tabId = sender.tab?.id;
+    const state = await readState(tabId);
+    if (state.status !== 'on' || state.generation !== payload.generation || policy.originOf(sender.url) !== state.origin) throw new Error('当前页面的组件定位已停止');
+    await assertTarget(tabId, state.origin, true);
+    const target = sender.documentId ? { tabId, documentIds: [sender.documentId] } : { tabId, frameIds: [sender.frameId || 0] };
+    const results = await executeScript({ target, world: 'MAIN', func: inspectComponentPage, args: [{ mode: 'element', x: Number(payload.x), y: Number(payload.y), marker: payload.details ? payload.marker : '', props: payload.details === true, origin: state.origin }] });
+    const result = results[0]?.result;
+    if (!result || result.error) throw new Error(result?.error || '页面元素已变化');
+    const latest = await readState(tabId);
+    if (latest.status !== 'on' || latest.generation !== state.generation) throw new Error('页面状态已变化');
+    if (!payload.details) return { components: result.components.map(({ name, framework }) => ({ name, framework })), rect: result.rect };
+    const id = token();
+    let entries = snapshots.get(tabId);
+    if (!entries) { entries = new Map(); snapshots.set(tabId, entries); }
+    const entry = { generation: state.generation, documentId: sender.documentId, frameId: sender.frameId || 0, created: Date.now(), rawComponents: result.components, scripts: result.scripts };
+    entries.set(id, entry);
+    if (entries.size > 8) entries.delete(entries.keys().next().value);
+    const components = await Promise.all(result.components.map(async (component) => {
+      const source = await IDTComponentSources.resolveComponentSource(component.source, state.origin, result.scripts);
+      return { ...component, source };
+    }));
+    const resolvedState = await readState(tabId);
+    if (snapshots.get(tabId)?.get(id) !== entry || resolvedState.status !== 'on' || resolvedState.generation !== state.generation) throw new Error('组件信息已过期，请重新选择');
+    entry.components = components;
+    return { snapshotId: id, components, rect: result.rect };
+  }
+
+  async function openSnapshot(sender, payload) {
+    const tabId = sender.tab?.id;
+    const state = await readState(tabId);
+    const entry = snapshots.get(tabId)?.get(payload.snapshotId);
+    if (state.status !== 'on' || !entry || entry.generation !== state.generation || entry.documentId !== sender.documentId || entry.frameId !== (sender.frameId || 0) || Date.now() - entry.created > 300000) throw new Error('组件信息已过期，请重新选择');
+    await assertTarget(tabId, state.origin, true);
+    const source = entry.components?.[payload.index]?.source;
+    if (!source?.file) throw new Error('此组件尚未提供源码位置');
+    let openingState = state;
+    try {
+      assertHostReady(await readyHost());
+      let result;
+      try { result = await nativeRequest('openSource', { origin: state.origin, projectId: state.project.id, source }); }
+      catch (error) {
+        if (!serviceChanged(error)) throw error;
+        openingState = await lock(tabId, async () => {
+          const latest = await readState(tabId);
+          if (!latest.enabled || latest.origin !== state.origin || latest.documentId !== state.documentId) throw new Error('当前页面的组件定位已停止');
+          if (latest.status === 'on' && latest.project.id !== state.project.id) return latest;
+          return startTab(tabId, state.origin, false);
+        });
+        if (openingState.status !== 'on') throw Object.assign(new Error('正在等待开发服务恢复，恢复后会自动启用定位。'), { code: 'COMPONENT_SERVER_OFFLINE' });
+        const frame = await chrome.webNavigation.getFrame({ tabId, frameId: sender.frameId || 0 });
+        if (entry.documentId && entry.documentId !== frame?.documentId) throw new Error('页面已经切换，请重新选择组件');
+        const rawSource = entry.rawComponents?.[payload.index]?.source;
+        const refreshedSource = rawSource ? await IDTComponentSources.resolveComponentSource(rawSource, state.origin, entry.scripts) : source;
+        if (!refreshedSource?.file) throw new Error('此组件尚未提供源码位置');
+        await assertTarget(tabId, state.origin, true);
+        const latest = await readState(tabId);
+        if (!latest.enabled || latest.status !== 'on' || latest.generation !== openingState.generation) throw new Error('当前页面的组件定位已停止');
+        result = await nativeRequest('openSource', { origin: state.origin, projectId: openingState.project.id, source: refreshedSource });
+      }
+      snapshots.get(tabId)?.delete(payload.snapshotId);
+      const latest = await readState(tabId);
+      if (latest.status === 'on' && latest.generation === openingState.generation) await writeState(tabId, { ...latest, lastOpened: result });
+      return result;
+    } catch (error) {
+      const latest = await readState(tabId);
+      if (serviceChanged(error)) {
+        await lock(tabId, async () => {
+          const current = await readState(tabId);
+          if (current.enabled && current.status === 'on' && current.generation === openingState.generation) {
+            await stopRuntime(tabId);
+            await writeState(tabId, { ...current, status: 'recovering', generation: token(), error: '正在等待开发服务恢复，恢复后会自动启用定位。' });
+          }
+        });
+      } else if (latest.generation === openingState.generation && /编辑器|连接/.test(error.message)) await pause(tabId, error.message);
+      throw error;
+    }
+  }
+
+  async function handle(msg, sender) {
+    const payload = msg.payload || {};
+    if (msg.type === 'COMPONENT_DOCUMENT_READY') {
+      if (!sender.tab?.id) return {};
+      const tabId = sender.tab.id;
+      return lock(tabId, () => restoreTab(tabId, sender, payload));
+    }
+    if (msg.type === 'COMPONENT_INSPECT') return inspect(sender, payload);
+    if (msg.type === 'COMPONENT_OPEN') return openSnapshot(sender, payload);
+    // 设置和系统窗口只接受扩展页面发起的操作。
+    if (!sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('操作来源无效');
+    switch (msg.type) {
+      case 'COMPONENT_STATUS': {
+        const settings = await policy.getSettings();
+        let state = { status: 'off', enabled: false };
+        if (Number.isInteger(payload.tabId)) {
+          const tab = await chrome.tabs.get(payload.tabId);
+          const origin = policy.originOf(tab.pendingUrl || tab.url);
+          state = await readState(payload.tabId);
+          if (state.origin !== origin) state = { status: 'off', origin, enabled: await originEnabled(origin) };
+        }
+        let host;
+        try { host = { connected: true, ...(await readyHost()) }; }
+        catch (error) { host = { connected: false, editor: null, error: error.message }; }
+        return { settings, state, host };
+      }
+      case 'COMPONENT_CHOOSE_EDITOR': {
+        const host = await readyHost();
+        assertHostReady(host);
+        return nativeRequest('chooseEditor');
+      }
+      case 'COMPONENT_RECONNECT_HOST': {
+        if (checkingHost) await checkingHost.catch(() => {});
+        updateFailure = '';
+        // 正在识别项目或打开源码时沿用当前连接，避免检查连接中断这些操作。
+        if (!pending.size) disconnectHost();
+        await readyHost();
+        await restoreEnabledTabs();
+        return {};
+      }
+      case 'COMPONENT_UNINSTALL_HOST': {
+        if (uninstalling) throw new Error('辅助程序正在卸载，请稍候');
+        uninstalling = true;
+        try {
+          if (checkingHost) await checkingHost.catch(() => {});
+          const host = await nativeRequest('status');
+          if (!host.capabilities?.includes('uninstall')) throw new Error('当前版本请复制卸载命令到终端执行');
+          await pauseAll('组件定位已暂停，重新安装辅助程序后可再次启动');
+          const result = await nativeRequest('uninstall');
+          disconnectHost();
+          return result;
+        } finally { uninstalling = false; }
+      }
+      case 'COMPONENT_CLEAR_EDITOR': {
+        assertHostReady(await readyHost());
+        const result = await nativeRequest('clearEditor');
+        await pauseAll('请先选择编辑器，再启动当前页面');
+        return result;
+      }
+      case 'COMPONENT_SAVE_SETTINGS': {
+        const settings = policy.normalizeSettings(payload);
+        await chrome.storage.local.set({ [policy.SETTINGS_KEY]: settings });
+        const all = await chrome.storage.session.get(null);
+        for (const [key, state] of Object.entries(all)) {
+          if (!key.startsWith(policy.TAB_PREFIX) || state.status !== 'on') continue;
+          const tabId = Number(key.slice(policy.TAB_PREFIX.length));
+          await lock(tabId, async () => {
+            const latest = await readState(tabId);
+            if (latest.status !== 'on') return;
+            if (!policy.isAllowed(latest.origin, settings.origins)) await pause(tabId, '该开发地址已从允许列表移除');
+            else await installRuntime(tabId, latest, settings).catch(() => {});
+          });
+        }
+        return { settings };
+      }
+      case 'COMPONENT_START': return lock(`origin:${payload.origin}`, () => setOriginEnabled(payload.tabId, payload.origin, true));
+      case 'COMPONENT_STOP': return lock(`origin:${payload.origin}`, () => setOriginEnabled(payload.tabId, payload.origin, false));
+      default: throw new Error('未知组件定位操作');
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((msg, sender, respond) => {
+    if (!msg?.type?.startsWith('COMPONENT_') || msg.type === 'COMPONENT_STATE_CHANGED') return false;
+    handle(msg, sender).then((result) => respond({ ...result, ok: true })).catch((error) => respond({ ok: false, error: error.message }));
+    return true;
+  });
+  chrome.tabs.onRemoved.addListener((tabId) => { snapshots.delete(tabId); chrome.storage.session.remove(tabKey(tabId)).catch(() => {}); });
+  chrome.webNavigation.onCommitted.addListener((details) => {
+    if (details.frameId !== 0) return;
+    const { tabId } = details;
+    lock(tabId, async () => {
+      const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
+      if (frame?.documentId !== details.documentId) return;
+      const state = await readState(tabId);
+      if (state.status === 'on' && state.documentId === details.documentId) return;
+      const origin = policy.originOf(details.url);
+      const enabled = origin && await originEnabled(origin) && policy.isAllowed(origin, (await policy.getSettings()).origins);
+      const reuse = enabled && details.transitionType === 'reload' && canReuseProject(state, origin);
+      await writeState(tabId, { ...(reuse ? state : {}), status: enabled ? reuse ? 'restoring' : 'waiting' : 'off', origin, generation: token(), documentId: details.documentId, error: '' });
+      snapshots.delete(tabId);
+    }).catch(() => {});
+  });
+
+  function routeChanged(details) {
+    if (details.frameId !== 0) return;
+    lock(details.tabId, async () => {
+      const state = await readState(details.tabId);
+      const frame = await chrome.webNavigation.getFrame({ tabId: details.tabId, frameId: 0 });
+      if (frame?.documentId !== details.documentId) return;
+      snapshots.delete(details.tabId);
+      if (state.status !== 'on') { await restoreTab(details.tabId); return; }
+      await restoreTab(details.tabId);
+      await executeScript({ target: { tabId: details.tabId, documentIds: [details.documentId] }, world: 'ISOLATED', func: () => globalThis.__IDT_COMPONENT_INSPECTOR__?.resetInteraction() });
+    }).catch(() => {});
+  }
+  chrome.webNavigation.onHistoryStateUpdated.addListener(routeChanged);
+  chrome.webNavigation.onReferenceFragmentUpdated.addListener(routeChanged);
+  chrome.tabs.onUpdated.addListener((tabId, change) => {
+    if (change.status === 'complete') lock(tabId, () => restoreTab(tabId)).catch(() => {});
+  });
+  chrome.runtime.onStartup.addListener(() => { restoreEnabledTabs().catch(() => {}); });
+  chrome.runtime.onInstalled.addListener(() => { restoreEnabledTabs().catch(() => {}); });
+  ns.componentInspectorBackground = { readState, handle, nativeRequest };
 })();
 
 

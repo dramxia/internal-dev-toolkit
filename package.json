@@ -6,9 +6,11 @@
   "scripts": {
     "icons": "node scripts/gen-icons.js",
     "build": "node scripts/build.js",
-    "check": "npm run build && node --check content.js && node --check popup.js && node --check background.js && node -e \"JSON.parse(require('fs').readFileSync('manifest.json','utf8'))\"",
-    "test": "node tests/admin-login.test.js && node tests/admin-login-history.test.js && node tests/admin-token-injection.test.js && node tests/app-login.test.js && node tests/popup-toast.test.js && node tests/workspace-ui.test.js && node tests/quick-login-state.test.js && node tests/quick-login-ui.test.js && node tests/teacher-departments.test.js && node tests/teacher-scope-filter.test.js && node tests/quick-login-recent.test.js && node tests/quick-login-open-tab.test.js && node tests/mock-panel-toggle.test.js && node tests/mock-conflict-resolution.test.js && node tests/mock-captured-delete.test.js && node tests/tenant-class-teacher.test.js && node tests/messages.test.js && node tests/project-feature-navigation.test.js && node tests/side-panel.test.js",
-    "test-server": "node test-server.js"
+    "check": "npm run build && node --check content.js && node --check popup.js && node --check background.js && node --check component-inspector.js && node --check component-document-ready.js && node --check native-host/host.cjs && node --check native-host/lib.cjs && node -e \"JSON.parse(require('fs').readFileSync('manifest.json','utf8'))\"",
+    "test": "node tests/admin-login.test.js && node tests/admin-login-history.test.js && node tests/admin-token-injection.test.js && node tests/app-login.test.js && node tests/popup-toast.test.js && node tests/workspace-ui.test.js && node tests/quick-login-state.test.js && node tests/quick-login-ui.test.js && node tests/teacher-departments.test.js && node tests/teacher-scope-filter.test.js && node tests/quick-login-recent.test.js && node tests/quick-login-open-tab.test.js && node tests/mock-panel-toggle.test.js && node tests/mock-conflict-resolution.test.js && node tests/mock-captured-delete.test.js && node tests/tenant-class-teacher.test.js && node tests/messages.test.js && node tests/project-feature-navigation.test.js && node tests/side-panel.test.js && npm run test:component",
+    "test-server": "node test-server.js",
+    "test:component": "node tests/component-settings.test.js && node tests/component-ui.test.js && node tests/component-native.test.js && node --test tests/component-cache.test.js tests/component-vscode.test.js tests/component-termrelay.test.js && node tests/component-state.test.js && node tests/component-watch.test.js && node tests/component-source.test.js && node tests/component-installation.test.js && node tests/component-update.test.js",
+    "test:component:browser": "npm run build && node tests/component-browser.test.js"
   },
   "keywords": [
     "chrome-extension",
@@ -16,5 +18,16 @@
     "internal",
     "scaffold"
   ],
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@jridgewell/trace-mapping": "^0.3.31",
+    "@playwright/test": "^1.64.1",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-dom18": "npm:react-dom@^18.3.1",
+    "react18": "npm:react@^18.3.1",
+    "vue": "^3.5.44",
+    "vue2": "npm:vue@2.7.16"
+  }
 }

@@ -6,6 +6,7 @@
 
 ## 功能
 
+- **本地组件定位**：底部「定位」页顶部显示当前页面的状态和开发地址开关；同地址的所有路由和标签页共用开关，刷新、重新打开页面和重启浏览器后继续沿用。首次使用时自动展开安装与编辑器设置，日常配置按需展开。辅助程序首次安装后随扩展自动更新，保留编辑器设置，也可通过按钮卸载。支持 React 18／19、Vue 2／3 源码定位；默认按住 Command 高亮，单击打开源码，右键查看父组件和参数，自动识别本机项目及共同父目录下的前端子项目，支持自定义快捷键。[安装与使用说明](docs/component-inspector.md)
 - **任务优先工作台**：浏览器侧边栏以固定任务坞直接进入后台账号、师生关系、高校直达和 APP 登录；后台 Token 与 API 域名在同一工具页管理，返回时自动保存两项修改并保留原任务状态；历史和其他 Token 使用独立工具页
 - **多项目架构**：通过 `src/common/projects.js` 静态注册多个后台项目，任务入口自动映射到所属项目，每个项目独立存储 token/账号密码/最近登录记录
 - **页面就绪标记**：在匹配域名页面右下角注入「内部工具箱已就绪」标记
@@ -23,6 +24,7 @@
 ### 1. 生成图标与构建
 
 ```bash
+pnpm install   # 安装构建和测试依赖
 npm run icons   # 生成占位 PNG 图标（首次或图标缺失时执行）
 npm run build   # 打包 content.js / popup.js / background.js 并输出到 dist/
 ```
@@ -79,7 +81,7 @@ npm run build   # 重新打包
 npm run check   # 构建并做语法 / JSON 校验
 ```
 
-零依赖构建：源码位于 `src/`，`scripts/build.js` 按依赖顺序拼接各模块，生成根目录 `content.js` / `popup.js` / `background.js`，并自动从 `src/common/projects.js` 生成 `manifest.json`。
+源码位于 `src/`，`scripts/build.js` 按依赖顺序拼接各模块，使用 esbuild 打包组件定位的源码映射解析库，生成根目录脚本与 `dist/`，并生成 `manifest.json`。组件定位的 macOS 辅助程序位于 `native-host/`，安装脚本位于 `scripts/install-component-host.js`。
 
 **⚠️  `manifest.json` 由构建脚本自动生成，请勿手动编辑。**
 
@@ -113,7 +115,7 @@ internal-dev-toolkit/
 │       ├── index.js             # popup 主逻辑
 │       └── quick-login-ui.js    # 双向查询步骤画布与快捷登录 UI
 ├── scripts/
-│   ├── build.js                 # 零依赖构建脚本
+│   ├── build.js                 # 模块拼接与组件定位资源打包
 │   └── gen-icons.js             # 占位图标生成
 ├── dist/                        # 构建输出
 ├── docs/

@@ -55,6 +55,7 @@
   });
 
   const ICONS = Object.freeze({
+    component: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/><path d="m10 9-3 3 3 3m4-6 3 3-3 3"/></svg>',
     admin: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 10 0v3"/><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M12 14v3"/></svg>',
     relations: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M9.5 8.5l5 7M17 7h-5a5 5 0 0 0-5 5v2"/></svg>',
     higher: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10l9-6 9 6"/><path d="M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/></svg>',
@@ -211,6 +212,8 @@
 
   function currentWorkspaceStatus() {
     if (!activeWorkspace) return '';
+    const customStatus = featureLifecycles.get(activeWorkspace.feature)?.getStatus;
+    if (customStatus) return customStatus();
     if (activeWorkspace.feature === 'quickLogin') {
       const notice = $('quickAuthNotice');
       if (notice?.dataset.kind === 'warning') return '需要 Token';
@@ -246,6 +249,7 @@
     if (!workspace) return false;
     const main = $('workspaceMain');
     if (activeWorkspace && main && !activeUtility) workspaceScroll.set(activeWorkspace.workspaceId, main.scrollTop);
+    if (activeWorkspace?.feature !== workspace.feature) featureLifecycles.get(activeWorkspace?.feature)?.deactivate?.();
     activeWorkspace = workspace;
     activeUtility = '';
     document.body.classList.remove('utility-open');
@@ -423,6 +427,7 @@
 
   async function init() {
     definitions = buildWorkspaceDefinitions(ns.projects.PROJECTS);
+    definitions.push({ id: 'component', feature: 'componentInspector', workspaceId: 'global:component', label: '组件定位', shortLabel: '定位', panelId: 'panel-component', path: '本地开发页面', projectId: '', projectName: '开发工具', contextProjectId: '', utilities: {} });
     const validContexts = definitions.map((item) => item.contextProjectId).filter(Boolean);
     if (!validContexts.includes(ns.currentProject.getCachedProjectId())) {
       await ensureProjectContext(validContexts[0] || ns.projects.DEFAULT_PROJECT_ID);

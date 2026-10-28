@@ -1,0 +1,325 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const crypto = require('node:crypto');
+const event = () => ({ listeners: [], addListener(fn) { this.listeners.push(fn); }, emit(...args) { this.listeners.forEach((fn) => fn(...args)); } });
+const store = () => ({ data: {}, async get(key) { return key == null ? { ...this.data } : { [key]: this.data[key] }; }, async set(value) { Object.assign(this.data, value); }, async remove(key) { delete this.data[key]; } });
+const tabs = new Map([[1, { id: 1, active: true, url: 'http://localhost:5173' }], [2, { id: 2, active: false, url: 'http://localhost:5173' }]]);
+const documents = new Map([[1, 'd1'], [2, 'd2']]);
+let editor = null, failProject = false, finishOpen = null, delaySource = false, finishSource = null;
+let holdRuntimeStart = false, finishRuntimeStart = null;
+let fastTimeouts = false, hangDetection = false;
+let serviceOnline = true, projectId = 'p1', serviceTime = Date.now();
+const runtimeResults = [];
+let capabilities = [], hostRevision = 'current', updateError = '', updates = 0, connections = 0, detection = { frameworks: ['React'], hints: ['/project/src/App.jsx'] };
+const nativeCalls = [], injections = [];
+const session = store();
+const chrome = {
+  storage: { local: store(), session },
+  runtime: {
+    onMessage: event(), onStartup: event(), onInstalled: event(), getURL: (value) => `chrome-extension://test/${value}`, sendMessage: async () => {},
+    connectNative() {
+      connections++;
+      const port = { onMessage: event(), onDisconnect: event(), postMessage(message) {
+        nativeCalls.push(message);
+        queueMicrotask(() => {
+          let result;
+          if (message.action === 'status') result = { editor, editorAvailable: !!editor, capabilities, revision: hostRevision };
+          else if (message.action === 'update') { updates++; if (updateError) result = { ok: false, error: updateError }; else { hostRevision = message.bundle.revision; result = { updated: true }; } }
+          else if (['identifyProject', 'checkProject', 'openSource'].includes(message.action) && !serviceOnline) result = { ok: false, error: '未找到监听 5173 端口的本机开发服务', code: 'COMPONENT_SERVER_OFFLINE' };
+          else if (['checkProject', 'openSource'].includes(message.action) && message.projectId !== projectId) result = { ok: false, error: '开发服务已重启，正在重新识别项目', code: 'COMPONENT_PROJECT_STALE' };
+          else if (message.action === 'identifyProject') result = failProject ? { ok: false, error: '项目目录识别失败' } : { project: { id: projectId, root: '/project' } };
+          else if (message.action === 'checkProject') result = { project: { id: projectId, root: '/project' } };
+          else if (message.action === 'clearEditor') { editor = null; result = { editor: null }; }
+          else if (message.action === 'openSource') { finishOpen = () => port.onMessage.emit({ id: message.id, ok: true, file: '/project/src/App.jsx', editor: 'Cursor' }); return; }
+          port.onMessage.emit({ id: message.id, ok: true, ...result });
+        });
+      }, disconnect() { port.onDisconnect.emit(); } };
+      return port;
+    },
+  },
+  tabs: { onRemoved: event(), onUpdated: event(), async get(id) { return { ...tabs.get(id) }; }, async query() { return [...tabs.values()]; } },
+  webNavigation: { onCommitted: event(), onHistoryStateUpdated: event(), onReferenceFragmentUpdated: event(), async getFrame({ tabId }) { return { documentId: documents.get(tabId) }; } },
+  scripting: { async executeScript(options) {
+    injections.push(options);
+    if (options.world === 'MAIN') {
+      if (hangDetection && options.args[0].mode === 'detect') return new Promise(() => {});
+      return [{ frameId: 0, documentId: 'd1', result: options.args[0].mode === 'element' ? { components: [{ name: 'App', source: { file: '/project/src/App.jsx' } }], scripts: [] } : detection }];
+    }
+    if (options.world === 'ISOLATED' && options.args?.[0]?.generation) {
+      if (holdRuntimeStart) { holdRuntimeStart = false; await new Promise((resolve) => { finishRuntimeStart = resolve; }); }
+      return [{ frameId: 0, result: runtimeResults.length ? runtimeResults.shift() : true }];
+    }
+    return [];
+  } },
+};
+const context = vm.createContext({ chrome, URL, crypto, Date: class extends Date { static now() { return serviceTime; } }, setTimeout(fn, duration) { return setTimeout(fn, fastTimeouts && [8000, 10000].includes(duration) ? 20 : duration); }, clearTimeout, console, IDTComponentSources: { clearSourceCache() {}, async resolveComponentSource(source) {
+  if (delaySource) await new Promise((resolve) => { finishSource = resolve; });
+  if (source.kind === 'stack') return { file: '/src/app/App.tsx', line: 12, column: 3 };
+  return source;
+} }, inspectComponentPage() {} });
+for (const file of ['src/common/component-settings.js', 'src/background/component-inspector.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
+context.InternalDevToolkit.componentRuntime = { async loadBundle() { return { revision: 'current', files: {} }; } };
+const bg = context.InternalDevToolkit.componentInspectorBackground;
+const sender = { url: 'chrome-extension://test/popup.html' };
+const handle = (type, payload = {}) => bg.handle({ type, payload }, sender);
+const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
+(async () => {
+  await assert.rejects(() => handle('COMPONENT_START', { tabId: 1, origin: 'http://localhost:5173' }), /选择有效/);
+  assert.equal(injections.some((item) => item.world === 'MAIN'), false, '编辑器为空时不读取组件');
+  await assert.rejects(() => handle('COMPONENT_CHOOSE_EDITOR'), /重装命令/, '旧版辅助程序应先提示更新');
+  assert.equal(nativeCalls.some((item) => item.action === 'chooseEditor'), false, '旧版应避免继续弹出应用列表选择器');
+  editor = { name: 'Cursor' };
+  capabilities = ['uninstall', 'editor-file-picker', 'workspace-projects'];
+  await assert.rejects(() => handle('COMPONENT_START', { tabId: 1, origin: 'http://localhost:5173' }), /重装命令/, '旧版辅助程序应在识别项目前提示更新');
+  capabilities.push('project-search', 'auto-update');
+  hostRevision = 'older';
+  const beforeConnections = connections;
+  const checked = await Promise.all([handle('COMPONENT_STATUS'), handle('COMPONENT_STATUS')]);
+  assert.equal(updates, 1, '并发检查只应同步一次辅助程序');
+  assert.equal(connections, beforeConnections + 1, '更新成功后应重新连接');
+  assert.ok(checked.every((result) => result.host.updated && result.host.revision === 'current'));
+  await handle('COMPONENT_STATUS');
+  assert.equal(updates, 1, '内容相同时应跳过更新');
+  hostRevision = 'older'; updateError = '写入失败';
+  assert.match((await handle('COMPONENT_STATUS')).host.updateError, /写入失败/);
+  await handle('COMPONENT_STATUS');
+  assert.equal(updates, 2, '更新失败后应等待用户重试，避免反复写入');
+  updateError = '';
+  await handle('COMPONENT_RECONNECT_HOST');
+  assert.equal((await handle('COMPONENT_STATUS')).host.revision, 'current');
+  assert.equal(updates, 3);
+  detection = { frameworks: ['React'], hints: [], sources: [{ kind: 'stack', stack: 'at App (http://localhost:5173/src/app/App.tsx:20:5)' }], scripts: [] };
+  await handle('COMPONENT_START', { tabId: 1, origin: 'http://localhost:5173' });
+  assert.deepEqual(Array.from(nativeCalls.filter((call) => call.action === 'identifyProject').at(-1).hints), ['/src/app/App.tsx'], 'React 19 应先还原源码，再识别工作区子项目');
+  detection = { frameworks: ['React'], hints: ['/project/src/App.jsx'] };
+  assert.equal((await bg.readState(1)).status, 'on');
+  assert.equal((await bg.readState(2)).status, 'on', '已打开的同地址标签页应一起开启');
+  assert.equal((await bg.readState(2)).enabled, true);
+  const activeGeneration = (await bg.readState(1)).generation;
+  hostRevision = 'older';
+  await handle('COMPONENT_STATUS');
+  assert.equal((await bg.readState(1)).status, 'on', '自动重连应保留页面开启状态');
+  assert.equal((await bg.readState(1)).generation, activeGeneration, '更新辅助程序应保留当前页面的组件定位状态');
+  tabs.get(1).active = false; tabs.get(2).active = true;
+  await handle('COMPONENT_START', { tabId: 2, origin: 'http://localhost:5173' });
+  assert.equal((await bg.readState(1)).status, 'on');
+  await handle('COMPONENT_STOP', { tabId: 2, origin: 'http://localhost:5173' });
+  assert.equal((await bg.readState(1)).status, 'off', '从任意标签页关闭，应停止同地址全部页面');
+  assert.equal((await bg.readState(2)).status, 'off');
+  await handle('COMPONENT_START', { tabId: 2, origin: 'http://localhost:5173' });
+  const contentSender = { tab: tabs.get(2), url: tabs.get(2).url, frameId: 0, documentId: 'd1' };
+  const snapshot = await bg.handle({ type: 'COMPONENT_INSPECT', payload: { generation: (await bg.readState(2)).generation, x: 1, y: 1, details: true } }, contentSender);
+  const opening = bg.handle({ type: 'COMPONENT_OPEN', payload: { snapshotId: snapshot.snapshotId, index: 0 } }, contentSender);
+  await settle();
+  const connectionBeforeCheck = connections;
+  await handle('COMPONENT_RECONNECT_HOST');
+  assert.equal(connections, connectionBeforeCheck, '打开源码期间检查连接，应沿用当前连接');
+  await handle('COMPONENT_STOP', { tabId: 2, origin: 'http://localhost:5173' });
+  finishOpen(); await opening;
+  assert.equal((await bg.readState(2)).status, 'off', '打开编辑器的旧回调应保留用户刚刚设置的停止状态');
+  await handle('COMPONENT_START', { tabId: 2, origin: 'http://localhost:5173' });
+  delaySource = true;
+  const reading = bg.handle({ type: 'COMPONENT_INSPECT', payload: { generation: (await bg.readState(2)).generation, x: 1, y: 1, details: true } }, contentSender);
+  const staleRead = assert.rejects(reading, /过期/);
+  await settle();
+  await handle('COMPONENT_STOP', { tabId: 2, origin: 'http://localhost:5173' });
+  finishSource(); await staleRead; delaySource = false;
+  assert.equal((await bg.readState(2)).status, 'off', '读取源码期间停止页面后，应丢弃旧组件信息');
+  failProject = true;
+  await assert.rejects(() => handle('COMPONENT_START', { tabId: 2, origin: 'http://localhost:5173' }), /目录识别失败/);
+  assert.equal((await bg.readState(2)).status, 'paused'); failProject = false;
+  assert.equal((await bg.readState(2)).enabled, true, '识别失败也应保留地址开关');
+  tabs.get(1).active = true; tabs.get(2).active = false;
+  await handle('COMPONENT_START', { tabId: 1, origin: 'http://localhost:5173' });
+  const routeGeneration = (await bg.readState(1)).generation;
+  const beforeRoute = nativeCalls.filter((call) => call.action === 'identifyProject').length;
+  // 同文档的 loading 通知、History 路由和 Hash 路由均应保留定位状态。
+  chrome.tabs.onUpdated.emit(1, { status: 'loading' }, tabs.get(1)); await settle();
+  assert.equal((await bg.readState(1)).status, 'on');
+  tabs.get(1).url = 'http://localhost:5173/users?tab=all#detail';
+  for (const navigation of [chrome.webNavigation.onHistoryStateUpdated, chrome.webNavigation.onReferenceFragmentUpdated]) {
+    navigation.emit({ tabId: 1, frameId: 0, documentId: 'd1', url: tabs.get(1).url }); await settle();
+    assert.equal((await bg.readState(1)).status, 'on');
+    assert.equal((await bg.readState(1)).generation, routeGeneration, '切路由保留当前定位实例');
+  }
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, beforeRoute, '切路由沿用已识别的项目');
+  const beforeReloadProject = (await bg.readState(1)).project.id;
+  const beforeReloadDetections = injections.filter((call) => call.world === 'MAIN').length;
+  documents.set(1, 'd1-reload');
+  chrome.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, documentId: 'd1-reload', url: tabs.get(1).url, transitionType: 'reload' }); await settle();
+  assert.equal((await bg.readState(1)).status, 'restoring');
+  assert.equal((await bg.readState(1)).project.id, beforeReloadProject, '刷新开始时应保留项目目录');
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(1), frameId: 0, documentId: 'd1', url: tabs.get(1).url });
+  assert.equal((await bg.readState(1)).status, 'restoring', '旧文档的通知应丢弃');
+  detection = { frameworks: [], hints: [] };
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(1), frameId: 0, documentId: 'd1-reload', url: tabs.get(1).url });
+  assert.equal((await bg.readState(1)).status, 'on', '刷新应沿用已识别项目，组件延迟挂载时也能恢复脚本');
+  assert.equal((await bg.readState(1)).project.id, beforeReloadProject);
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, beforeRoute, '开发服务未变时，刷新应跳过项目识别');
+  assert.equal(injections.filter((call) => call.world === 'MAIN').length, beforeReloadDetections, '刷新应跳过框架扫描和源码读取');
+  assert.notEqual((await bg.readState(1)).generation, routeGeneration, '新文档应使用新的页面脚本');
+  assert.ok(injections.every((call) => call.injectImmediately === true), '页面脚本应立即执行');
+  detection = { frameworks: ['React'], hints: ['/project/src/App.jsx'] };
+  projectId = 'reload-p2';
+  documents.set(1, 'd1-restarted-reload');
+  chrome.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, documentId: 'd1-restarted-reload', url: tabs.get(1).url, transitionType: 'reload' }); await settle();
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(1), frameId: 0, documentId: 'd1-restarted-reload', url: tabs.get(1).url });
+  assert.equal((await bg.readState(1)).status, 'on');
+  assert.equal((await bg.readState(1)).project.id, 'reload-p2', '刷新时服务已重启，应立即重新识别并绑定新项目');
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, beforeRoute + 1, '刷新应强制核对原服务，避免沿用刚刚失效的检查结果');
+  tabs.set(3, { id: 3, active: false, url: 'http://localhost:5173/orders' }); documents.set(3, 'd3');
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(3), frameId: 0, documentId: 'd3', url: tabs.get(3).url });
+  assert.equal((await bg.readState(3)).status, 'on', '新开的同地址标签页应自动开启');
+  tabs.set(4, { id: 4, active: false, url: 'http://localhost:5174/users' }); documents.set(4, 'd4');
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(4), frameId: 0, documentId: 'd4', url: tabs.get(4).url });
+  assert.equal((await bg.readState(4)).status, 'off', '另一个端口使用独立开关');
+  session.data = {};
+  chrome.runtime.onStartup.emit(); await settle();
+  assert.equal((await bg.readState(1)).status, 'on', '浏览器会话清空后应从持久设置恢复');
+  assert.equal((await bg.readState(3)).status, 'on');
+  assert.equal((await bg.readState(4)).status, 'off');
+  detection = { frameworks: [], hints: [] };
+  documents.set(3, 'd3-delayed');
+  const delayedSender = { tab: tabs.get(3), frameId: 0, documentId: 'd3-delayed', url: tabs.get(3).url };
+  assert.equal((await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, delayedSender)).watch, true);
+  assert.equal((await bg.readState(3)).status, 'waiting', '组件尚未挂载时保持等待');
+  assert.equal((await bg.readState(3)).enabled, true);
+  detection = { frameworks: ['React'], hints: ['/project/src/App.jsx'] };
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, delayedSender);
+  assert.equal((await bg.readState(3)).status, 'on', '异步组件加载完成后自动启用');
+  tabs.get(1).url = 'https://example.com';
+  documents.set(1, 'remote');
+  chrome.webNavigation.onCommitted.emit({ tabId: 1, frameId: 0, documentId: 'remote', url: tabs.get(1).url }); await settle();
+  assert.equal((await bg.readState(1)).status, 'off');
+  assert.equal((await bg.readState(3)).status, 'on', '离开开发地址保留其他同地址页面的开启状态');
+  tabs.get(1).url = 'http://localhost:5173/orders'; documents.set(1, 'return');
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(1), frameId: 0, documentId: 'return', url: tabs.get(1).url });
+  assert.equal((await bg.readState(1)).status, 'on', '回到已开启的开发地址应自动恢复');
+  await handle('COMPONENT_STOP', { tabId: 1, origin: 'http://localhost:5173' });
+  assert.equal((await bg.readState(3)).status, 'off');
+  session.data = {}; chrome.runtime.onStartup.emit(); await settle();
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, delayedSender);
+  assert.equal((await bg.readState(3)).status, 'off', '手动关闭后，重开页面和重启均保持关闭');
+  holdRuntimeStart = true;
+  const starting = handle('COMPONENT_START', { tabId: 1, origin: 'http://localhost:5173' });
+  await settle();
+  assert.equal((await bg.readState(1)).status, 'starting', '脚本启动尚未确认时应继续显示正在识别');
+  finishRuntimeStart(); await starting;
+  assert.equal((await bg.readState(1)).status, 'on', '确认定位脚本启动后才显示已开启');
+  const restoredGeneration = (await bg.readState(1)).generation;
+  const runtimeFilesBefore = injections.filter((item) => item.files?.includes('component-inspector.js')).length;
+  const readySender = { tab: tabs.get(1), frameId: 0, documentId: 'return', url: tabs.get(1).url };
+  runtimeResults.push(false, true);
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+  assert.equal(injections.filter((item) => item.files?.includes('component-inspector.js')).length, runtimeFilesBefore + 1, '发现定位脚本已失效时应自动重装');
+  assert.equal((await bg.readState(1)).generation, restoredGeneration, '恢复定位脚本应沿用当前开启状态');
+  runtimeResults.push(false, false);
+  await assert.rejects(() => bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender), /脚本尚未启动/);
+  assert.equal((await bg.readState(1)).status, 'paused', '脚本恢复失败时应显示暂停和原因');
+  assert.equal((await bg.readState(1)).enabled, true, '脚本恢复失败时仍保留用户的地址开关');
+  await handle('COMPONENT_START', { tabId: 1, origin: 'http://localhost:5173' });
+  const checksBefore = nativeCalls.filter((call) => call.action === 'checkProject').length;
+  serviceTime += 3001;
+  const idle = await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+  assert.equal(idle.retryAfter, 15000, '正常运行时应降低为每 15 秒检查');
+  assert.equal(nativeCalls.filter((call) => call.action === 'checkProject').length, checksBefore, '旧的 3 秒间隔内应沿用检查结果');
+  serviceTime += 12000;
+  await Promise.all([
+    bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender),
+    bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(2), frameId: 0, documentId: 'd2', url: tabs.get(2).url }),
+  ]);
+  assert.equal(nativeCalls.filter((call) => call.action === 'checkProject').length, checksBefore + 1, '同地址多标签页应共用一次服务检查');
+  serviceOnline = false; serviceTime += 15001;
+  const offline = await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+  assert.equal(offline.watch, true, '服务离线时应继续自动检查');
+  assert.equal((await bg.readState(1)).status, 'recovering');
+  assert.equal((await bg.readState(1)).enabled, true, '服务离线时保留地址开关');
+  assert.equal(offline.retryAfter, 1000);
+  const offlineChecks = nativeCalls.filter((call) => call.action === 'checkProject').length;
+  const offlineIdentifications = nativeCalls.filter((call) => call.action === 'identifyProject').length;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(2), frameId: 0, documentId: 'd2', url: tabs.get(2).url });
+  assert.equal(nativeCalls.filter((call) => call.action === 'checkProject').length, offlineChecks, '离线结果也应在同地址标签页间共享');
+  for (const [elapsed, delay] of [[1001, 2000], [2001, 4000], [4001, 8000], [8001, 15000], [15001, 15000]]) {
+    serviceTime += elapsed;
+    const retry = await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+    assert.equal(retry.retryAfter, delay, '持续离线时应逐步延长重试间隔');
+    await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+  }
+  assert.equal(nativeCalls.filter((call) => call.action === 'checkProject').length, offlineChecks + 5, '重试间隔内应避免重复查询系统进程');
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, offlineIdentifications, '等待原服务恢复时应跳过页面扫描和目录识别');
+  serviceOnline = true; serviceTime += 15001;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+  assert.equal((await bg.readState(1)).status, 'on', '原服务恢复可用时应重新安装页面脚本');
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, offlineIdentifications, '原服务进程仍有效时应直接复用项目');
+  serviceOnline = false; serviceTime += 15001;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+  serviceOnline = true; projectId = 'p2'; serviceTime += 1001;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY', payload: { reason: 'visible', visible: true } }, readySender);
+  assert.equal((await bg.readState(1)).project.id, 'p2', '切回页面应立即尝试恢复，提前结束等待');
+  serviceTime += 15001;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+  assert.equal((await bg.readState(1)).status, 'on', '服务恢复后应自动启用定位');
+  assert.equal((await bg.readState(1)).project.id, 'p2', '服务恢复后应绑定新的进程记录');
+  const peerIdentifications = nativeCalls.filter((call) => call.action === 'identifyProject').length;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(2), frameId: 0, documentId: 'd2', url: tabs.get(2).url });
+  assert.equal((await bg.readState(2)).project.id, 'p2', '另一标签页应绑定已核验的新服务记录');
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, peerIdentifications, '同地址其他标签页应复用新项目，避免重复扫描目录');
+  serviceTime += 60001;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, { tab: tabs.get(3), frameId: 0, documentId: documents.get(3), url: tabs.get(3).url });
+  assert.equal((await bg.readState(3)).project.id, 'p2', '长期隐藏的标签页应重新核验并复用最近的项目记录');
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, peerIdentifications);
+  const restartSnapshot = await bg.handle({ type: 'COMPONENT_INSPECT', payload: { generation: (await bg.readState(1)).generation, x: 1, y: 1, details: true } }, readySender);
+  projectId = 'p3'; finishOpen = null;
+  const restartedOpening = bg.handle({ type: 'COMPONENT_OPEN', payload: { snapshotId: restartSnapshot.snapshotId, index: 0 } }, readySender);
+  await settle();
+  assert.equal(typeof finishOpen, 'function', '源码跳转遇到服务重启时应自动重试');
+  assert.equal(nativeCalls.filter((call) => call.action === 'openSource').at(-1).projectId, 'p3', '重试应使用新服务记录');
+  finishOpen(); await restartedOpening;
+  assert.equal((await bg.readState(1)).project.id, 'p3');
+  assert.equal((await bg.readState(1)).lastOpened.file, '/project/src/App.jsx');
+  serviceOnline = false; serviceTime += 15001;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender);
+  assert.equal((await bg.readState(1)).status, 'recovering');
+  await handle('COMPONENT_STOP', { tabId: 1, origin: 'http://localhost:5173' });
+  serviceOnline = true; projectId = 'p4'; serviceTime += 3001;
+  const callsAfterStop = nativeCalls.length;
+  assert.equal((await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, readySender)).watch, undefined);
+  assert.equal((await bg.readState(1)).status, 'off', '等待恢复时手动关闭，服务恢复后也应保持关闭');
+  assert.equal(nativeCalls.length, callsAfterStop, '手动关闭后应停止服务检查');
+  tabs.get(1).active = false;
+  tabs.set(10, { id: 10, active: true, url: 'http://localhost:5190' }); documents.set(10, 'timeout-document');
+  serviceOnline = false;
+  const coldOffline = await handle('COMPONENT_START', { tabId: 10, origin: tabs.get(10).url });
+  assert.equal(coldOffline.status, 'recovering');
+  const coldSender = { tab: tabs.get(10), frameId: 0, documentId: 'timeout-document', url: tabs.get(10).url };
+  const coldAttempts = nativeCalls.filter((call) => call.action === 'identifyProject').length;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, coldSender);
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, coldAttempts, '首次识别遇到离线时也应等待重试间隔');
+  serviceTime += 1001;
+  assert.equal((await bg.handle({ type: 'COMPONENT_DOCUMENT_READY' }, coldSender)).retryAfter, 2000);
+  serviceOnline = true; serviceTime += 1001;
+  await bg.handle({ type: 'COMPONENT_DOCUMENT_READY', payload: { reason: 'focus', visible: true } }, coldSender);
+  assert.equal((await bg.readState(10)).status, 'on', '首次离线后切回页面，应提前重试并恢复');
+  fastTimeouts = true; hangDetection = true;
+  await assert.rejects(() => handle('COMPONENT_START', { tabId: 10, origin: tabs.get(10).url }), /页面响应超时/);
+  assert.equal((await bg.readState(10)).status, 'paused', '页面脚本无响应时应结束识别并显示原因');
+  assert.match((await bg.readState(10)).error, /页面响应超时/);
+  hangDetection = false; delaySource = true;
+  detection = { frameworks: ['React'], hints: [], sources: [{ kind: 'stack', stack: 'test' }] };
+  const beforeSourceTimeout = nativeCalls.filter((call) => call.action === 'identifyProject').length;
+  await assert.rejects(() => handle('COMPONENT_START', { tabId: 10, origin: tabs.get(10).url }), /源码读取超时/);
+  assert.equal((await bg.readState(10)).status, 'paused', '源码读取无响应时应结束识别并保留开关');
+  assert.equal((await bg.readState(10)).enabled, true);
+  assert.equal(nativeCalls.filter((call) => call.action === 'identifyProject').length, beforeSourceTimeout);
+  finishSource(); delaySource = false; fastTimeouts = false;
+  detection = { frameworks: ['React'], hints: ['/project/src/App.jsx'] };
+  await handle('COMPONENT_RECONNECT_HOST');
+  assert.equal((await bg.readState(10)).status, 'on', '超时后应释放操作队列，检查连接即可恢复');
+  await assert.rejects(() => bg.handle({ type: 'COMPONENT_CHOOSE_EDITOR' }, { tab: tabs.get(2), url: tabs.get(2).url }), /操作来源/);
+  await assert.rejects(() => bg.handle({ type: 'COMPONENT_OPEN', payload: { snapshotId: 'forged' } }, { tab: tabs.get(2), url: tabs.get(2).url }), /过期/);
+  chrome.tabs.onRemoved.emit(1); await settle();
+  assert.equal((await bg.readState(1)).status, 'off');
+  console.log('component origin persistence, navigation and tab state tests passed');
+})().catch((error) => { console.error(error); process.exitCode = 1; });

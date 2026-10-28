@@ -566,6 +566,7 @@
     ns.workspaceUi?.registerFeatureLifecycle('quickLogin', ns.quickLoginUi);
     ns.workspaceUi?.registerFeatureLifecycle('otherLogin', ns.otherLoginUi);
     ns.workspaceUi?.registerFeatureLifecycle('appLogin', ns.appLoginUi);
+    ns.workspaceUi?.registerFeatureLifecycle('componentInspector', ns.componentInspectorUi);
     await ns.workspaceUi?.init();
     ns.ui.observeActions?.();
     ns.workspaceUi?.syncHeader();
