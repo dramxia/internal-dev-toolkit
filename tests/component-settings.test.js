@@ -11,6 +11,9 @@ const custom = policy.normalizeShortcut({ alt: true, shift: true, code: 'KeyX' }
 assert.equal(policy.matchesShortcut({ altKey: true, shiftKey: true }, custom, new Set(['KeyX'])), true);
 assert.equal(policy.matchesShortcut({ altKey: true, shiftKey: true }, custom), false);
 assert.deepEqual(policy.normalizeSettings().openShortcut, policy.DEFAULT_SHORTCUT);
+assert.equal(policy.normalizeSettings().clickAction, 'open');
+assert.equal(policy.normalizeSettings({ clickAction: 'copy' }).clickAction, 'copy');
+assert.equal(policy.normalizeSettings({ clickAction: 'unknown' }).clickAction, 'open');
 for (const code of ['Backspace', 'Space', 'ArrowLeft', 'F13']) {
   assert.throws(() => policy.normalizeShortcut({ meta: true, code }), /字母、数字/, '不支持的按键应明确报错，保留原快捷键');
 }

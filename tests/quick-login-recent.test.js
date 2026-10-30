@@ -7,6 +7,7 @@ globalThis.InternalDevToolkit = {
     async getCurrentProjectId() { return 'gpt-admin-pre'; },
   },
 };
+require('../src/common/tenant.js');
 globalThis.chrome = {
   runtime: { lastError: null },
   storage: {
@@ -83,6 +84,14 @@ storage[key] = [
   assert.equal(compacted[0].token, undefined);
   assert.equal(compacted[0].loginUrl, undefined);
   assert.equal(normalizeRecentRecord({ env: 'online' }).localPort, '8088');
+  assert.equal(normalizeRecentRecord({ account: '15612340001', phone: '' }).phone, '15612340001');
+  const contacts = compactRecentRecords([
+    { tenantId: 'a', id: 'u', role: 'teacher', at: 3 },
+    { tenantId: 'b', id: 'u', role: 'teacher', phone: '13000000000', at: 2 },
+    { tenantId: 'a', id: 'u', role: 'teacher', mobile: '13800001234', at: 1 },
+  ]);
+  assert.equal(contacts[0].phone, '13800001234', '同一身份的旧记录可补齐手机号');
+  assert.equal(contacts[0].at, 3, '补齐手机号后保留最近登录时间');
 
   const migrated = await getRecent();
   assert.deepEqual(migrated, compacted, '读取时应迁移旧环境重复记录');
@@ -115,6 +124,19 @@ storage[key] = [
   records = await getRecent();
   assert.equal(records[0].env, 'online');
   assert.equal(records[0].localPort, '6123', '线上操作应记录该行携带的本地端口，但打开目标仍由 UI 保持线上');
+
+  await globalThis.InternalDevToolkitBg.quickLogin.quickLogin({
+    tenantId: 'tenant-1', id: 'user-1', tenantName: '一号租户', userName: '教师甲',
+    account: 'teacher001', phone: '13800001234', roleName: '校长', role: 'teacher',
+  });
+  records = await getRecent();
+  assert.equal(records[0].phone, '13800001234', '最近登录应保存真实手机号');
+  assert.equal(records[0].account, 'teacher001', '账号与手机号应分别保存');
+  assert.equal(records[0].roleName, '校长');
+  await recordRecent({ tenantId: 'tenant-1', id: 'user-1', userName: '教师甲', role: 'teacher', env: 'local', localPort: '5173' });
+  records = await getRecent();
+  assert.equal(records[0].phone, '13800001234', '旧入口再次登录应保留已知手机号');
+  assert.equal(records[0].account, 'teacher001');
 
   await deleteRecent({
     tenantId: 'tenant-1', id: 'user-1', role: 'teacher', env: 'local', localPort: '9999',

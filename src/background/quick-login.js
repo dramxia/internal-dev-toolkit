@@ -47,6 +47,8 @@
       if (/(token|authorization|jwt|password|secret|url|origin|session)/i.test(key)) return;
       metadata[key] = value;
     });
+    const phone = commonNs.tenant?.resolveUserPhone(metadata);
+    if (phone) metadata.phone = phone;
     return {
       ...metadata,
       env: normalizeEnv(metadata.env),
@@ -59,11 +61,17 @@
   function compactRecentRecords(records = []) {
     const source = Array.isArray(records) ? records : [];
     const localPorts = new Map();
+    const contacts = new Map();
     source.forEach((record) => {
       const normalized = normalizeRecentRecord(record);
       const explicitPort = validLocalPort(record?.localPort);
       const key = recentIdentityKey(normalized);
       if (explicitPort && !localPorts.has(key)) localPorts.set(key, explicitPort);
+      const contact = contacts.get(key) || {};
+      for (const field of ['phone', 'account', 'roleName']) {
+        if (!contact[field] && normalized[field]) contact[field] = normalized[field];
+      }
+      contacts.set(key, contact);
     });
 
     const seen = new Set();
@@ -73,7 +81,7 @@
       const key = recentIdentityKey(initial);
       if (seen.has(key)) return;
       seen.add(key);
-      compacted.push(normalizeRecentRecord(record, localPorts.get(key)));
+      compacted.push(normalizeRecentRecord({ ...record, ...contacts.get(key) }, localPorts.get(key)));
     });
     return compacted.slice(0, MAX_RECENT);
   }
@@ -105,7 +113,7 @@
     return '';
   }
 
-  async function quickLogin({ tenantId, id, tenantName = '', userName = '', domain = '', industry = '', env = 'online', localPort = '', role = 'teacher' }) {
+  async function quickLogin({ tenantId, id, tenantName = '', userName = '', account = '', phone = '', roleName = '', domain = '', industry = '', env = 'online', localPort = '', role = 'teacher' }) {
     if (!id) throw new Error('缺少 id');
     if (!tenantId) throw new Error('缺少 tenantId');
     if (!ns.tenantApi) throw new Error('tenantApi 模块未加载');
@@ -120,7 +128,7 @@
     const normalizedEnv = normalizeEnv(env);
     const normalizedPort = normalizePort(normalizedEnv, localPort);
     const projectId = await commonNs.currentProject.getCurrentProjectId();
-    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId, ...(adminContextId ? { adminContextId } : {}) });
+    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, ...(account ? { account } : {}), ...(phone ? { phone } : {}), ...(roleName ? { roleName } : {}), domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId, ...(adminContextId ? { adminContextId } : {}) });
     return { ok: true, url, tenantId, id };
   }
 
@@ -222,7 +230,11 @@
     const records = await getRecent();
     const initial = normalizeRecentRecord(item);
     const previous = records.find((record) => sameRecentIdentity(record, initial));
-    const normalizedItem = normalizeRecentRecord(item, previous?.localPort);
+    const contact = {};
+    for (const field of ['account', 'phone', 'roleName']) {
+      if (item[field] || previous?.[field]) contact[field] = item[field] || previous[field];
+    }
+    const normalizedItem = normalizeRecentRecord({ ...item, ...contact }, previous?.localPort);
     const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
     if ((item.adminContextId || '') !== adminContextId) throw new Error('后台账号已切换，请重新查询');
     const next = [

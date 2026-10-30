@@ -7,12 +7,34 @@
 
   const DEFAULT_DEPT_SOURCE = Object.freeze({ name: '钉钉', value: 'dingtalk', icon: 'dingtalk' });
 
+  function resolveUserPhone(...records) {
+    const sources = records.flatMap((record) => record && typeof record === 'object'
+      ? [record, record.user, record.raw, record.raw?.user].filter(Boolean) : []);
+    const text = (value) => {
+      if (typeof value !== 'string' && typeof value !== 'number') return '';
+      const result = String(value).trim();
+      return /^(?:null|undefined|0|-+)$/i.test(result) ? '' : result;
+    };
+    for (const source of sources) {
+      const phone = text(source.phone) || text(source.mobile);
+      if (phone) return phone;
+    }
+    // 常规账号允许手机号登录；学号、邮箱等账号仍作为账号展示。
+    for (const source of sources) {
+      for (const field of ['account', 'loginAccount', 'userAccount']) {
+        const account = text(source[field]);
+        if (/^(?:(?:\+|00)?86)?1[3-9]\d{9}$/.test(account.replace(/[\s-]/g, ''))) return account;
+      }
+    }
+    return '';
+  }
+
   function normalizeUser(value = {}) {
     return {
       id: String(value.id ?? ''),
       userId: String(value.userId ?? ''),
       userName: String(value.username ?? value.userName ?? value.name ?? ''),
-      phone: String(value.phone ?? value.mobile ?? value.account ?? ''),
+      phone: resolveUserPhone(value),
       account: String(value.account ?? ''),
       deptId: String(value.deptId ?? ''),
       deptName: String(value.deptName ?? ''),
@@ -37,7 +59,7 @@
       tenantId: pickFirstString(value.tenantId),
       tenantName: pickFirstString(value.tenantName),
       domain: pickFirstString(value.domain, value.tenantDomain),
-      phone: pickFirstString(value.phone, value.mobile),
+      phone: resolveUserPhone(value),
       industry: value.industry ?? '',
       accountType: value.accountType == null ? '' : String(value.accountType),
       type,
@@ -236,7 +258,7 @@
       tenantId: pickFirstString(value.tenantId),
       name: pickFirstString(value.name, value.teacherName, value.realName, nestedUser?.name, nestedUser?.username, value.username, value.userName, value.nickName),
       account: pickFirstString(value.account, value.phone, value.mobile, value.userAccount, value.loginAccount, nestedUser?.phone, nestedUser?.mobile, nestedUser?.account),
-      phone: pickFirstString(value.phone, value.mobile, nestedUser?.phone, nestedUser?.mobile),
+      phone: resolveUserPhone(value),
       status: st.status,
       statusText: st.statusText,
       statusOn: st.on,
@@ -697,12 +719,13 @@
               userId,
               name: pickFirstString(user.userName, user.name, user.teacherName, user.realName),
               account: pickFirstString(user.phone, user.mobile, user.account, user.email),
-              phone: pickFirstString(user.phone, user.mobile),
+              phone: resolveUserPhone(user),
               duties: [],
               raw: user,
             };
             teachers.set(key, teacher);
           }
+          teacher.phone = resolveUserPhone(teacher, user);
           if (duty && !teacher.duties.includes(duty)) teacher.duties.push(duty);
         }
       }
@@ -732,7 +755,7 @@
   //   { teachType: 7, teachTypeName: '学科教师', subjectNames: ['数学'], deptIds: [3010], deptNames: ['1班'] }
   // ]
   // deptNames 只有叶子名（如 1班），需借 idNameMap 补全为 初中初三1班
-  function extractTeachDuties(detail, idNameMap = {}) {
+  function extractTeachDutyOptions(detail, idNameMap = {}) {
     if (!detail || typeof detail !== 'object') return [];
     const duties = [];
 
@@ -746,16 +769,26 @@
       const deptNames = toStringList(item.deptNames ?? item.deptName ?? item.classNames ?? item.className);
       // deptId 优先走班级树翻译成全名；翻译不到时回落同位置的 deptName
       const classes = deptIds.length
-        ? deptIds.map((id, i) => idNameMap[id] || deptNames[i] || '').filter(Boolean)
-        : deptNames;
+        ? deptIds.map((id, i) => ({ id, name: idNameMap[id] || deptNames[i] || '' })).filter((item) => item.name)
+        : deptNames.map((name) => ({ id: '', name }));
       for (const subject of (subjects.length ? subjects : [''])) {
-        for (const cls of (classes.length ? classes : [''])) {
-          if (subject && cls) duties.push(`${subject} · ${cls}`);
-          else if (subject || cls) duties.push(subject || cls);
+        for (const cls of (classes.length ? classes : [{ id: '', name: '' }])) {
+          const label = subject && cls.name ? `${subject} · ${cls.name}` : subject || cls.name;
+          if (label) duties.push({ label, subject, deptId: cls.id });
         }
       }
     }
-    return [...new Set(duties)];
+    const seen = new Set();
+    return duties.filter((item) => {
+      const key = JSON.stringify([item.label, item.subject, item.deptId]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function extractTeachDuties(detail, idNameMap = {}) {
+    return [...new Set(extractTeachDutyOptions(detail, idNameMap).map((item) => item.label))];
   }
 
   // 从教师详情中提取 semesterId（供 schoolDept/tree 使用）
@@ -804,6 +837,7 @@
 
   namespace.tenant = {
     DEFAULT_DEPT_SOURCE,
+    resolveUserPhone,
     normalizeTenant,
     normalizeUser,
     normalizeAccount,
@@ -840,6 +874,7 @@
     buildClassTeacherMap,
     extractClazzTeacherSemesterId,
     extractTeachDuties,
+    extractTeachDutyOptions,
     extractSemesterId,
     extractTeacherClassIds,
     pickFirstString,

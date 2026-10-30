@@ -171,10 +171,12 @@
   }
 
   function compactRowActions(row) {
+    // 公共用户卡片自行管理操作栏和更多菜单，保留其按钮及布局。
+    if (row.closest('.quick-user-card')) return;
     const sources = [...row.querySelectorAll(
       '.action-btn:not(.action-overflow-btn), .recent-action-btn:not(.action-overflow-btn), ' +
       '.student-app-login-btn, .student-copy-btn'
-    )];
+    )].filter((button) => !button.closest('.quick-user-card'));
     if (sources.length < 2) return;
     const signature = sources.map((button) => `${button.dataset.action || button.className}:${actionLabel(button)}`).join('|');
     if (row.dataset.compactSignature === signature && row.querySelector('.action-overflow-btn')) return;

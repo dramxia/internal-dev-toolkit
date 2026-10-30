@@ -1,316 +1,164 @@
-# 一键快捷登录方案设计
+# 师生关系查询与快捷登录实现说明
 
-> 适用插件：内部开发工具箱（Chrome MV3）  
-> 目标站点：`https://gpt-admin-pre.hwzxs.com`
+适用对象：维护内部开发工具箱的开发者。本文由早期方案更新而来，以当前工作区的实现为准。
 
-## 1. 背景与目标
+## 1. 功能入口和地址
 
-当前插件已支持：
-- 后台账号密码保存
-- 通过 `/huayun-ai/admin/auth/*` 登录并获取管理员 `token`
-- 将 `token` 注入目标页面 `window.__ADMIN_TOKEN__`
+打开浏览器右侧栏，在底部点击「关系」，可选择「教师查学生」或「学生查教师」。后台账号、历史和 Token（登录凭证）分别在对应任务或工具页管理。
 
-新增 **一键快捷登录** 能力：
-在管理员已登录（持有有效 `token`）的前提下，插件自动调用租户/用户查询接口，让开发/测试人员 **在 popup 里搜索租户 → 选择用户 → 一键登录到该用户对应的前端会话**，无需手动找账号、输密码、过验证码。
+后台接口地址优先使用当前项目的 `customBaseUrl:<projectId>`，未设置时使用 `src/common/projects.js` 中的 `baseUrl`。默认项目地址为 `https://gpt-admin-pre.hwzxs.com`，可在「后台 Token 与 API 域名」工具页修改。接口路径从项目的 `tenantApiPaths` 读取。
 
-> 本方案默认用于 **pre/测试环境**，严禁在生产环境或敏感数据上滥用。
+每条记录可独立选择线上或本地目标。本地默认地址为 `http://localhost:8088`，端口可单独修改。该选择仅调整最终打开的地址，后台查询仍使用当前项目的 API 地址，AI 平台查询使用 `virtualLogin` 返回的来源地址。
 
-## 2. 核心流程
+## 2. 查询流程
 
 ```text
-┌─────────────┐     打开 popup      ┌─────────────┐
-│  管理员已登录  │ ────────────────→ │  读取本地 token  │
-└─────────────┘                     └──────┬──────┘
-                                             │
-                    ┌────────────────────────┼────────────────────────┐
-                    ▼                        ▼                        ▼
-           ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-           │ GET /tenant/page │    │ GET /dept/list   │    │ GET /tenant/user/page│
-           │ 搜索租户        │    │ 获取部门下拉     │    │ 获取用户列表     │
-           └────────┬────────┘    └─────────────────┘    └────────┬────────┘
-                    │                                             │
-                    ▼                                             ▼
-           ┌─────────────────┐                           ┌─────────────────┐
-           │ 租户选择 + 搜索  │ ── 选中租户 ─────────────→ │ 部门筛选 + 用户搜索 │
-           └─────────────────┘                           └────────┬────────┘
-                                                                  │
-                                                                  ▼
-                                                        ┌─────────────────┐
-                                                        │ 点击「一键登录」  │
-                                                        └────────┬────────┘
-                                                                  │
-                                                                  ▼
-                                                        ┌─────────────────┐
-                                                        │ 调用 quickLogin  │
-                                                        │ 或打开新标签注入   │
-                                                        └─────────────────┘
+后台登录 → 保存当前项目的管理员 Token → 打开「关系」
+  ├─ 教师查学生
+  │   搜索租户（POST tenant/page）
+  │   → 读取组织（POST dept/list）
+  │   → 查询租户用户（POST tenant/user/page）
+  │   → 选择租户用户，获取 AI 会话（POST tenant/user/virtualLogin）
+  │   → 选择 AI 教师 → 按教学班级查询学生
+  └─ 学生查教师
+      搜索学生账号（POST tenant/user/account/page，accountType: 1）
+      → 获取 AI 会话（POST tenant/user/virtualLogin）
+      → 匹配学生 → 选择班级 → 查询班级教师关系
+      → 回查常规后台账号（POST tenant/user/account/page，accountType: 0）
+      → 使用解析出的后台账号 id 执行快捷登录
 ```
 
-## 3. 功能范围
+租户用户和后台账号记录中的 `id` 用于 `virtualLogin`；班级教师关系中的 `tmbId/userId` 用于反查对应后台账号。
 
-| 能力 | 说明 | 优先级 |
-|------|------|--------|
-| 租户搜索 | 输入关键字，分页拉取 `tenant/page` | P0 |
-| 租户选择 | 下拉列表展示租户名 + 域名，支持清空 | P0 |
-| 部门筛选 | 选中租户后拉取 `dept/list`，作为用户列表筛选 | P1 |
-| 用户搜索 | 按姓名/手机号搜索用户（复用 `tenant/user/page` 的 keyword） | P1 |
-| 一键登录 | 选中用户后，调用后台快捷登录接口或打开目标域名并注入用户态 | P0 |
-| 最近登录 | 本地保存最近 10 条无凭据元数据，便于二次快捷进入 | P2 |
-| 环境标识 | 在 popup 顶部区分线上目标与开发本机端口；后台/API 仍固定使用当前 pre 来源 | P1 |
+## 3. 接口与请求参数
 
-## 4. 调用接口清单
+以下路径为默认项目配置。后台请求均使用 POST，并携带当前项目的管理员 Token。
 
-基于已提供的 curl 整理：
+| 路径 | 用途 |
+|---|---|
+| `/huayun-ai/admin/tenant/page` | 搜索租户分页 |
+| `/huayun-ai/admin/dept/list` | 查询租户组织 |
+| `/huayun-ai/admin/tenant/user/page` | 按租户、组织和姓名或手机号查询用户 |
+| `/huayun-ai/admin/tenant/user/account/page` | 按姓名、账号或租户名称查询学生、常规账号 |
+| `/huayun-ai/admin/tenant/user/virtualLogin` | 获取指定租户用户的 AI 登录地址 |
 
-### 4.1 租户分页
-```http
-POST https://gpt-admin-pre.hwzxs.com/huayun-ai/admin/tenant/page
-Authorization: Bearer <admin_token>
-Content-Type: application/json
+租户搜索请求体：
 
+```json
 {
   "current": 1,
   "size": 10,
-  "searchType": ["tenantName","contactName","contactPhone","domain"],
+  "searchType": ["tenantName", "contactName", "contactPhone", "domain"],
   "keyword": ""
 }
 ```
 
-### 4.2 部门列表
-```http
-POST https://gpt-admin-pre.hwzxs.com/huayun-ai/admin/dept/list
-Authorization: Bearer <admin_token>
-Content-Type: application/json
+组织查询请求体：
 
+```json
 { "tenantId": "139" }
 ```
 
-### 4.3 用户分页
-```http
-POST https://gpt-admin-pre.hwzxs.com/huayun-ai/admin/tenant/user/page
-Authorization: Bearer <admin_token>
-Content-Type: application/json
+租户用户搜索请求体：
 
+```json
 {
   "current": 1,
   "size": 10,
   "deptId": "425",
   "tenantId": "139",
-  "deptSource": { "name": "钉钉", "value": "dingtalk", "icon": "dingtalk" }
+  "deptSource": { "name": "钉钉", "value": "dingtalk", "icon": "dingtalk" },
+  "searchKey": "张三",
+  "searchType": "username,phone"
 }
 ```
 
-### 4.4 一键登录（真实接口）
+学生账号搜索固定传 `accountType: 1`，并按用户选中的搜索方式传 `username`、`account`、`tenantName` 其中一个文本条件；反查教师使用 `accountType: 0`。
 
-```http
-POST https://gpt-admin-pre.hwzxs.com/huayun-ai/admin/tenant/user/virtualLogin
-Authorization: Bearer <admin_token>
-Content-Type: application/json
+快捷登录请求体为 `{ "id": "26361" }`。响应中的 `data` 是携带 Token 的完整登录地址。后台从该地址解析 AI 平台来源和 Token，供后续教师、学生、班级查询使用。
 
-{ "id": "26361" }
-```
+AI 平台接口使用对应会话的 Token，包括 `/huayun-ai/client/student/page`、`schoolDept/tree`、`schoolManageTeacher/listByClazz` 等。完整调用与响应解析见 `src/background/tenant-api.js`。
 
-说明：
-- 入参为选中用户的 `id`（租户用户表主键，不是 `userId`）；
-- 出参 `data` 为可直接打开的 URL 字符串，例如 `https://uuu.huayungpt.com?token=Bearer xxx`；
-- 插件提取 `data` 后在新标签页打开。
+## 4. 当前界面与交互
 
-## 5. UI 设计
+侧栏使用浅色背景和绿色主色，样式定义在根目录 `popup.html`：页面底色为 `#F7F9F5`，面板底色为 `#FDFEFC`，主色为 `#4A7C59`。底部保持「后台、关系、高校、APP、定位」入口；关系查询有独立工作区。
 
-### 5.1 整体布局
+- **教师查学生**：四步依次为选择租户、选择教师账号、确认教师、查看学生。租户支持分页，组织筛选放在账号步骤，名称相同时结合人数和编号区分。选账号后先按账号或手机号找教师，无结果时改按姓名找候选人。结果唯一且身份信息一致时自动进入学生列表；多条结果或身份待核对时手动选择。
+- **完成步骤**：租户和教师显示摘要，已选账号直接展示完整卡片及登录、复制等操作。返回后重选原账号或教师可继续查看原结果；刷新教师列表保留仍在当前结果中的原教师与学生筛选，原教师已移除时提示重新选择。
+- **学生 APP 登录**：学生行提供文字按钮「登录 APP」；登录地址默认折叠，点击「修改」编辑，地址校验失败时自动展开。教师班级读取失败后，学生区的刷新会重新读取班级再查询学生。
+- **教学范围筛选**：相关学生可按学科、学段、年级、班级筛选，选项来自已选教师的教学范围；换教师后重新选择筛选项。
+- **学生查教师**：先选搜索字段，再搜索学生账号，随后逐步选择学生、班级和教师关系。
+- **打开目标**：每条可登录记录分别设置线上或本地地址。调整目标或端口后，查询结果与已取得的 AI 会话保留。
+- **打开 AI 平台**：优先复用与目标同源的活动标签页；协议、域名或端口不同则新开标签页。
+- **评价操作**：学生评价、教师评价、AI 评价始终新开标签页。
+- **复制**：重新解析登录地址并复制其中的 `?token=...`；最近使用记录保持原样。
 
-在 popup 现有「后台账号 / Token」区域下方新增 **快捷登录** 折叠面板：
+## 5. 查询恢复与记录保存
 
-```
-┌─────────────────────────────────┐
-│ 🛠️ 内部开发工具箱                │
-├─────────────────────────────────┤
-│ 当前页面: xxx                    │
-├─────────────────────────────────┤
-│ 后台账号                          │
-│ ...                              │
-├─────────────────────────────────┤
-│ Token                            │
-│ ...                              │
-├─────────────────────────────────┤
-│ ⚡ 快捷登录 [展开/收起]           │  ← 新增
-│ ┌─────────────────────────────┐ │
-│ │ 选择租户                     │ │
-│ │ [🔍 搜索租户...        ] [▼] │ │
-│ │ 华为云预览 (huawei-pre)      │ │
-│ │                              │ │
-│ │ 部门: [全部 ▼]               │ │
-│ │ 用户: [🔍 搜索用户...    ]    │ │
-│ │                              │ │
-│ │ ┌────────────────────────┐  │ │
-│ │ │ 张三  138****1234  [登录]│  │ │
-│ │ │ 李四  139****5678  [登录]│  │ │
-│ │ └────────────────────────┘  │ │
-│ │          1/3  [加载更多]    │ │
-│ └─────────────────────────────┘ │
-├─────────────────────────────────┤
-│ 最近登录                          │
-│ 张三 @ 华为云预览 · 2分钟前      │
-└─────────────────────────────────┘
-```
+关闭再打开侧栏后，两条查询路径的搜索条件、分页结果、筛选和已选关系会从当前项目的查询快照恢复。进入「关系」任务时，若已有选中账号且后台 Token 可用，会重新请求其 AI 会话。教师路径还会重新读取所选租户的组织数据。
 
-### 5.2 视觉规范
+AI Token 等凭据保留在侧栏内存中，查询快照保存经过清理的查询数据。快照中的 `adminSessionId` 必须与当前后台登录信息一致；旧请求返回时也会检查登录信息是否已变化。
 
-沿用现有 dark theme：
-- 背景：`#1a1a2e`
-- 卡片：`#11111f` + 边框 `#333`
-- 主按钮：`#4a6cf7`
-- 危险/警示：`#ff8a8a` / `#3a1f1f`
-- 成功文字：`#6fe39a`
-- 折叠面板标题：`#8fb3ff`
+每次后台登录成功或应用历史记录都会清空当前项目的关系查询、AI 会话缓存和最近使用记录，包括同账号重新登录。单纯切换项目、关闭侧栏或重启浏览器时，各项目最近使用记录保留。
 
-新增组件样式类：
-- `.quick-login-section`：折叠面板容器
-- `.quick-login-header`：标题 + 展开图标
-- `.tenant-select`：可搜索下拉
-- `.dept-select`：部门下拉
-- `.user-list`：用户列表
-- `.user-item`：用户行
-- `.user-item__btn`：登录按钮
-- `.env-badge`：环境标签（pre 黄、prod 红）
+最近使用记录最多 10 条，以 `tenantId + id + role` 合并；同一身份和角色切换线上、本地或端口后更新同一条记录。环境与端口作为记录内容保存，删除按身份和角色处理。点击历史记录时重新获取会话。
 
-### 5.3 交互细节
+| 存储键 | 内容 |
+|---|---|
+| `adminToken:<projectId>` | `{ token, updatedAt, origin, siteToken, userInfo }`，兼容旧版简化记录 |
+| `adminCredentials:<projectId>` | 后台账号与密码 |
+| `adminLoginHistory:<projectId>` | 后台登录历史，包含账号、地址和登录信息 |
+| `adminSession:<projectId>` | 当前后台登录标识、账号及地址 |
+| `quickLoginQueryState:<projectId>` | `{ version, updatedAt, state }`，保存两条查询路径快照 |
+| `quickLoginRecent:<projectId>` | 身份、角色、目标环境、端口和使用时间等元数据 |
 
-1. **折叠面板**：初始化只读取最近登录元数据；用户输入搜索条件后才发起租户/账号查询，不自动恢复会话。
-2. **租户搜索**：输入框防抖 300ms，触发 `tenant/page`，下拉展示最多 10 条。
-3. **租户选择**：选中后清空用户列表，自动加载部门列表和第一页用户。
-4. **部门筛选**：切换时重置用户分页到第一页。
-5. **用户搜索**：输入框防抖 300ms，按 `keyword` 查询。
-6. **一键登录**：
-   - 按钮显示「登录中」并禁用，防止重复点击；
-   - 成功：在新标签打开目标页并提示「已登录到 xxx」；
-   - 失败：在按钮下方红色提示错误原因。
-7. **最近登录**：登录成功后写入 `chrome.storage.local`，最多 10 条；按角色、环境/端口区分，点击时重新调用 `virtualLogin`。
+后台登录或手动注入由 `src/background/admin-token-injection.js` 向同源网站写入 `localStorage.token`、`userInfo`，随后跳转网站根目录。`origin` 记录登录来源，`siteToken` 保留网站所需的原始凭证格式。
 
-## 6. 状态管理
-
-### 6.1 存储键
-
-| 键 | 类型 | 说明 |
-|---|---|---|
-| `adminToken:<projectId>` | `{ token, updatedAt }` | 后台 admin token |
-| `adminCredentials:<projectId>` | `{ account, password }` | 后台账号凭据 |
-| `quickLoginRecent:<projectId>` | `Array<{tenantId, tenantName, id, userName, role, env, localPort, at}>` | 最多 10 条无凭据元数据；不保存 AI token、URL 或 session |
-
-### 6.2 Popup 运行时状态
-
-无需持久化，存储在内存对象中：
-```js
-const state = {
-  tenantKeyword: '',
-  selectedTenant: null,
-  deptId: '',
-  userKeyword: '',
-  userPage: { current: 1, size: 10, total: 0, records: [] },
-  loading: false,
-  error: '',
-};
-```
-
-## 7. 技术架构
-
-### 7.1 新增/修改文件
+## 6. 文件分工
 
 ```text
-src/
-├── common/
-│   └── tenant.js          # 新增：租户/用户/部门 API 参数封装与响应解析
-├── background/
-│   ├── tenant-api.js      # 新增：跨域调用 tenant/page, dept/list, tenant/user/page
-│   ├── quick-login.js       # 新增：virtualLogin 调用与最近登录记录
-│   └── index.js             # 修改：注册新的消息类型
-├── popup/
-│   ├── quick-login-ui.js    # 新增：快捷登录 UI 渲染与事件绑定
-│   └── index.js             # 修改：初始化 quick-login-ui
-├── popup.html               # 修改：新增快捷登录 DOM
-scripts/build.js             # 修改：加入新文件到 bundle
+internal-dev-toolkit/
+├── popup.html                         # 侧栏界面和样式
+├── src/
+│   ├── common/
+│   │   ├── tenant.js                  # 后台查询参数、响应解析
+│   │   ├── quick-login-state.js       # 查询快照保存与读取
+│   │   └── admin-login-history.js     # 后台登录信息及切换处理
+│   ├── background/
+│   │   ├── tenant-api.js              # 后台及 AI 平台查询
+│   │   ├── quick-login.js             # 登录地址、打开方式、最近使用记录
+│   │   ├── admin-token-injection.js   # 网站登录信息注入
+│   │   └── index.js                   # 消息分发
+│   └── popup/
+│       ├── workspace-ui.js            # 任务入口和工具页
+│       ├── quick-login-ui.js          # 查询与快捷登录界面
+│       └── index.js                   # 注册功能初始化处理
+└── scripts/build.js                   # 构建文件列表及输出
 ```
 
-### 7.2 消息类型
+## 7. 主要消息
 
-| 消息类型 | 方向 | 说明 |
-|---|---|---|
-| `FETCH_TENANTS` | popup → background | 查询租户分页 |
-| `FETCH_DEPTS` | popup → background | 查询部门列表 |
-| `FETCH_USERS` | popup → background | 查询用户分页 |
-| `FETCH_ACCOUNT_USERS` | popup → background | 按姓名/账号/租户查询学生或常规账号 |
-| `QUICK_LOGIN` | popup → background | 执行一键登录 |
-| `RESOLVE_USER_SESSION` | popup → background | 获取当前用户 AI origin/token（不写最近记录） |
-| `FETCH_TEACHERS` / `FETCH_STUDENTS` | popup → background | 使用 AI token 查询租户内教师/学生 |
-| `FETCH_SEMESTERS` / `FETCH_SCHOOL_DEPT_TREE` / `FETCH_CLASS_TEACHERS` | popup → background | 获取学期、班级和教师关系 |
-| `GET_QUICK_LOGIN_RECENT` | popup → background | 读取最近登录记录 |
-| `DELETE_QUICK_LOGIN_RECENT` | popup → background | 按身份、角色、环境/端口精确删除 |
+下列消息由侧栏发给后台处理：
 
-## 8. 错误处理
-
-| 场景 | 处理 |
+| 消息 | 用途 |
 |---|---|
-| 未获取 admin token | 快捷登录面板显示「请先进行 API 登录」，禁用操作 |
-| 网络 / CORS 失败 | 提示「接口请求失败：xxx」，保留当前选择 |
-| 接口返回业务错误 | 提取 `msg` 字段展示 |
-| 用户未选择租户 | 禁用用户搜索，提示「先选择租户」|
-| virtualLogin 请求失败 | 提示「登录失败：xxx」；错误响应中的 token/URL 等敏感字段会脱敏 |
+| `FETCH_TENANTS` / `FETCH_DEPTS` / `FETCH_USERS` | 查询租户、组织、租户用户 |
+| `FETCH_ACCOUNT_USERS` | 查询学生或常规后台账号 |
+| `RESOLVE_USER_SESSION` | 获取 AI 平台来源和 Token |
+| `FETCH_TEACHERS` / `FETCH_STUDENTS` | 使用 AI 会话查询教师、学生 |
+| `FETCH_SEMESTERS` / `FETCH_SCHOOL_DEPT_TREE` / `FETCH_CLASS_TEACHERS` | 查询学期、班级树、班级教师关系 |
+| `QUICK_LOGIN` | 获取登录地址并打开，按调用参数决定是否复用活动标签页 |
+| `GET_QUICK_LOGIN_RECENT` | 读取最近使用记录 |
+| `DELETE_QUICK_LOGIN_RECENT` | 按 `tenantId`、`id` 及可选的 `role` 删除记录 |
 
-## 9. 安全与权限
+## 8. 验证重点
 
-1. **最小权限**：为支持 AI 租户域名与本地开发目标，当前 `manifest.json` 使用 `<all_urls>`；后台实际请求仍固定到当前项目的 pre API 来源，开发环境只改写最终打开目标。
-2. **Token 隔离**：后台接口只使用 admin token；`/client/**` 只使用当前 `virtualLogin` 返回的 AI token。AI token 仅保留在当前 popup 会话内。
-3. **环境边界**：当前线上/开发都使用 `gpt-admin-pre.hwzxs.com` 作为后台/API 来源；开发只将最终打开地址改写为 `localhost:<端口>`，不提供生产环境切换。
-4. **最近记录**：只记录可重新定位账号的身份、角色、环境/端口等元数据；复制操作不写入记录。
+- 两条查询路径使用正确的 POST 请求、搜索参数和账号类型。
+- 自定义后台域名保存后，后续后台请求使用新地址。
+- 关闭再打开侧栏可恢复查询，进入关系任务可重新取得已选账号的 AI 会话。
+- 修改单条记录的线上、本地目标或端口后，查询结果和 AI 会话保留。
+- 打开平台时同源活动标签页被复用，评价操作新开标签页。
+- 同一身份和角色的最近使用记录跨环境合并，删除按身份和角色生效。
+- 后台登录成功或应用历史后，当前项目查询和最近使用记录清空。
 
-## 10. 实现步骤（Roadmap）
-
-1. **Phase 1：基础查询能力**
-   - 新增 `src/common/tenant.js` 定义接口参数和响应结构；
-   - 新增 `src/background/tenant-api.js` 实现跨域调用；
-   - popup 新增租户搜索 UI，能拉取并展示租户列表。
-
-2. **Phase 2：用户选择**
-   - 实现部门列表拉取与筛选；
-   - 实现用户分页列表；
-   - 支持用户关键字搜索与加载更多。
-
-3. **Phase 3：一键登录**
-   - 调用 `POST /huayun-ai/admin/tenant/user/virtualLogin`，入参为 `{ id: "租户用户id" }`；
-   - 提取响应 `data` 中的 URL 并在新标签页打开；
-   - 保存最近登录记录。
-
-4. **Phase 4： polish**
-   - 加载骨架屏；
-   - 空状态提示；
-   - 错误重试；
-   - 更新 README。
-
-## 11. 已确认事项
-
-1. 租户用户和账号分页记录中的 `id` 是 `virtualLogin` 主键；`tmbId/userId` 仅用于关系反查。
-2. 学生账号查询固定 `accountType: 1`；反查教师固定 `accountType: 0`，严格按租户过滤。
-3. 不切换真实生产环境；开发目标默认 `localhost:8088`。
-
-## 12. 附录：virtualLogin 接口
-
-```http
-POST https://gpt-admin-pre.hwzxs.com/huayun-ai/admin/tenant/user/virtualLogin
-Authorization: Bearer <admin_token>
-Content-Type: application/json
-
-{ "id": "26361" }
-```
-
-- 请求体字段 `id` 对应 `tenant/user/page` 返回的 **租户用户 id**（注意不是 `userId`）；
-- 响应 `data` 是可直接打开的 URL，插件会提取后在新标签页打开；
-- 如需修改打开方式，调整 `src/background/quick-login.js` 的 `openLoginUrl`。
-
-## 13. 双向查询实现补充（当前版本）
-
-当前面板已将快捷登录拆成两个互斥入口：
-
-- **教师查学生**：沿用租户 → 租户用户 → AI 教师的既有链路；教师详情提取教学班级 ID，学生接口同时传班级筛选并在前端再次按班级 ID过滤。
-- **学生查教师**：先调用 `/huayun-ai/admin/tenant/user/account/page`，固定 `accountType: 1`，支持 `username`、`account`、`tenantName` 单字段防抖查询；选中账号后用 `virtualLogin` 获得 AI 平台会话，再通过 `/client/student/page` 严格匹配学生、班级树和 `listByClazz` 反查教师。班级教师关系中的 `tmbId/userId` 会回查 `accountType: 0` 常规账号，只有解析到后台账号主键 `id` 才启用登录图标。
-- **凭据边界**：后台请求只读项目 admin token；所有 `/client/**` 请求只接受运行时 AI token，绝不回落 admin token。AI token 不进入存储或最近记录。
-- **环境与最近登录**：线上/开发共用当前 pre API 来源，开发只改写最终打开地址为 `localhost:<port>`；环境/端口切换会清除运行时会话。最近记录最多 10 条，按身份、角色和环境/端口区分；复制图标只复制 URL 中的 `?token=...`，不新增记录。
+构建与校验命令见 [README](../README.md)；本次文档核对依据源码，以上清单用于后续浏览器验证。

@@ -139,7 +139,8 @@
     /* ────────────────────────────────────────
        WORKSPACE SHELL — 杂志刊头 + 不对称任务坞
     ──────────────────────────────────────── */
-    html, body { height: 100%; min-height: 100%; overflow: hidden; }
+    /* 内容由 workspace-main 滚动；外层裁切装饰，避免聚焦卡片时整页横向偏移。 */
+    html, body { height: 100%; min-height: 100%; overflow: clip; }
     body {
       display: grid;
       grid-template-rows: auto minmax(0, 1fr) auto;
@@ -1321,6 +1322,25 @@
     .teacher-badge.status-on  { background: var(--success-bg); color: var(--success); }
     .teacher-badge.status-off { background: var(--error-bg); color: var(--error); }
     .teacher-badge.teach      { background: var(--sage-100); color: var(--sage-600); }
+    .teacher-duty-filter {
+      appearance: none;
+      border: 1px solid transparent;
+      font-family: inherit;
+      line-height: 1.5;
+      cursor: pointer;
+      transition: background-color .15s, border-color .15s;
+    }
+    .teacher-duty-filter:hover { border-color: var(--sage-400); }
+    .teacher-duty-filter[aria-pressed="true"] {
+      background: var(--sage-600);
+      border-color: var(--sage-600);
+      color: #fff;
+    }
+    .teacher-duty-filter:focus-visible {
+      outline: 2px solid var(--sage-500);
+      outline-offset: 2px;
+    }
+    .teacher-duty-filter:disabled { cursor: default; opacity: .6; }
 
     .teacher-duties {
       display: flex;
@@ -1426,13 +1446,11 @@
     .quick-mode-panel .field-input::placeholder,
     .quick-mode-panel .list-item-meta,
     .quick-mode-panel .teacher-item-account,
-    .quick-mode-panel .student-item-meta,
-    .quick-recent-row .recent-item-time { color: var(--text-2); }
+    .quick-mode-panel .student-item-meta { color: var(--text-2); }
     .quick-mode-panel .teacher-badge.status-on,
     .quick-mode-panel .student-item-badge.status-on { color: var(--sage-700); }
     .quick-mode-panel .teacher-badge.status-off,
     .quick-mode-panel .student-item-badge.status-off { color: var(--error); }
-    .quick-recent-row .recent-env-badge.local { color: var(--sage-700); }
     .quick-auth-notice,
     .quick-action-status,
     .quick-inline-status,
@@ -1608,20 +1626,6 @@
       color: var(--text-2);
       font-size: 10.5px;
     }
-    .quick-summary-actions {
-      grid-column: 1 / -1;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      justify-content: flex-end;
-    }
-    /* 选中账号汇总条内的环境切换与操作按钮保持单行排列 */
-    .quick-summary-actions .quick-summary-target {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-right: auto;
-    }
     .quick-stage-body {
       display: grid;
       gap: 8px;
@@ -1719,8 +1723,7 @@
     .quick-row-select:focus-visible,
     .quick-student-select:focus-visible,
     .quick-secondary-btn:focus-visible,
-    .quick-action-btn:focus-visible,
-    .quick-recent-action:focus-visible {
+    .quick-action-btn:focus-visible {
       outline: 2px solid var(--sage-600);
       outline-offset: 2px;
     }
@@ -1728,136 +1731,11 @@
       cursor: wait;
       opacity: .65;
     }
-    .quick-action-row {
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    .quick-action-row .list-item-actions { margin-left: auto; }
-    .quick-action-row > .quick-user-toolbar { margin-left: auto; }
     #userList {
       max-height: 340px;
       background: var(--sage-50);
     }
-    /* 租户用户行与最近登录同一套视觉语言：透明行 + 首行身份/主操作，次行环境控件 */
-    .quick-tenant-user-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 4px 8px;
-      padding: 7px 10px;
-      cursor: default;
-      background: transparent;
-    }
-    .quick-tenant-user-row:hover { background: var(--sage-50); }
-    /* 选中行覆盖通用 .list-item.active 的 padding 抵消值，保持本行 7px/10px 节奏 */
-    .quick-tenant-user-row.active { padding: calc(7px - 1px) calc(10px - 1px); }
-    .quick-tenant-user-row.active:hover { background: var(--sage-50); }
-    .quick-tenant-user-row .quick-row-select {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      min-width: 0;
-      padding: 0;
-    }
-    .quick-user-avatar {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 30px;
-      height: 30px;
-      flex: 0 0 30px;
-      border: 1px solid var(--sage-200);
-      border-radius: 50%;
-      background: var(--sage-100);
-      color: var(--sage-700);
-      font-size: 12px;
-      font-weight: 700;
-      line-height: 1;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5);
-      transition: background var(--dur-fast) ease, color var(--dur-fast) ease, border-color var(--dur-fast) ease;
-    }
-    .quick-tenant-user-row.active .quick-user-avatar {
-      border-color: var(--sage-600);
-      background: var(--sage-600);
-      color: var(--text-inv);
-      box-shadow: none;
-    }
-    .quick-tenant-user-row .list-item-content { min-width: 0; }
-    .quick-tenant-user-row .list-item-title {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      width: 100%;
-      margin-bottom: 3px;
-    }
-    .quick-user-name {
-      min-width: 0;
-      overflow: hidden;
-      color: var(--text-1);
-      font-size: 12.5px;
-      font-weight: 600;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .quick-tenant-user-row .list-item-role {
-      flex: 0 0 auto;
-      margin-left: 0;
-      letter-spacing: 0;
-    }
-    .quick-tenant-user-row .list-item-meta {
-      overflow: hidden;
-      font-family: 'SF Mono', 'Consolas', monospace;
-      font-variant-numeric: tabular-nums;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    /* 工具栏：环境切换 + 端口输入 + 操作按钮同行靠右，空间不足时整体换行并占满宽度 */
-    .quick-user-toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 6px;
-    }
-    .quick-user-env-switcher {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(44px, 1fr));
-      gap: 2px;
-      min-width: 96px;
-      padding: 2px;
-      border-radius: 999px;
-      background: var(--sage-100);
-    }
-    .quick-user-env-btn {
-      min-height: 24px;
-      padding: 0 7px;
-      font-size: 10.5px;
-    }
-    .quick-user-port-field { gap: 4px; }
-    .quick-user-port {
-      width: 56px;
-      height: 26px;
-      padding: 3px 6px;
-      font-size: 11px;
-    }
-    .quick-tenant-user-row .list-item-actions {
-      width: auto;
-      margin-left: 0;
-      justify-content: flex-end;
-      gap: 4px;
-    }
-    /* 行内操作按钮压到与环境控件同一档（26px） */
-    .quick-user-toolbar .quick-action-btn {
-      width: 26px;
-      height: 26px;
-      flex-basis: 26px;
-    }
-    .quick-user-toolbar .quick-action-btn svg {
-      width: 12px;
-      height: 12px;
-    }
-    .quick-action-btn,
-    .quick-recent-action {
+    .quick-action-btn {
       width: 36px;
       height: 36px;
       flex: 0 0 36px;
@@ -1867,134 +1745,6 @@
       height: 32px;
     }
     .quick-recent-list { margin-top: 6px; }
-    /* 最近登录两行网格：首行身份 + 登录主操作，次行环境切换 + 辅助操作 */
-    .quick-recent-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      gap: 5px 8px;
-      padding: 7px 6px;
-      border: 0;
-      border-radius: var(--radius-sm);
-      background: transparent;
-    }
-    .quick-recent-row:hover { background: var(--sage-50); }
-    .quick-recent-row .recent-item-info {
-      grid-column: 1;
-      grid-row: 1;
-      align-self: center;
-    }
-    .quick-recent-actions-main {
-      grid-column: 2;
-      grid-row: 1;
-      align-self: center;
-      justify-self: end;
-    }
-    .quick-recent-actions-aux {
-      grid-column: 2;
-      grid-row: 2;
-      align-self: center;
-      justify-self: end;
-    }
-    .quick-recent-row .recent-item-text {
-      flex-wrap: wrap;
-      margin-bottom: 1px;
-      overflow-wrap: anywhere;
-    }
-    .quick-recent-target-controls {
-      grid-column: 1;
-      grid-row: 2;
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 6px;
-      width: 100%;
-    }
-    .quick-recent-env-switcher {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(54px, 1fr));
-      gap: 3px;
-      min-width: 128px;
-      padding: 3px;
-      border-radius: 999px;
-      background: var(--sage-100);
-    }
-    .quick-recent-env-btn {
-      min-height: 32px;
-      padding: 0 9px;
-      border: 1px solid transparent;
-      border-radius: 999px;
-      background: transparent;
-      color: var(--text-2);
-      font: inherit;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .quick-recent-env-btn.active {
-      border-color: var(--border);
-      background: var(--panel);
-      color: var(--sage-700);
-      box-shadow: var(--shadow-sm);
-    }
-    .quick-recent-port-field {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--text-2);
-      font-size: 10.5px;
-      font-weight: 600;
-    }
-    .quick-recent-port {
-      width: 72px;
-      height: 32px;
-      padding: 5px 8px;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      outline: 0;
-      background: var(--sage-50);
-      color: var(--text-1);
-      font: inherit;
-      font-size: 12px;
-    }
-    .quick-recent-port:focus {
-      border-color: var(--sage-400);
-      background: var(--panel);
-      box-shadow: 0 0 0 3px var(--success-bg);
-    }
-    .quick-recent-env-btn:focus-visible,
-    .quick-recent-port:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 2px; }
-    .quick-recent-actions-main,
-    .quick-recent-actions-aux {
-      display: flex;
-      gap: 5px;
-    }
-    /* 最近登录按钮压缩一档，保证主操作与身份信息同排放得下 */
-    .quick-recent-row .quick-recent-action {
-      width: 30px;
-      height: 30px;
-      flex: 0 0 30px;
-    }
-    .quick-recent-action-apply {
-      background: var(--mint-50);
-      border-color: var(--mint-300);
-      color: var(--sage-700);
-    }
-    .quick-recent-action-apply:hover:not(:disabled) {
-      background: var(--mint-100);
-      border-color: var(--mint-400);
-      color: var(--sage-700);
-    }
-    .quick-recent-action-primary {
-      background: var(--sage-500);
-      border-color: var(--sage-500);
-      color: var(--text-inv);
-    }
-    .quick-recent-action-primary:hover:not(:disabled) {
-      background: var(--sage-600);
-      border-color: var(--sage-600);
-      color: var(--text-inv);
-      box-shadow: 0 8px 18px rgba(74, 124, 89, .28);
-    }
     .quick-session-note {
       min-height: 15px;
       color: var(--text-2);
@@ -2049,21 +1799,11 @@
     .lookup-student-item.selected:hover { background: var(--sage-50); }
     .lookup-student-item.selected .student-item-name { color: var(--sage-700); font-weight: 600; }
     .lookup-student-item.selected + .student-item { border-top-color: transparent; }
-    .lookup-teacher-item { cursor: default; align-items: flex-start; }
-    .lookup-teacher-item:hover { background: transparent; }
-    .lookup-teacher-duties {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-      margin-top: 5px;
-    }
-    .lookup-teacher-item .list-item-actions { padding-top: 1px; }
-
     @media (prefers-reduced-motion: reduce) {
       .panel,
       .utility-screen,
       .quick-mode-panel,
-      .quick-recent-row,
+      .quick-user-card,
       .quick-stage,
       .quick-stage-body,
       .quick-stage-summary,
@@ -2074,7 +1814,6 @@
       .quick-progress-step,
       .quick-progress-step::before,
       .quick-action-btn,
-      .quick-recent-action,
       .toast { animation: none; transition: none; }
     }
 
@@ -2089,8 +1828,7 @@
       .quick-field-grid,
       .quick-field-grid.equal,
       .quick-relation-toolbar,
-      .quick-stage-summary,
-      .quick-recent-row { grid-template-columns: minmax(0, 1fr); }
+      .quick-stage-summary { grid-template-columns: minmax(0, 1fr); }
       .quick-search-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .quick-search-bar .quick-filter-toggle {
         grid-column: 1 / -1;
@@ -2098,16 +1836,7 @@
         min-height: 34px;
       }
       .quick-stage-summary .quick-secondary-btn { justify-self: start; }
-      .quick-summary-actions { grid-column: 1; justify-content: flex-start; }
-      .quick-recent-actions-main,
-      .quick-recent-actions-aux {
-        grid-column: 1;
-        justify-self: stretch;
-      }
-      .quick-user-toolbar { justify-content: flex-start; }
-      .quick-action-row > .quick-user-toolbar { margin-left: 0; }
-      .quick-user-env-switcher { flex: 1 1 auto; }
-      .quick-tenant-user-row .list-item-actions { justify-content: flex-start; }
+
     }
 
     /* ────────────────────────────────────────
@@ -2488,7 +2217,7 @@
       background: rgba(253, 254, 252, .72);
       box-shadow: inset 0 0 0 1px var(--border), inset 0 1px 0 rgba(255, 255, 255, .7);
     }
-    .quick-stage.is-complete > .quick-stage-summary:hover {
+    .quick-stage.is-complete > .quick-stage-summary:not(.quick-user-card):hover {
       background: var(--panel);
       box-shadow: inset 0 0 0 1px var(--border-strong), 0 6px 18px rgba(74, 124, 89, .10);
     }
@@ -2651,55 +2380,6 @@
     .quick-mode-panel .list-item.active,
     .quick-mode-panel .teacher-item.selected { padding: 8px 10px; }
     .quick-mode-panel .lookup-student-item.selected { padding: 8px 13px; }
-    .quick-mode-panel .quick-tenant-user-row.active { padding: 7px 10px; }
-
-    /* 行内环境切换压到与图标按钮同档，别让它吃掉半行宽度 */
-    .quick-mode-panel .quick-user-env-switcher {
-      grid-template-columns: repeat(2, minmax(38px, 1fr));
-      gap: 2px;
-      min-width: 84px;
-      padding: 2px;
-    }
-    .quick-mode-panel .quick-user-env-btn {
-      min-height: 24px;
-      padding: 0 8px;
-      font-size: 10.5px;
-    }
-    .quick-mode-panel .quick-user-port { width: 54px; height: 24px; font-size: 10.5px; }
-
-    /* 图标簇收进浅托盘，5 个同尺寸方块不再平铺成一排 */
-    .quick-mode-panel .quick-user-toolbar .list-item-actions,
-    .quick-summary-actions .list-item-actions {
-      gap: 2px;
-      padding: 2px;
-      border-radius: 999px;
-      background: rgba(240, 245, 238, .92);
-      box-shadow: inset 0 0 0 1px var(--border);
-    }
-    .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn,
-    .quick-summary-actions .list-item-actions .quick-action-btn {
-      border-color: transparent;
-      background: transparent;
-      box-shadow: none;
-    }
-    .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn:hover:not(:disabled),
-    .quick-summary-actions .list-item-actions .quick-action-btn:hover:not(:disabled) {
-      background: var(--panel);
-      border-color: transparent;
-      box-shadow: 0 4px 10px rgba(74, 124, 89, .16);
-    }
-    .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn.primary,
-    .quick-summary-actions .list-item-actions .quick-action-btn.primary {
-      background: var(--sage-500);
-      border-color: var(--sage-500);
-      color: var(--text-inv);
-    }
-    .quick-mode-panel .quick-user-toolbar .list-item-actions .quick-action-btn.primary:hover:not(:disabled),
-    .quick-summary-actions .list-item-actions .quick-action-btn.primary:hover:not(:disabled) {
-      background: var(--sage-600);
-      border-color: var(--sage-600);
-      box-shadow: 0 6px 14px rgba(74, 124, 89, .3);
-    }
 
     /* 选中态需要左右留白才能让高亮环完整可见。留白放在列表容器上（padding），
        而不是行的左右 margin —— 后者会让行比容器宽出 8px，撑出一条横向滚动条。 */
@@ -2715,22 +2395,6 @@
     }
     .quick-mode-panel .student-item-actions .quick-action-btn svg { width: 13px; height: 13px; }
 
-    /* 行内工具条（环境切换 + 图标托盘）约 240px，和身份信息挤同一行会把姓名压成省略号。
-       统一改成两行：身份占满首行，工具条独占次行右对齐。 */
-    .quick-mode-panel .quick-tenant-user-row,
-    .quick-mode-panel .lookup-teacher-item {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 7px;
-      align-items: start;
-    }
-    .quick-mode-panel .quick-tenant-user-row > .quick-user-toolbar,
-    .quick-mode-panel .lookup-teacher-item > .quick-user-toolbar {
-      width: 100%;
-      margin-left: 0;
-      justify-content: flex-end;
-    }
-    .quick-mode-panel .lookup-teacher-item .list-item-actions { padding-top: 2px; }
     /* 任教徽标不能在词中间折行 */
     .teacher-badge { white-space: nowrap; }
 
@@ -2776,6 +2440,25 @@
     .quick-stage-title { color: var(--text-1); font-size: 12.5px; letter-spacing: .01em; }
     .quick-summary-title { font-size: 12.5px; }
 
+    .quick-step-hint { margin: 0; color: var(--text-2); font-size: 12px; line-height: 1.6; }
+    #teacherModePanel .quick-stage-summary:not(.quick-user-card) { grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: 8px 10px; }
+    .quick-result-count { margin-left: 8px; color: var(--text-3); font-size: 11px; font-weight: 500; white-space: nowrap; }
+    .quick-app-settings { min-width: 0; color: var(--text-2); font-size: 11px; }
+    .quick-app-settings > summary { display: flex; align-items: center; gap: 8px; min-height: 30px; cursor: pointer; list-style: none; }
+    .quick-app-settings > summary::-webkit-details-marker { display: none; }
+    .quick-app-settings > summary:focus-visible { outline: 2px solid var(--sage-500); outline-offset: 2px; border-radius: 6px; }
+    #studentAppSiteSummary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .quick-app-settings-edit { color: var(--sage-700); }
+    .quick-app-settings[open] .quick-app-settings-edit { font-size: 0; }
+    .quick-app-settings[open] .quick-app-settings-edit::after { content: '收起'; font-size: 11px; }
+    .quick-app-settings .quick-app-site-field { margin-bottom: 6px; }
+    #studentSection .student-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; }
+    #studentSection .student-item-info { display: contents; }
+    #studentSection .student-item-name { grid-column: 1; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #studentSection .student-item-meta { grid-column: 1 / -1; grid-row: 2; }
+    #studentSection .student-item-actions { grid-column: 2; grid-row: 1; }
+    .quick-mode-panel .student-item-actions .student-app-login-btn { flex: 0 0 auto; width: auto; min-width: 82px; gap: 4px; padding-inline: 8px; white-space: nowrap; color: var(--sage-700); background: var(--success-bg); font-size: 11px; font-weight: 600; }
+    .quick-mode-panel .student-item-actions .student-app-login-btn:hover:not(:disabled) { background: var(--sage-200); }
     .token-shell { margin-top: 0; }
     .utility-screen .callout {
       display: block;
@@ -2812,6 +2495,160 @@
     }
     .utility-screen .workspace-subview + .workspace-subview { margin-top: 10px; }
     .utility-screen .recent-list { gap: 8px; }
+    /* 公共用户卡片：按已选定的「细线列表」预览实现。 */
+    .quick-user-card.list-item {
+      --user-card-surface: #fdfefc;
+      --user-card-ink: #243a2a;
+      --user-card-muted: #6a7b6d;
+      --user-card-line: #dce5d8;
+      --user-card-green: #4a7c59;
+      --user-card-green-dark: #386045;
+      --user-card-soft: #edf4e9;
+      --user-card-danger: #b34f45;
+      position: relative;
+      z-index: auto;
+      display: block;
+      gap: normal;
+      min-width: 0;
+      margin: 0;
+      padding: 8px 10px 6px;
+      border: 1px solid var(--user-card-line);
+      border-radius: 8px;
+      outline: 0;
+      background: var(--user-card-surface);
+      color: var(--user-card-ink);
+      box-shadow: none;
+      cursor: default;
+      font: 400 13px/1.5 -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      text-align: left;
+      transition: none;
+    }
+    .quick-user-card.list-item.active {
+      z-index: auto;
+      margin: 0;
+      padding: 8px 10px 6px;
+      border: 1px solid var(--user-card-green);
+      border-radius: 8px;
+      outline: 0;
+      background: var(--user-card-soft);
+      box-shadow: none;
+    }
+    .quick-user-card.list-item:hover { background: var(--user-card-surface); }
+    .quick-user-card.list-item.active:hover { background: var(--user-card-soft); }
+    .quick-user-card.list-item:has(.quick-row-select:not(:disabled)) { cursor: pointer; }
+    .quick-user-card.list-item.active + .quick-user-card.list-item { border-top-color: var(--user-card-line); }
+    .quick-user-card.list-item.is-menu-open { z-index: 5; }
+    .quick-user-card button,
+    .quick-user-card input,
+    .quick-user-card select { font: inherit; color: inherit; }
+    .quick-user-card button { appearance: none; margin: 0; border: 0; background: transparent; cursor: pointer; }
+    .quick-user-card button:disabled { opacity: .4; cursor: default; }
+    .quick-user-card [hidden] { display: none !important; }
+    .quick-user-card-list,
+    .quick-user-card-host,
+    .quick-stage:has(> .quick-user-card) { container: user-cards / inline-size; }
+    .quick-mode-panel .list.quick-user-card-list,
+    .recent-list.quick-user-card-list {
+      display: grid;
+      align-content: start;
+      gap: 6px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+    }
+    .quick-user-card .quick-user-header { display: grid; grid-template-columns: minmax(0, 1fr) 104px; column-gap: 8px; row-gap: 1px; align-items: center; min-width: 0; }
+    .quick-user-card[data-env="local"] .quick-user-header { row-gap: 3px; }
+    .quick-user-card .quick-user-identity { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 0; text-align: left; }
+    .quick-user-avatar { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; border-radius: 50%; color: var(--user-card-green); background: var(--user-card-soft); font-weight: 500; }
+    .quick-user-card .list-item-content { display: block; flex: 0 1 auto; min-width: 0; }
+    .quick-user-card .list-item-title { color: var(--user-card-ink); display: flex; align-items: center; gap: 6px; width: auto; min-width: 0; margin: 0; overflow: visible; font-size: 13px; font-weight: 400; line-height: 18px; }
+    .quick-user-card .quick-user-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .quick-user-card .list-item-role { flex: 0 0 auto; padding: 0; margin: 0; border: 0; border-radius: 0; color: var(--user-card-muted); background: transparent; font-size: 12px; font-weight: 400; letter-spacing: normal; }
+    .quick-user-card .quick-user-selected { display: flex; width: 12px; height: 12px; flex: 0 0 12px; color: var(--user-card-green); }
+    .quick-user-card .list-item-meta { display: block; width: auto; margin: 0; overflow: hidden; color: var(--user-card-muted); font: 400 12px/14px -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+    .quick-user-card .quick-user-env-field { position: relative; display: block; width: 104px; min-width: 104px; }
+    .quick-user-card .quick-user-env-select { display: block; appearance: none; -webkit-appearance: none; width: 104px; min-width: 104px; height: 28px; padding: 0 25px 0 9px; border: 1px solid var(--user-card-line); border-radius: 5px; color: inherit; background: var(--user-card-surface); font-size: 12px; white-space: nowrap; cursor: pointer; }
+    .quick-user-card .quick-user-env-chevron { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; color: var(--user-card-muted); pointer-events: none; }
+    .quick-user-card .quick-user-phone-row { grid-column: 1; grid-row: 2; display: flex; align-items: center; justify-content: flex-start; gap: 4px; min-height: 16px; margin: 0 0 0 34px; font-size: 12px; line-height: 16px; }
+    .quick-user-card .quick-user-phone { color: var(--user-card-ink); font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .quick-user-card .quick-user-phone-copy { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 16px; width: 16px; height: 16px; min-height: 16px; padding: 0; color: var(--user-card-ink); line-height: 16px; }
+    .quick-user-card .quick-user-phone-copy:hover:not(:disabled),
+    .quick-user-card .quick-user-phone-copy[data-copied="true"] { color: var(--user-card-green-dark); }
+    .quick-user-card .quick-user-phone-missing { color: var(--user-card-muted); font-size: 12px; line-height: 16px; }
+    .quick-user-card .quick-user-time,
+    .quick-user-card .quick-user-duties,
+    .quick-user-card .quick-user-note { margin: 3px 0 0 34px; color: var(--user-card-muted); font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+    .quick-user-card .quick-user-port-field { grid-column: 2; grid-row: 2; display: flex; align-items: center; gap: 4px; width: 104px; height: 26px; margin: 0; padding: 0 9px; border: 1px solid var(--user-card-line); border-radius: 5px; color: var(--user-card-muted); background: var(--user-card-surface); font-size: 12px; }
+    .quick-user-card .quick-user-port-field > span { flex: 0 0 auto; font-size: 11px; }
+    .quick-user-card .quick-user-port { width: 100%; min-width: 0; height: 24px; padding: 0; border: 0; border-radius: 0; color: var(--user-card-ink); background: transparent; font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+    .quick-user-card .quick-user-port-error { margin-top: 4px; color: var(--user-card-danger); font-size: 12px; }
+    .quick-user-card .quick-user-toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: normal; width: auto; min-width: 0; margin: 6px 0 0; padding-top: 3px; border-top: 1px solid var(--user-card-line); }
+    .quick-user-card .quick-user-toolbar:has(.quick-user-direct-action) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .quick-user-card .quick-user-action { position: relative; display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; height: auto; min-width: 0; min-height: 28px; padding: 3px 1px; border: 0; border-radius: 0; color: var(--user-card-muted); background: transparent; box-shadow: none; font-size: 12px; line-height: 1.5; transition: none; }
+    .quick-user-card .quick-user-action-label { font-size: 12px; line-height: 16px; white-space: nowrap; }
+    .quick-user-card .quick-user-action-mark { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: 0 0 14px; }
+    .quick-user-card .quick-user-action[data-action="open"],
+    .quick-user-card .quick-user-action[aria-expanded="true"],
+    .quick-user-card .quick-user-action:hover:not(:disabled) { color: var(--user-card-green-dark); background: transparent; box-shadow: none; }
+    .quick-user-card .quick-user-action:hover:not(:disabled) .quick-user-action-label,
+    .quick-user-card .quick-user-action[aria-expanded="true"] .quick-user-action-label { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+    .quick-user-card .quick-user-extra-actions { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--user-card-line); }
+    .quick-user-card .quick-user-extra-btn.danger { color: var(--user-card-danger); }
+    .quick-user-card .icon-svg { display: block; width: 14px; height: 14px; max-width: 14px; max-height: 14px; margin: 0; flex: 0 0 14px; stroke-width: 1.6; }
+    .quick-user-card .quick-user-phone-copy .icon-svg { width: 11px; height: 11px; max-width: 11px; max-height: 11px; flex-basis: 11px; stroke-width: 1.5; }
+    .quick-user-card .quick-user-env-chevron .icon-svg,
+    .quick-user-card .quick-user-selected .icon-svg { width: 12px; height: 12px; max-width: 12px; max-height: 12px; flex-basis: 12px; }
+    .quick-user-card .quick-user-more-menu {
+      position: fixed;
+      inset: auto;
+      z-index: 8;
+      width: 222px;
+      margin: 0;
+      padding: 6px;
+      border: 1px solid var(--user-card-line);
+      border-radius: 7px;
+      background: var(--user-card-surface);
+      color: var(--user-card-ink);
+      overflow: auto;
+      box-shadow: 0 3px 12px rgba(36, 58, 42, .06);
+      font: inherit;
+    }
+    .quick-user-card .quick-user-menu-item { position: relative; display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; height: auto; min-width: 0; min-height: 34px; padding: 7px 8px; border: 0; border-radius: 3px; color: inherit; background: transparent; box-shadow: none; font-size: 13px; line-height: 1.5; transition: none; text-align: left; }
+    .quick-user-card .quick-user-menu-symbol { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex: 0 0 14px; }
+    .quick-user-card .quick-user-menu-name { min-width: 0; overflow-wrap: anywhere; }
+    .quick-user-card .quick-user-menu-item:hover:not(:disabled) { color: var(--user-card-green-dark); background: transparent; box-shadow: none; }
+    .quick-user-card .quick-user-extra-btn.danger:hover:not(:disabled) { color: var(--user-card-danger); }
+    .quick-user-card .quick-user-menu-item::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 2px; background: transparent; }
+    .quick-user-card .quick-user-menu-item:hover:not(:disabled)::before { background: var(--user-card-green); }
+    .quick-user-card .quick-user-spin { animation: quick-user-spin .9s linear infinite; }
+    @keyframes quick-user-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .quick-user-card .quick-user-spin { animation: none; }
+    }
+    .quick-user-clipboard { position: absolute; width: 1px; height: 1px; padding: 0; opacity: 0; pointer-events: none; }
+    @container user-cards (max-width: 300px) {
+      .quick-user-card .quick-user-avatar { display: none; }
+      .quick-user-card .quick-user-phone-row,
+      .quick-user-card .quick-user-time,
+      .quick-user-card .quick-user-duties,
+      .quick-user-card .quick-user-note { margin-left: 0; }
+      .quick-user-card .quick-user-toolbar:has(.quick-user-direct-action) .quick-user-action:not(.quick-user-more-btn) .quick-user-action-mark { display: none; }
+    }
+    @media (max-width: 400px) {
+      .quick-user-card.list-item,
+      .quick-user-card.list-item.active { padding: 7px 9px 5px; }
+    }
+    @media (pointer: coarse) {
+      .quick-user-card button,
+      .quick-user-card input,
+      .quick-user-card select { min-height: 44px; }
+      .quick-user-card input,
+      .quick-user-card select { font-size: 16px; }
+      .quick-user-card .quick-user-phone-copy { width: 44px; min-height: 44px; flex-basis: 44px; }
+      .quick-user-card .quick-user-env-select { min-height: 44px; font-size: 16px; }
+      .quick-user-card .quick-user-port-field { height: 46px; }
+    }
+
     .utility-screen .recent-item {
       border: 1px solid var(--border);
       border-radius: 9px;
@@ -2971,6 +2808,9 @@
     .component-section-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
     .component-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; }
     .component-row > :first-child { min-width: 0; }
+    .component-click-action { flex-shrink: 0; max-width: 52%; padding: 7px 5px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text-1); font: inherit; font-size: 13px; cursor: pointer; }
+    .component-click-action:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 3px; }
+    .component-click-action:disabled { opacity: .5; cursor: not-allowed; }
     .component-key-line { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; color: var(--text-2); }
     .component-key-line kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); color: var(--text-1); font-family: inherit; font-size: 13px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
     .component-mouse-action { white-space: nowrap; }
@@ -3270,33 +3110,28 @@
                   <div class="quick-inline-status" id="tenantSearchStatus" role="status" aria-live="polite"></div>
                   <div class="list hidden" id="tenantList" role="list"></div>
                   <div class="list-empty hidden" id="tenantEmpty">请输入租户条件</div>
-                </div>
-                <div class="quick-dept-field hidden" id="teacherDeptField">
-                  <label class="quick-label" for="deptSelect">组织架构</label>
-                  <select class="field-input" id="deptSelect" aria-describedby="teacherDeptStatus" disabled>
-                    <option value="">全部账号（不指定部门）</option>
-                  </select>
-                  <div class="quick-dept-status-row">
-                    <div class="quick-inline-status" id="teacherDeptStatus" role="status" aria-live="polite"></div>
-                    <button class="btn btn-ghost quick-secondary-btn hidden" id="teacherDeptRetryBtn" type="button">重新加载</button>
-                  </div>
+                  <div class="pager hidden" id="tenantPager" aria-label="租户分页"></div>
                 </div>
               </section>
 
               <section class="quick-stage hidden" id="teacherUserStep">
                 <div class="quick-stage-header">
-                  <h3 class="quick-stage-title">选择账号</h3>
+                  <h3 class="quick-stage-title">选择教师账号</h3>
                   <span class="quick-stage-status" id="teacherUserState">待选择</span>
                 </div>
-                <div class="quick-stage-summary hidden" id="teacherUserSummary">
-                  <div class="quick-summary-copy">
-                    <div class="quick-summary-title" id="teacherUserSummaryTitle"></div>
-                    <div class="quick-summary-meta" id="teacherUserSummaryMeta"></div>
-                  </div>
-                  <button class="btn btn-ghost quick-secondary-btn" id="changeTeacherUserBtn" type="button">更换</button>
-                  <div class="quick-summary-actions quick-target-container" id="teacherUserSummaryActions"></div>
-                </div>
+                <div class="quick-stage-summary quick-user-card hidden" id="teacherUserSummary"></div>
                 <div class="quick-stage-body" id="teacherUserStepBody">
+                  <p class="quick-step-hint">选择教师的登录账号，随后确认要查询的教师。</p>
+                  <div class="quick-dept-field hidden" id="teacherDeptField">
+                    <label class="quick-label" for="deptSelect">按组织筛选账号</label>
+                    <select class="field-input" id="deptSelect" aria-describedby="teacherDeptStatus" disabled>
+                      <option value="">全部账号（不指定部门）</option>
+                    </select>
+                    <div class="quick-dept-status-row">
+                      <div class="quick-inline-status" id="teacherDeptStatus" role="status" aria-live="polite"></div>
+                      <button class="btn btn-ghost quick-secondary-btn hidden" id="teacherDeptRetryBtn" type="button">重新加载</button>
+                    </div>
+                  </div>
                   <label class="quick-sr-only" for="userSearch">租户用户</label>
                   <input class="field-input" id="userSearch" type="text" autocomplete="off" placeholder="姓名 / 手机号">
                   <div class="quick-inline-status" id="teacherSessionStatus" role="status" aria-live="polite"></div>
@@ -3308,7 +3143,7 @@
 
               <section class="quick-stage hidden" id="teacherIdentityStep">
                 <div class="quick-stage-header">
-                  <h3 class="quick-stage-title">选择 AI 教师</h3>
+                  <h3 class="quick-stage-title">确认教师</h3>
                   <span class="quick-stage-status" id="teacherIdentityState">待选择</span>
                 </div>
                 <div class="quick-stage-summary hidden" id="teacherIdentitySummary">
@@ -3329,6 +3164,7 @@
                     <label class="quick-sr-only" for="teacherAccountSearch">教师账号</label>
                     <input class="field-input" id="teacherAccountSearch" type="text" autocomplete="off" placeholder="账号">
                   </div>
+                  <div class="quick-inline-status" id="teacherMatchStatus" role="status" aria-live="polite"></div>
                   <div class="list hidden" id="teacherList" role="list"></div>
                   <div class="list-empty" id="teacherEmpty">选择租户用户后加载教师</div>
                   <div class="pager hidden" id="teacherPager" aria-label="AI 教师分页"></div>
@@ -3337,16 +3173,11 @@
 
               <section class="quick-stage student-section hidden" id="studentSection">
                 <div class="quick-stage-header">
-                  <h3 class="quick-stage-title" id="studentSectionTitle">相关学生</h3>
+                  <h3 class="quick-stage-title"><span id="studentSectionTitle">相关学生</span><span class="quick-result-count" id="studentResultCount" role="status"></span></h3>
                   <button class="btn btn-ghost quick-secondary-btn" id="studentRefreshBtn" type="button">刷新</button>
                 </div>
                 <div class="quick-stage-body">
-                  <div class="teacher-duties hidden" id="teacherDuties"></div>
-                  <div class="quick-app-site-field">
-                    <label class="quick-label" for="studentAppSiteUrl">APP 站点地址</label>
-                    <input class="field-input" id="studentAppSiteUrl" type="text" autocomplete="off"
-                      placeholder="http://localhost:5173" aria-invalid="false">
-                  </div>
+                  <div class="teacher-duties hidden" id="teacherDuties" role="group" aria-label="按教学班级筛选学生"></div>
                   <!-- 姓名/学号是主检索，常驻；学科～班级四级 scope 收进披露区，靠计数徽标回述已生效的条件 -->
                   <div class="quick-search-bar">
                     <label class="quick-sr-only" for="studentNameSearch">学生姓名</label>
@@ -3370,6 +3201,14 @@
                     <label class="quick-sr-only" for="studentClassFilter">班级</label>
                     <select class="field-input" id="studentClassFilter"><option value="">全部班级</option></select>
                   </div>
+                  <details class="quick-app-settings" id="studentAppSiteSettings">
+                    <summary><span>APP 登录地址</span><span id="studentAppSiteSummary">请设置</span><span class="quick-app-settings-edit">修改</span></summary>
+                    <div class="quick-app-site-field">
+                      <label class="quick-sr-only" for="studentAppSiteUrl">APP 站点地址</label>
+                      <input class="field-input" id="studentAppSiteUrl" type="text" autocomplete="off"
+                        placeholder="http://localhost:5173" aria-invalid="false">
+                    </div>
+                  </details>
                   <div class="list hidden" id="studentList" role="list"></div>
                   <div class="list-empty" id="studentEmpty">选择 AI 教师后加载相关学生</div>
                   <div class="pager hidden" id="studentPager" aria-label="相关学生分页"></div>
@@ -3383,14 +3222,7 @@
                   <h3 class="quick-stage-title">搜索学生账号</h3>
                   <span class="quick-stage-status" id="studentAccountState">当前</span>
                 </div>
-                <div class="quick-stage-summary hidden" id="studentAccountSummary">
-                  <div class="quick-summary-copy">
-                    <div class="quick-summary-title" id="studentAccountSummaryTitle"></div>
-                    <div class="quick-summary-meta" id="studentAccountSummaryMeta"></div>
-                  </div>
-                  <button class="btn btn-ghost quick-secondary-btn" id="changeStudentAccountBtn" type="button">更换</button>
-                  <div class="quick-summary-actions quick-target-container" id="studentAccountSummaryActions"></div>
-                </div>
+                <div class="quick-stage-summary quick-user-card hidden" id="studentAccountSummary"></div>
                 <div class="quick-stage-body" id="studentAccountStepBody">
                   <div class="quick-field-grid">
                     <label class="quick-sr-only" for="accountSearchField">学生账号搜索字段</label>
@@ -3695,7 +3527,8 @@
       </details>
       <section class="component-usage" aria-label="快捷操作">
         <h2 class="component-section-title">在网页上操作</h2>
-        <div class="component-row"><span>打开源码</span><span class="component-key-line"><kbd id="componentOpenShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 单击</span></span></div>
+        <div class="component-row"><select class="component-click-action" id="componentClickAction" aria-label="快捷键加左键的操作"><option value="open">打开源码</option><option value="copy">复制源码位置</option></select><span class="component-key-line"><kbd id="componentOpenShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 左键</span></span></div>
+        <p class="component-muted" id="componentCopyLocationHint" hidden>复制本机绝对路径和行号，例如 /项目/src/App.tsx#L10。</p>
         <div class="component-row"><span>查看父组件</span><span class="component-key-line"><kbd id="componentMenuShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 右键</span></span></div>
       </section>
       <section class="component-settings" aria-label="定位设置">
@@ -3712,7 +3545,7 @@
           <details class="component-setting" id="componentShortcutSection">
             <summary><span class="component-setting-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M8 16h8"/></svg>快捷键</span><span class="component-setting-value">修改<svg class="component-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span></summary>
             <div class="component-setting-body">
-              <div class="component-row"><span>打开源码</span><button class="btn btn-ghost component-shortcut" id="componentOpenShortcut" type="button">⌘ Command</button></div>
+              <div class="component-row"><span id="componentClickShortcutTitle">打开源码</span><button class="btn btn-ghost component-shortcut" id="componentOpenShortcut" type="button">⌘ Command</button></div>
               <div class="component-row"><span>查看父组件</span><button class="btn btn-ghost component-shortcut" id="componentMenuShortcut" type="button">⌘ Command</button></div>
               <p class="component-muted component-copy-hint" id="componentShortcutHint" role="status" hidden></p>
               <button class="btn btn-ghost component-text-btn" id="componentResetShortcuts" type="button">恢复默认</button>

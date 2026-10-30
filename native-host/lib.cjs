@@ -11,6 +11,17 @@ const runFile = promisify(execFile);
 const { HOST_NAME, installationPaths, uninstall, runtimeBundle, updateRuntime } = require('./installation.cjs');
 const EDITOR_PICKER_SCRIPT = 'POSIX path of (choose file with prompt "选择用于打开组件源码的编辑器（.app）" of type {"com.apple.application-bundle"} default location (path to applications folder) multiple selections allowed false invisibles false showing package contents false)';
 
+function copyTextToClipboard(text) {
+  return new Promise((resolve, reject) => {
+    const child = execFile('/usr/bin/pbcopy', [], { timeout: 8000, env: { ...process.env, LC_CTYPE: 'UTF-8' } }, (error) => {
+      if (error) reject(new Error('复制失败，请重新点击组件重试'));
+      else resolve();
+    });
+    child.stdin.on('error', () => reject(new Error('复制失败，请重新点击组件重试')));
+    child.stdin.end(text, 'utf8');
+  });
+}
+
 function within(root, file) {
   const relative = path.relative(root, file);
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
@@ -77,7 +88,7 @@ async function childProjects(root) {
   return projects;
 }
 
-function createHost({ installation = installationPaths(), dataDir = installation.dataDir, run = runFile, platform = process.platform } = {}) {
+function createHost({ installation = installationPaths(), dataDir = installation.dataDir, run = runFile, copyText = copyTextToClipboard, platform = process.platform } = {}) {
   const configPath = path.join(dataDir, 'settings.json');
   const instanceId = crypto.randomUUID();
   let removed = false;
@@ -257,6 +268,18 @@ function createHost({ installation = installationPaths(), dataDir = installation
     return { project };
   }
 
+  async function copySource({ origin, projectId, source }) {
+    const { project } = await validateProject(origin, projectId);
+    const file = await resolveProjectFile(project.root, source?.file);
+    const line = Number.isSafeInteger(source?.line) && source.line > 0 ? source.line : null;
+    const endLine = line && Number.isSafeInteger(source?.endLine) && source.endLine > line ? source.endLine : null;
+    const location = `${file}${line ? `#L${line}${endLine ? `-L${endLine}` : ''}` : ''}`;
+    // 沿用 Copy Code Path 的末尾空格，路径和行号范围采用用户指定的格式。
+    const text = `${location} `;
+    await copyText(text);
+    return { file, line, endLine, location, text, precision: line ? 'line' : 'file' };
+  }
+
   async function openSource({ origin, projectId, source }) {
     const { config, project } = await validateProject(origin, projectId);
     if (!(await editorAvailable(config.editor))) throw new Error('请先选择有效的编辑器');
@@ -315,10 +338,11 @@ function createHost({ installation = installationPaths(), dataDir = installation
       case 'identifyProject': return identifyProject(message);
       case 'checkProject': return checkProject(message);
       case 'openSource': return openSource(message);
+      case 'copySource': return copySource(message);
       default: throw new Error('未知的本机操作');
     }
   }
-  return { handle, status, identifyProject, checkProject, openSource, readConfig, saveConfig };
+  return { handle, status, identifyProject, checkProject, openSource, copySource, readConfig, saveConfig };
 }
 
 module.exports = { HOST_NAME, EDITOR_PICKER_SCRIPT, createHost, cleanSource, resolveProjectFile, rootFromCommand, within };

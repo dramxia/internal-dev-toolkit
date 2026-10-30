@@ -4,6 +4,16 @@ globalThis.InternalDevToolkit = {};
 require('../src/common/tenant.js');
 
 const tenant = globalThis.InternalDevToolkit.tenant;
+assert.equal(tenant.normalizeUser({ account: 'teacher001' }).phone, '', '账号应与手机号分别保存');
+assert.equal(tenant.normalizeUser({ account: 'teacher001', mobile: '13800001234' }).phone, '13800001234');
+assert.equal(tenant.normalizeUser({ phone: '', mobile: '13900005678' }).phone, '13900005678');
+assert.equal(tenant.normalizeUser({ account: '15612340001', phone: '', mobile: '' }).phone, '15612340001');
+assert.equal(tenant.normalizeAccount({ account: 13800001234 }).phone, '13800001234');
+assert.equal(tenant.resolveUserPhone({ phone: '  ', mobile: '13900005678', account: '13800001234' }), '13900005678');
+assert.equal(tenant.resolveUserPhone({ account: '13800001234' }, { mobile: '13900005678' }), '13900005678', '明确的手机号字段优先于手机号形式的账号');
+assert.equal(tenant.resolveUserPhone({ phone: '', raw: { mobile: '13500007890' } }), '13500007890');
+assert.equal(tenant.resolveUserPhone({ account: '20260010001' }), '');
+assert.equal(tenant.resolveUserPhone({ account: 'teacher@example.test' }), '');
 
 assert.deepStrictEqual(
   tenant.buildAccountPageBody({ current: 2, size: 20, username: '张三', accountType: 1 }),

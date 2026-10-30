@@ -1,209 +1,120 @@
 # Mock 功能快速测试指南
 
-## 🚀 快速开始（3 步）
+本文用于验证当前面板的捕获、编辑、保存和请求拦截。
 
-### 1. 启动测试服务器
+## 1. 准备测试页面
+
+在仓库根目录执行：
 
 ```bash
+npm run build
 npm run test-server
 ```
 
-看到以下输出表示成功：
-```
-🚀 测试服务器启动成功！
-📍 地址: http://localhost:8080
+测试服务使用 `http://localhost:8080`，提供以下接口：
 
-可用接口：
-  GET  /api/user/list      - 获取用户列表
-  POST /api/user/detail    - 获取用户详情
-  POST /api/login          - 登录接口
-```
+- `GET /api/user/list`
+- `POST /api/user/detail`
+- `POST /api/login`
 
-### 2. 重新加载插件
+在 `chrome://extensions/` 加载或重新加载插件。扩展重载后，关闭旧开发者工具，打开 `http://localhost:8080` 并刷新页面，再重新打开开发者工具中的「接口 Mock」。开启 Mock 总开关，等待注入完成。
 
-1. 打开 Chrome 浏览器
-2. 地址栏输入：`chrome://extensions/`
-3. 找到「内部开发工具箱」
-4. 点击「重新加载」按钮（🔄）
+## 2. 查看真实请求
 
-### 3. 打开测试页面
+依次点击测试页面上的三个请求按钮。
 
-在浏览器中访问：
-```
-http://localhost:8080
-```
+预期：
 
-## 📝 测试步骤
+- 左侧「捕获」显示三个接口条目，记录包含方法、地址、状态和时间等信息。
+- 点击接口后，右侧可切换「出参」「入参」，查看对应数据。
+- 同一接口再次请求时更新原条目。查询参数、片段或请求体变化也会合并；内容脚本最多保留 100 个接口条目。
+- 拦截开关关闭时，编辑器只读，「生成假数据」按钮置灰。
 
-### 步骤 1：查看真实请求
+## 3. 编辑与生成
 
-1. 在测试页面按 `F12` 打开 DevTools
-2. 切换到「**接口 Mock**」标签
-3. 点击测试页面上的按钮：
-   - `GET /api/user/list`
-   - `POST /api/user/detail`
-   - `POST /api/login`
-4. 在 DevTools Panel 左侧应该看到接口列表
+1. 选择 `POST /api/user/detail`，开启接口拦截开关。
+2. 选择「出参」，点击「生成假数据」。
+3. 检查 `name`、`email`、`phone`、`id` 等字段变化。
+4. 修改一个容易辨认的字段，例如将姓名设为「Mock 测试用户」。
+5. 切到「入参」再切回「出参」，检查草稿仍保留。
 
-**预期结果**：
-- ✅ 左侧显示 3 个接口记录
-- ✅ 每个记录显示 Method + URL + 时间
+预期：捕获页开启开关后显示待保存状态，生成后提示「假数据已生成，请点击保存」。切换入参、出参只保留面板草稿。
 
-### 步骤 2：查看接口详情
+面板使用简化生成器：`uuid` 生成整数，数字类型的 `createdAt` 生成普通整数；完整规则见 [生成器说明](mock-generator-features.md)。
 
-1. 点击左侧的任意接口（如 `POST /api/user/detail`）
-2. 右侧显示接口详情：
-   - 📋 接口信息（URL、Method、Status）
-   - ⚙️ Mock 配置（选择 Mock 模式）
-   - 📝 Mock 数据编辑（显示响应 JSON）
+## 4. 保存并验证
 
-**预期结果**：
-- ✅ 右侧显示完整的响应数据
-- ✅ JSON 格式化显示
-- ✅ 可以切换「请求数据」和「响应数据」Tab
+1. 点击「保存」，检查 Emo 列表出现对应规则。
+2. 保持当前页面，再次点击 `POST /api/user/detail`。
+3. 检查测试页响应包含「Mock 测试用户」，捕获列表原条目更新为本次结果。
+4. 将响应状态码改为有效测试值，例如 `404`，保存后再次发起请求，检查状态码。
 
-### 步骤 3：一键生成假数据
+预期：脚本已注入且总开关开启时，保存会立即推送规则，后续请求使用新规则。界面目前仍显示「已保存，刷新页面后生效」的旧提示。正常验证可直接再次发送请求；重载扩展后则需重开开发者工具并刷新页面。
 
-1. 确保「Mock 出参」被选中
-2. 点击「🎲 一键生成假数据」按钮
-3. 观察文本框中的数据变化
+## 5. 检查规则启停和草稿保存
 
-**预期结果**：
-- ✅ `name` 字段变成中文姓名（如「张伟」）
-- ✅ `email` 字段变成邮箱格式（如「abc123@example.com」）
-- ✅ `phone` 字段变成手机号（如「13812345678」）
-- ✅ `id` 字段变成随机数字
-- ✅ 显示「✅ 假数据已生成」提示
+1. 在 Emo 中关闭该规则，重新发请求，应收到真实响应。
+2. 重新开启，已保存的 Mock 数据和头部编辑值应恢复。
+3. 修改出参、切到入参修改，再点击「保存」；重新打开开发者工具后检查两份数据均已保存。
+4. 在捕获页只调整开关，检查规则仍处于待保存状态；点击「保存」后再验证请求。
+5. 关闭 Mock 总开关，确认请求恢复真实响应且捕获条目停止更新，再开启继续测试。
 
-### 步骤 4：保存 Mock 规则
+Emo 和已编中的规则开关会立即写入，同时保存当前待提交的改动。捕获页的开关通过「保存」提交。
 
-1. 编辑文本框中的数据（或使用生成的假数据）
-2. 点击「💾 保存 Mock 规则」按钮
-3. 看到「✅ Mock 规则保存成功！刷新页面后生效」
+## 6. 检查项目存储
 
-**预期结果**：
-- ✅ 显示成功提示
-- ✅ 无报错
+当前项目注册表包含「AI平台」「高校」「APP」。默认后台项目编号为 `gpt-admin-pre`，测试页面地址为 localhost 时，规则仍按当前后台项目编号保存。
 
-### 步骤 5：验证 Mock 生效
+在扩展后台 Service Worker 控制台检查：
 
-1. 刷新测试页面（`F5` 或 `Cmd+R`）
-2. 再次点击同一个接口按钮（如 `POST /api/user/detail`）
-3. 查看测试页面「请求日志」区域的响应数据
-
-**预期结果**：
-- ✅ 返回的是你刚才设置的 Mock 数据
-- ✅ **不是**服务器的真实数据
-- ✅ DevTools Panel 左侧出现新的接口记录
-
-### 步骤 6：验证项目隔离
-
-1. 打开插件 Popup（点击工具栏图标）
-2. 在「项目」区域看到两个 pill：
-   - `GPT后台-预发布`（当前激活）
-   - `本地测试`
-3. 点击「本地测试」pill
-4. Popup 会 reload
-
-**预期结果**：
-- ✅ 切换成功
-- ✅ Mock 规则仍然有效（因为已经保存到 `mockRules:local-test`）
-
-## 🔍 常见问题排查
-
-### 问题 1：左侧没有接口记录
-
-**可能原因**：
-1. Content script 未注入
-2. 请求发送得太早（在 hook 之前）
-
-**解决方案**：
-```bash
-# 1. 检查 manifest
-cat dist/manifest.json | grep "run_at"
-# 应该显示 "run_at": "document_start"
-
-# 2. 检查 content script 是否加载
-# 在测试页面按 F12 → Console，应该看到：
-# [Mock Interceptor] Initializing...
-# [Mock Interceptor] Loaded X rules
-# [Mock Interceptor] fetch API hooked
-# [Mock Interceptor] XMLHttpRequest hooked
-
-# 3. 重新加载插件
-# chrome://extensions/ → 找到插件 → 点击「重新加载」
+```javascript
+chrome.storage.local.get([
+  'currentProjectId',
+  'mockRules:gpt-admin-pre'
+], console.log);
 ```
 
-### 问题 2：保存规则后没有生效
+侧栏切到高校或 APP 时，会保留原后台项目上下文。多后台项目测试需先按 [多项目指南](multi-project-architecture-test-guide.md) 准备第二个后台项目，再分别保存规则、检查 `mockRules:<projectId>`。
 
-**原因**：需要刷新页面让 content script 重新加载规则
+切换后台项目本身只更新上下文，已打开页面中的旧规则仍保留。重新激活面板触发注入或下一次保存后，再检查页面收到的当前项目规则。测试时分别核对扩展存储与页面实际响应。
 
-**解决方案**：
-1. 保存规则后按 `F5` 刷新页面
-2. 再次发送请求
+## 排查方法
 
-### 问题 3：DevTools Panel 看不到
+### 捕获列表为空
 
-**解决方案**：
-1. 确认已重新加载插件
-2. 检查 DevTools 顶部标签栏
-3. 点击 `>>` 按钮查找「接口 Mock」标签
-4. 如果还是没有，检查 `dist/manifest.json` 是否包含 `"devtools_page": "devtools.html"`
+1. 确认 Mock 总开关开启，面板已激活，该接口已允许监听。
+2. 检查 `manifest.json` 的内容脚本配置与 `devtools_page`，构建后重新加载扩展。
+3. 在脚本就绪后重新触发页面的 fetch 或 XMLHttpRequest 请求。
+4. 在页面控制台查找以下日志：
 
-### 问题 4：Console 报错
-
-**常见错误 1**：`Cannot read property 'getCurrentProjectId' of undefined`
-
-**解决方案**：
-```bash
-# 检查 content.js 是否包含 currentProject 模块
-grep "current-project" dist/content.js
-# 如果没有，说明 build 有问题，重新构建
-npm run build
+```text
+[Mock Interceptor] Initializing in content script...
+[Mock Interceptor - Page Context] Script started
+[Mock Interceptor - Page Context] fetch hooked
+[Mock Interceptor - Page Context] XMLHttpRequest hooked
+[Mock Interceptor - Page Context] Active set to true
+[Mock Interceptor - Page Context] Recording request:
 ```
 
-**常见错误 2**：`chrome.runtime.sendMessage is not a function`
+重复激活同一页面时，可能看到 `Already installed, skip`。请求日志以实际请求为准。
 
-**解决方案**：
-- 这是正常的，在 Panel 关闭时会出现
-- 不影响功能
+### 规则保存后效果异常
 
-## ✅ 验证清单
+检查请求方法、原始地址、规则启用状态和已保存的数据方向。地址、方法编辑值存入 `mockUrl/mockMethod`，当前匹配使用原始 `rule.url/rule.method`。正常同步可看到 `Rules updated:`，出参命中时可看到 `Mock response for` 或 `Mock response for XHR`。
 
-完整测试后，应该满足：
+### 出现扩展上下文失效或发送消息错误
 
-- [ ] 测试服务器正常运行（`http://localhost:8080`）
-- [ ] 插件已重新加载
-- [ ] DevTools 中看到「接口 Mock」标签
-- [ ] 点击按钮后左侧显示接口列表
-- [ ] 点击接口后右侧显示详情
-- [ ] 一键生成假数据功能正常（name→姓名，email→邮箱）
-- [ ] 保存规则无报错
-- [ ] 刷新页面后 Mock 生效（返回假数据）
-- [ ] Console 显示拦截日志（`[Mock Interceptor] Matched rule for...`）
-- [ ] 切换项目后规则仍然有效
+遇到 `Extension context invalidated`、`chrome.runtime.sendMessage is not a function` 等发送异常时，按面板提示关闭并重新打开开发者工具，再刷新被调试页面。面板会将这些异常按扩展上下文失效处理。
 
-## 🎯 下一步
+## 验证清单
 
-测试通过后，你可以：
-
-1. **在真实项目中使用**：
-   - 打开 `https://gpt-admin-pre.hwzxs.com`
-   - 触发接口请求
-   - 在 DevTools Mock Panel 中配置规则
-
-2. **添加更多项目**：
-   - 编辑 `src/common/projects.js`
-   - 添加新的项目配置
-   - `npm run build`
-   - 重新加载插件
-
-3. **扩展功能**：
-   - 添加规则启用/禁用开关
-   - 支持规则导入/导出
-   - 支持延迟响应
-   - 支持修改状态码
-
----
-
-**测试完成标志**：所有 ✅ 都打勾，Mock 功能完全可用！
+- [ ] 测试服务运行，三个接口可正常返回真实数据。
+- [ ] 面板激活且总开关开启后能捕获请求。
+- [ ] 同一接口重复请求会更新原条目。
+- [ ] 关闭拦截时只读，开启后可编辑并生成假数据。
+- [ ] 捕获页开关和入参、出参草稿按预期保存，保存后进入 Emo。
+- [ ] 页面脚本已就绪时，新规则用于后续请求。
+- [ ] 自定义状态码、规则启停和 Mock 总开关生效。
+- [ ] 两份数据在显式保存后可重新读取。
+- [ ] 规则存储键与当前后台项目编号一致。
+- [ ] 扩展重载后的面板恢复步骤有效。

@@ -1,244 +1,126 @@
-# 接口 Mock 功能使用指南
+# 接口 Mock 使用指南
 
-## 功能概述
+接口 Mock 用于在浏览器中替换请求参数或响应数据，便于调试页面。入口位于 Chrome 开发者工具的「接口 Mock」面板。
 
-接口 Mock 是一个强大的调试工具，允许你在浏览器中拦截 API 请求并返回自定义的假数据，无需修改后端代码。
+## 开始使用
 
-## 核心特性
+1. 在仓库根目录执行 `npm run build`，在 `chrome://extensions/` 加载或重新加载 `dist/`。
+2. 打开要调试的网页，再打开开发者工具，切换到「接口 Mock」。标签被折叠时可从 `>>` 中查找。
+3. 打开面板中的 Mock 总开关，等待脚本注入完成，再在页面中触发请求。
+4. 在左侧「捕获」列表选择接口，查看地址、请求方法、响应状态码以及入参、出参。
 
-✅ **自动拦截** - 自动捕获页面中的所有 fetch/XHR 请求  
-✅ **智能记录** - 记录请求和响应数据，最多保留 100 条  
-✅ **灵活 Mock** - 支持 Mock 入参或出参  
-✅ **一键生成** - 自动识别字段类型，生成合理的假数据  
-✅ **项目隔离** - 不同项目的 Mock 规则互不干扰  
-✅ **持久化** - Mock 规则保存后重启浏览器仍然有效  
+请求捕获适用于已注入脚本的页面 `fetch` 和 `XMLHttpRequest`。记录请求需要面板激活、Mock 总开关开启，且该接口已允许监听。注入前已结束的请求需再次触发。
 
-## 使用步骤
+## 三个列表
 
-### 1. 打开 DevTools Panel
+| 列表 | 内容 |
+|---|---|
+| 捕获 | 页面请求记录，同一个接口显示最新一次数据 |
+| Emo | 从捕获页保存的规则，可继续编辑或启停 |
+| 已编 | 导入的接口规则，可继续编辑或启停 |
 
-1. 在任意页面按 `F12` 打开 Chrome DevTools
-2. 找到顶部标签栏中的「**接口 Mock**」标签
-3. 如果看不到，点击 `>>` 按钮查找
+“Emo”是界面现用名称。捕获记录按“请求方法＋去掉查询参数和片段的地址”合并，最多保留 100 个接口条目。同一接口再次请求会更新已有条目，查询参数或请求体变化也合并到同一条。
 
-### 2. 发送测试请求
+## 编辑和保存
 
-在页面中触发网络请求（如点击按钮、提交表单等），DevTools Panel 左侧会自动显示接口列表。
+1. 在「捕获」选择接口，打开该接口的拦截开关，进入编辑状态。此时开关和数据先保留为面板草稿。
+2. 选择「出参」或「入参」，编辑 JSON，也可点击「生成假数据」。关闭拦截时显示真实数据，编辑器只读，生成按钮置灰。
+3. 需要时修改头部的请求方法、地址和响应状态码。开启拦截后，捕获、Emo、已编中的这些字段都可编辑。
+4. 点击「保存」。本次改动的入参、出参和头部字段会一起写入扩展的 `chrome.storage.local`；捕获页保存的规则进入 Emo 列表。
+5. 再次在页面中触发相同请求，检查结果。
 
-### 3. 选择接口进行 Mock
+切换「入参／出参」只保留当前面板草稿。点击「保存」后数据才写入规则。在 Emo 和已编列表中，切换已有规则的拦截开关会立即保存，同时提交当前待保存的数据和头部改动。
 
-1. 在左侧列表中点击要 Mock 的接口
-2. 右侧会显示该接口的详细信息：
-   - 📋 **接口信息**：URL、Method、Status
-   - ⚙️ **Mock 配置**：选择 Mock 模式
-   - 📝 **Mock 数据编辑**：编辑请求/响应数据
+保存后，后台会向当前调试标签页推送最新规则。页面脚本已注入且总开关开启时，后续请求即可使用新规则。当前界面仍显示旧提示「已保存，刷新页面后生效」；实际规则已通过消息下发。扩展重载、页面脚本未就绪或消息失败时，再重新打开开发者工具并刷新页面。
 
-### 4. 编辑 Mock 数据
+## 入参和出参如何生效
 
-有两种方式：
+| 配置 | 请求行为 |
+|---|---|
+| 仅保存入参 Mock 数据 | 用保存的数据改写请求体，发送给服务器并返回真实响应 |
+| 保存出参 Mock 数据 | 直接构造假响应，使用已保存的响应状态码 |
+| 入参、出参均保存 Mock 数据 | 先改写入参，再直接返回假响应 |
+| 关闭接口拦截 | 正常发送请求；已保存的 Mock 数据保留，便于重新开启 |
+| 关闭 Mock 总开关 | 停止拦截和捕获请求 |
 
-#### 方式 1：手动编辑 JSON
-直接在文本框中编辑 JSON 数据
+同一接口的拦截开关同时控制入参和出参，各方向还需已有 Mock 数据才会执行。出参配置生效时，请求直接返回假响应。
 
-#### 方式 2：一键生成假数据
-点击「🎲 一键生成假数据」按钮，系统会根据字段名智能生成：
-- `name/username` → 张伟、王芳 等中文姓名
-- `email` → test@example.com
-- `phone/mobile` → 13812345678
-- `id/userId` → 随机数字
-- `avatar/image` → 图片 URL
-- `time/date` → 时间戳
-- `address` → 北京市朝阳区...
+修改头部地址和请求方法后，值保存到 `mockUrl`、`mockMethod`；当前拦截仍用原始的 `rule.url`、`rule.method` 匹配。响应状态码保存到 `responseMock.status`，用于构造假响应。
 
-### 5. 保存 Mock 规则
+## 生成假数据
 
-点击「💾 保存 Mock 规则」按钮，规则会：
-1. 保存到 `chrome.storage.local`（持久化）
-2. 按当前项目隔离存储
-3. 立即通知 content script 生效
+面板按钮根据所选方向的真实数据结构生成草稿，使用 `devtools/panel.js` 中的简化生成器。常见字段包括：
 
-### 6. 验证 Mock 效果
+| 字段 | 生成结果 |
+|---|---|
+| `name`、`username` | 中文姓名 |
+| `email`、`mail` | 随机邮箱 |
+| `phone`、`mobile` | 手机号格式字符串 |
+| `id`、`userId` | 随机整数 |
+| `avatar`、`image` | 图片地址 |
+| `time`、`date`、`created_at` | 当前时间戳 |
+| `address` | 地址字符串 |
 
-1. 刷新页面（让 content script 重新加载规则）
-2. 再次触发相同的接口请求
-3. 请求会被拦截并返回你设置的 Mock 数据
+`uuid` 会匹配到整数规则；`createdAt` 会按原始值类型走普通生成逻辑。更多差异、公共生成器的调用方法见 [生成器说明](mock-generator-features.md)。
 
-## Mock 模式说明
+## 项目与存储
 
-### Mock 出参（推荐）
+规则使用 `mockRules:<projectId>` 保存，例如默认后台项目为 `mockRules:gpt-admin-pre`。这里的项目编号取自当前后台项目上下文。侧栏进入「高校」或「APP」会保留之前的后台项目上下文。
 
-**作用**：拦截响应，返回假数据，**不发送真实请求**
+切换后台项目后，已打开页面仍持有之前收到的规则。下一次保存规则或触发脚本注入时，会向该页面同步当前项目的规则。切换后应重新激活面板，并核对当前项目规则再发请求。
 
-**使用场景**：
-- 后端接口未就绪，前端需要假数据调试
-- 测试异常情况（如空数据、错误响应）
-- 演示时使用假数据避免泄露真实信息
+规则保存在本机扩展存储中，关闭浏览器后仍保留。捕获列表属于页面运行时记录。
 
-**示例**：
-```javascript
-// 真实请求：POST /api/user/list
-// Mock 出参后：直接返回假数据，不请求后端
-{
-  "code": 200,
-  "data": [
-    { "id": 1, "name": "张伟", "email": "test@example.com" }
-  ]
-}
+## 实现流程
+
+```text
+打开面板或开启 Mock 总开关
+  → 后台检查总开关
+  → chrome.scripting.executeScript，在页面主环境注入 mock-hook.js
+  → 内容脚本中转规则和激活状态
+  → 页面脚本拦截 fetch / XMLHttpRequest
+  → window.postMessage 上报请求
+  → 内容脚本合并接口记录
+  → 开发者工具面板展示
+
+面板点击保存
+  → ADD_MOCK_RULE
+  → 后台保存 mockRules:<projectId>
+  → APPLY_MOCK_RULES 发给调试标签页
+  → 内容脚本发送 IDT_UPDATE_MOCK_RULES
+  → 页面脚本更新规则
 ```
 
-### Mock 入参
-
-**作用**：修改请求参数，发送真实请求，返回后端的真实响应
-
-**使用场景**：
-- 测试不同参数组合的效果
-- 快速切换请求参数而不修改代码
-
-**示例**：
-```javascript
-// 真实请求：POST /api/user/list { "page": 1 }
-// Mock 入参后：发送 { "page": 999 } 到后端，返回后端的真实数据
-```
-
-## 技术原理
-
-### 拦截机制
-
-Content Script 在页面加载时 Hook 了 `window.fetch` 和 `XMLHttpRequest`：
-
-```javascript
-// fetch 拦截
-const originalFetch = window.fetch;
-window.fetch = async function(input, init) {
-  const rule = findMatchingRule(url, method);
-  if (rule && rule.mockMode === 'response') {
-    return new Response(JSON.stringify(rule.mockData), { status: 200 });
-  }
-  return originalFetch.call(this, input, init);
-};
-```
-
-### 数据流
-
-```
-┌──────────────┐
-│ DevTools     │ 用户编辑 Mock 规则
-│ Panel        │
-└──────┬───────┘
-       │ chrome.runtime.sendMessage({ type: 'ADD_MOCK_RULE' })
-       ↓
-┌──────────────┐
-│ Background   │ 保存到 chrome.storage.local['mockRules:projectId']
-│ Service      │
-│ Worker       │
-└──────┬───────┘
-       │ chrome.tabs.sendMessage({ type: 'APPLY_MOCK_RULES' })
-       ↓
-┌──────────────┐
-│ Content      │ 更新内存中的规则，拦截 fetch/XHR
-│ Script       │
-└──────────────┘
-       ↓
-┌──────────────┐
-│ Page         │ 页面发起请求时被拦截，返回 Mock 数据
-│              │
-└──────────────┘
-```
-
-## 项目隔离
-
-Mock 规则按项目命名空间存储：
-
-```javascript
-// 存储 key
-'mockRules:gpt-admin-pre'  // 项目 A 的规则
-'mockRules:another-project' // 项目 B 的规则
-```
-
-切换项目时，自动加载对应项目的规则。
-
-## 限制与注意事项
-
-⚠️ **只能拦截页面发起的请求**  
-无法拦截 Service Worker、Extension 自身、或其他 Tab 的请求。
-
-⚠️ **需要刷新页面**  
-保存规则后需要刷新页面，让 content script 重新加载规则。
-
-⚠️ **最多保留 100 条记录**  
-接口记录列表会自动清理，只保留最近 100 条。
-
-⚠️ **规则匹配区分大小写**  
-`/api/User/list` 和 `/api/user/list` 是不同的 URL。
+面板激活状态控制记录上报。已经注入的脚本及已收到的 Mock 规则会在当前页面继续生效，停止拦截可使用 Mock 总开关或对应规则开关。
 
 ## 常见问题
 
-### Q: 为什么保存规则后没有生效？
+### 保存后仍收到真实响应
 
-A: 需要**刷新页面**。Mock 规则在页面加载时注入到 content script 中，保存后需要刷新。
+确认总开关开启，规则已保存且对应方向已有数据，再核对请求方法与原始地址。查看控制台是否收到 `Rules updated:` 日志；脚本或扩展上下文失效时，重新打开开发者工具并刷新页面。
 
-### Q: 可以 Mock HTTPS 请求吗？
+### 如何暂停某个接口
 
-A: 可以。拦截器工作在页面 JavaScript 层，不受协议限制。
+在 Emo 或已编中关闭该规则的拦截开关，会立即保存停用状态。捕获页的开关需要再点击「保存」。若只想暂停该接口的记录，使用「禁监该接口」。
 
-### Q: 如何禁用某条规则？
+### 地址如何匹配
 
-A: 目前暂不支持禁用，可以删除规则后重新添加。后续版本会加入启用/禁用开关。
+普通匹配按请求方法和地址进行，忽略查询参数与片段，路径区分大小写。导入规则可使用相对路径并匹配当前页面同源请求；还支持 `*` 通配符，通配符分支使用完整请求地址匹配。
 
-### Q: 支持通配符吗？
+### 如何测试
 
-A: 支持简单的通配符 `*`。例如 `/api/*/list` 可以匹配 `/api/user/list` 和 `/api/order/list`。
+先运行 `npm run test-server`，再打开 `http://localhost:8080`。仓库测试页的三个按钮请求这个服务。完整步骤见 [快速测试指南](mock-test-guide.md)。
 
-### Q: Mock 规则会同步到其他设备吗？
+## 文件位置
 
-A: 不会。规则保存在本地 `chrome.storage.local`，不会同步。
-
-## 测试步骤
-
-1. 构建插件：
-   ```bash
-   npm run build
-   ```
-
-2. 加载插件到 Chrome：
-   - 打开 `chrome://extensions/`
-   - 开启「开发者模式」
-   - 点击「加载已解压的扩展程序」
-   - 选择 `dist/` 目录
-
-3. 打开测试页面：
-   ```
-   file:///path/to/test-mock.html
-   ```
-
-4. 按照上述使用步骤测试功能
-
-## 后续优化计划
-
-- [ ] 支持规则启用/禁用开关
-- [ ] 支持规则列表显示（在 Panel 左上角）
-- [ ] 支持规则导入/导出（JSON 文件）
-- [ ] 支持更复杂的 URL 匹配规则（正则表达式）
-- [ ] 支持延迟响应（模拟慢网络）
-- [ ] 支持修改响应状态码（如 404、500）
-- [ ] 支持修改响应头（如 Content-Type）
-
-## 架构文件清单
-
-**新建文件（8 个）**：
-- `devtools.html` / `devtools.js` - DevTools 入口
-- `devtools/panel.html` / `devtools/panel.js` - Panel UI
-- `src/common/mock-storage.js` - Mock 规则存储
-- `src/common/mock-generator.js` - 假数据生成器
-- `src/content/mock-interceptor.js` - fetch/XHR 拦截器
-- `src/background/mock-handler.js` - 消息处理
-
-**修改文件（3 个）**：
-- `scripts/build.js` - 添加 devtools_page，复制 devtools/
-- `src/background/index.js` - 注册 Mock 消息
-- `src/content/index.js` - 初始化拦截器
-
----
-
-**开发完成时间**: 2026-06-25  
-**功能状态**: ✅ 完成
+| 文件 | 作用 |
+|---|---|
+| `devtools.html`、`devtools.js` | 开发者工具入口 |
+| `devtools/panel.html`、`devtools/panel.js` | 面板、草稿、列表、规则编辑与简化生成器 |
+| `src/common/mock-storage.js` | 规则及开关存储 |
+| `src/common/mock-generator.js` | 公共假数据生成器 |
+| `src/content/mock-interceptor.js` | 中转规则、开关和请求记录 |
+| `src/content/mock-hook.js` | 页面主环境的请求拦截 |
+| `src/background/mock-handler.js` | 保存规则并推送至页面 |
+| `src/background/index.js` | 按需注入页面脚本、分发消息 |
+| `scripts/build.js` | 构建并复制开发者工具资源 |

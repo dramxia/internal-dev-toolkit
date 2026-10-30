@@ -40,6 +40,7 @@ const popupFiles = [
   'src/popup/workspace-ui.js',
   'src/popup/component-installer.js',
   'src/popup/component-inspector-ui.js',
+  'src/popup/user-card.js',
   'src/popup/quick-login-ui.js',
   'src/popup/other-login-ui.js',
   'src/popup/app-login-ui.js',

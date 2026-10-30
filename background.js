@@ -684,7 +684,8 @@ var IDTComponentSources = (() => {
     if (!source) return null;
     if (source.kind !== "stack") {
       if (!source.file) return null;
-      return { file: sourcePath(source.file, origin), line: source.line || null, column: source.column || null, precision: source.line ? "line" : "file" };
+      const endLine = Number.isSafeInteger(source.endLine) && source.endLine > source.line ? source.endLine : null;
+      return { file: sourcePath(source.file, origin), line: source.line || null, column: source.column || null, ...endLine ? { endLine } : {}, precision: source.line ? "line" : "file" };
     }
     const frames = parseStack(source.stack);
     for (const frame of frames.slice(0, 12)) {
@@ -752,7 +753,7 @@ var IDTComponentSources = (() => {
   function normalizeSettings(value = {}) {
     const origins = [...new Set((Array.isArray(value.origins) ? value.origins : []).map(originOf).filter(Boolean))];
     if (origins.length > MAX_ORIGINS) throw new Error(`最多保存 ${MAX_ORIGINS} 个开发地址，请先移除旧地址`);
-    return { origins, openShortcut: normalizeShortcut(value.openShortcut), menuShortcut: normalizeShortcut(value.menuShortcut) };
+    return { origins, clickAction: value.clickAction === 'copy' ? 'copy' : 'open', openShortcut: normalizeShortcut(value.openShortcut), menuShortcut: normalizeShortcut(value.menuShortcut) };
   }
 
   async function getSettings() {
@@ -858,9 +859,25 @@ function inspectComponentPage(options) {
     return type?.displayName || type?.name || type?.render?.displayName || type?.render?.name || type?.type?.displayName || type?.type?.name || '匿名组件';
   }
 
+  // 与参考菜单一致，只展示字符串、数字等简单参数；参数名悬停时显示当前值。
+  function menuProps(props, defaults) {
+    const result = Object.create(null);
+    for (const key of Object.keys(props || {}).slice(0, 50)) {
+      if (key === 'key') continue;
+      try {
+        const descriptor = Object.getOwnPropertyDescriptor(props, key);
+        if (!descriptor || !('value' in descriptor)) continue;
+        const value = descriptor.value;
+        if (defaults && value === Object.getOwnPropertyDescriptor(defaults, key)?.value) continue;
+        if (['string', 'number', 'boolean', 'symbol'].includes(typeof value)) result[key] = value;
+      } catch (_) { /* 跳过当前无法读取的参数。 */ }
+    }
+    return snapshot(result);
+  }
+
   function sourceFromFiber(fiber) {
     const source = fiber._debugSource;
-    if (source?.fileName) return { file: source.fileName, line: source.lineNumber || null, column: source.columnNumber || null, kind: 'source' };
+    if (source?.fileName) return { file: source.fileName, line: source.lineNumber || null, column: source.columnNumber || null, ...(source.endLineNumber ? { endLine: source.endLineNumber } : {}), kind: 'source' };
     const stack = fiber._debugStack?.stack;
     return stack ? { stack: String(stack).slice(0, 24000), kind: 'stack' } : null;
   }
@@ -872,7 +889,7 @@ function inspectComponentPage(options) {
       visited.add(fiber);
       const type = fiber.type || fiber.elementType;
       if (type && typeof type !== 'symbol') {
-        result.push({ framework: 'React', name: typeName(type), source: sourceFromFiber(fiber), props: includeProps ? snapshot(fiber.memoizedProps || fiber.pendingProps || {}) : undefined });
+        result.push({ framework: 'React', name: typeName(type), source: sourceFromFiber(fiber), props: includeProps ? menuProps(fiber.memoizedProps || fiber.pendingProps, type?.defaultProps) : undefined });
       }
       fiber = fiber._debugOwner || fiber.return;
     }
@@ -894,8 +911,8 @@ function inspectComponentPage(options) {
           for (const key of Object.keys(type?.props || instance.$props || {}).slice(0, 50)) {
             try { values[key] = instance.$props?.[key]; } catch (_) { values[key] = '[暂时无法读取]'; }
           }
-          props = snapshot(values);
-        } else props = snapshot(instance.props || {});
+          props = menuProps(values);
+        } else props = menuProps(instance.props);
       }
       result.push({ framework: `Vue ${version}`, name: type?.name || type?.__name || type?._componentTag || file?.split('/').pop()?.replace(/\.vue$/, '') || '匿名组件', source: file ? { file, line: null, column: null, kind: 'source' } : null, props });
       instance = version === 2 ? instance.$parent : instance.parent;
@@ -1567,12 +1584,34 @@ if (typeof module !== 'undefined' && module.exports) {
 
   const DEFAULT_DEPT_SOURCE = Object.freeze({ name: '钉钉', value: 'dingtalk', icon: 'dingtalk' });
 
+  function resolveUserPhone(...records) {
+    const sources = records.flatMap((record) => record && typeof record === 'object'
+      ? [record, record.user, record.raw, record.raw?.user].filter(Boolean) : []);
+    const text = (value) => {
+      if (typeof value !== 'string' && typeof value !== 'number') return '';
+      const result = String(value).trim();
+      return /^(?:null|undefined|0|-+)$/i.test(result) ? '' : result;
+    };
+    for (const source of sources) {
+      const phone = text(source.phone) || text(source.mobile);
+      if (phone) return phone;
+    }
+    // 常规账号允许手机号登录；学号、邮箱等账号仍作为账号展示。
+    for (const source of sources) {
+      for (const field of ['account', 'loginAccount', 'userAccount']) {
+        const account = text(source[field]);
+        if (/^(?:(?:\+|00)?86)?1[3-9]\d{9}$/.test(account.replace(/[\s-]/g, ''))) return account;
+      }
+    }
+    return '';
+  }
+
   function normalizeUser(value = {}) {
     return {
       id: String(value.id ?? ''),
       userId: String(value.userId ?? ''),
       userName: String(value.username ?? value.userName ?? value.name ?? ''),
-      phone: String(value.phone ?? value.mobile ?? value.account ?? ''),
+      phone: resolveUserPhone(value),
       account: String(value.account ?? ''),
       deptId: String(value.deptId ?? ''),
       deptName: String(value.deptName ?? ''),
@@ -1597,7 +1636,7 @@ if (typeof module !== 'undefined' && module.exports) {
       tenantId: pickFirstString(value.tenantId),
       tenantName: pickFirstString(value.tenantName),
       domain: pickFirstString(value.domain, value.tenantDomain),
-      phone: pickFirstString(value.phone, value.mobile),
+      phone: resolveUserPhone(value),
       industry: value.industry ?? '',
       accountType: value.accountType == null ? '' : String(value.accountType),
       type,
@@ -1796,7 +1835,7 @@ if (typeof module !== 'undefined' && module.exports) {
       tenantId: pickFirstString(value.tenantId),
       name: pickFirstString(value.name, value.teacherName, value.realName, nestedUser?.name, nestedUser?.username, value.username, value.userName, value.nickName),
       account: pickFirstString(value.account, value.phone, value.mobile, value.userAccount, value.loginAccount, nestedUser?.phone, nestedUser?.mobile, nestedUser?.account),
-      phone: pickFirstString(value.phone, value.mobile, nestedUser?.phone, nestedUser?.mobile),
+      phone: resolveUserPhone(value),
       status: st.status,
       statusText: st.statusText,
       statusOn: st.on,
@@ -2257,12 +2296,13 @@ if (typeof module !== 'undefined' && module.exports) {
               userId,
               name: pickFirstString(user.userName, user.name, user.teacherName, user.realName),
               account: pickFirstString(user.phone, user.mobile, user.account, user.email),
-              phone: pickFirstString(user.phone, user.mobile),
+              phone: resolveUserPhone(user),
               duties: [],
               raw: user,
             };
             teachers.set(key, teacher);
           }
+          teacher.phone = resolveUserPhone(teacher, user);
           if (duty && !teacher.duties.includes(duty)) teacher.duties.push(duty);
         }
       }
@@ -2292,7 +2332,7 @@ if (typeof module !== 'undefined' && module.exports) {
   //   { teachType: 7, teachTypeName: '学科教师', subjectNames: ['数学'], deptIds: [3010], deptNames: ['1班'] }
   // ]
   // deptNames 只有叶子名（如 1班），需借 idNameMap 补全为 初中初三1班
-  function extractTeachDuties(detail, idNameMap = {}) {
+  function extractTeachDutyOptions(detail, idNameMap = {}) {
     if (!detail || typeof detail !== 'object') return [];
     const duties = [];
 
@@ -2306,16 +2346,26 @@ if (typeof module !== 'undefined' && module.exports) {
       const deptNames = toStringList(item.deptNames ?? item.deptName ?? item.classNames ?? item.className);
       // deptId 优先走班级树翻译成全名；翻译不到时回落同位置的 deptName
       const classes = deptIds.length
-        ? deptIds.map((id, i) => idNameMap[id] || deptNames[i] || '').filter(Boolean)
-        : deptNames;
+        ? deptIds.map((id, i) => ({ id, name: idNameMap[id] || deptNames[i] || '' })).filter((item) => item.name)
+        : deptNames.map((name) => ({ id: '', name }));
       for (const subject of (subjects.length ? subjects : [''])) {
-        for (const cls of (classes.length ? classes : [''])) {
-          if (subject && cls) duties.push(`${subject} · ${cls}`);
-          else if (subject || cls) duties.push(subject || cls);
+        for (const cls of (classes.length ? classes : [{ id: '', name: '' }])) {
+          const label = subject && cls.name ? `${subject} · ${cls.name}` : subject || cls.name;
+          if (label) duties.push({ label, subject, deptId: cls.id });
         }
       }
     }
-    return [...new Set(duties)];
+    const seen = new Set();
+    return duties.filter((item) => {
+      const key = JSON.stringify([item.label, item.subject, item.deptId]);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function extractTeachDuties(detail, idNameMap = {}) {
+    return [...new Set(extractTeachDutyOptions(detail, idNameMap).map((item) => item.label))];
   }
 
   // 从教师详情中提取 semesterId（供 schoolDept/tree 使用）
@@ -2364,6 +2414,7 @@ if (typeof module !== 'undefined' && module.exports) {
 
   namespace.tenant = {
     DEFAULT_DEPT_SOURCE,
+    resolveUserPhone,
     normalizeTenant,
     normalizeUser,
     normalizeAccount,
@@ -2400,6 +2451,7 @@ if (typeof module !== 'undefined' && module.exports) {
     buildClassTeacherMap,
     extractClazzTeacherSemesterId,
     extractTeachDuties,
+    extractTeachDutyOptions,
     extractSemesterId,
     extractTeacherClassIds,
     pickFirstString,
@@ -4003,6 +4055,8 @@ if (typeof module !== 'undefined' && module.exports) {
       if (/(token|authorization|jwt|password|secret|url|origin|session)/i.test(key)) return;
       metadata[key] = value;
     });
+    const phone = commonNs.tenant?.resolveUserPhone(metadata);
+    if (phone) metadata.phone = phone;
     return {
       ...metadata,
       env: normalizeEnv(metadata.env),
@@ -4015,11 +4069,17 @@ if (typeof module !== 'undefined' && module.exports) {
   function compactRecentRecords(records = []) {
     const source = Array.isArray(records) ? records : [];
     const localPorts = new Map();
+    const contacts = new Map();
     source.forEach((record) => {
       const normalized = normalizeRecentRecord(record);
       const explicitPort = validLocalPort(record?.localPort);
       const key = recentIdentityKey(normalized);
       if (explicitPort && !localPorts.has(key)) localPorts.set(key, explicitPort);
+      const contact = contacts.get(key) || {};
+      for (const field of ['phone', 'account', 'roleName']) {
+        if (!contact[field] && normalized[field]) contact[field] = normalized[field];
+      }
+      contacts.set(key, contact);
     });
 
     const seen = new Set();
@@ -4029,7 +4089,7 @@ if (typeof module !== 'undefined' && module.exports) {
       const key = recentIdentityKey(initial);
       if (seen.has(key)) return;
       seen.add(key);
-      compacted.push(normalizeRecentRecord(record, localPorts.get(key)));
+      compacted.push(normalizeRecentRecord({ ...record, ...contacts.get(key) }, localPorts.get(key)));
     });
     return compacted.slice(0, MAX_RECENT);
   }
@@ -4061,7 +4121,7 @@ if (typeof module !== 'undefined' && module.exports) {
     return '';
   }
 
-  async function quickLogin({ tenantId, id, tenantName = '', userName = '', domain = '', industry = '', env = 'online', localPort = '', role = 'teacher' }) {
+  async function quickLogin({ tenantId, id, tenantName = '', userName = '', account = '', phone = '', roleName = '', domain = '', industry = '', env = 'online', localPort = '', role = 'teacher' }) {
     if (!id) throw new Error('缺少 id');
     if (!tenantId) throw new Error('缺少 tenantId');
     if (!ns.tenantApi) throw new Error('tenantApi 模块未加载');
@@ -4076,7 +4136,7 @@ if (typeof module !== 'undefined' && module.exports) {
     const normalizedEnv = normalizeEnv(env);
     const normalizedPort = normalizePort(normalizedEnv, localPort);
     const projectId = await commonNs.currentProject.getCurrentProjectId();
-    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId, ...(adminContextId ? { adminContextId } : {}) });
+    await recordRecent({ tenantId: String(tenantId), tenantName, id: String(id), userName, ...(account ? { account } : {}), ...(phone ? { phone } : {}), ...(roleName ? { roleName } : {}), domain, industry, role, env: normalizedEnv, localPort: normalizedPort, projectId, ...(adminContextId ? { adminContextId } : {}) });
     return { ok: true, url, tenantId, id };
   }
 
@@ -4178,7 +4238,11 @@ if (typeof module !== 'undefined' && module.exports) {
     const records = await getRecent();
     const initial = normalizeRecentRecord(item);
     const previous = records.find((record) => sameRecentIdentity(record, initial));
-    const normalizedItem = normalizeRecentRecord(item, previous?.localPort);
+    const contact = {};
+    for (const field of ['account', 'phone', 'roleName']) {
+      if (item[field] || previous?.[field]) contact[field] = item[field] || previous[field];
+    }
+    const normalizedItem = normalizeRecentRecord({ ...item, ...contact }, previous?.localPort);
     const adminContextId = (await commonNs.adminLoginHistory?.getSession())?.id || '';
     if ((item.adminContextId || '') !== adminContextId) throw new Error('后台账号已切换，请重新查询');
     const next = [
@@ -6332,7 +6396,7 @@ if (typeof module !== 'undefined' && module.exports) {
       if (location.origin === config.origin) globalThis.__IDT_COMPONENT_INSPECTOR__?.start(config);
       else globalThis.__IDT_COMPONENT_INSPECTOR__?.destroy();
       return globalThis.__IDT_COMPONENT_INSPECTOR__?.isRunning(config) === true;
-    }, args: [{ origin: state.origin, generation: state.generation, openShortcut: settings.openShortcut, menuShortcut: settings.menuShortcut }] });
+    }, args: [{ origin: state.origin, generation: state.generation, clickAction: settings.clickAction, openShortcut: settings.openShortcut, menuShortcut: settings.menuShortcut }] });
     if (!results.some((result) => result.frameId === (frameId ?? 0) && result.result === true)) throw new Error('定位脚本尚未启动，请等待页面加载完成后重试');
   }
 
@@ -6349,7 +6413,7 @@ if (typeof module !== 'undefined' && module.exports) {
     try {
       await stopRuntime(tabId);
       const host = await readyHost();
-      if (!host.editor || !host.editorAvailable) throw new Error('请先选择有效的编辑器');
+      if (settings.clickAction !== 'copy' && (!host.editor || !host.editorAvailable)) throw new Error('请先选择有效的编辑器');
       assertHostReady(host);
       let project = previous.project, frameworks = previous.frameworks;
       if (reuse) {
@@ -6515,7 +6579,7 @@ if (typeof module !== 'undefined' && module.exports) {
     return { snapshotId: id, components, rect: result.rect };
   }
 
-  async function openSnapshot(sender, payload) {
+  async function useSnapshot(sender, payload, action) {
     const tabId = sender.tab?.id;
     const state = await readState(tabId);
     const entry = snapshots.get(tabId)?.get(payload.snapshotId);
@@ -6527,7 +6591,7 @@ if (typeof module !== 'undefined' && module.exports) {
     try {
       assertHostReady(await readyHost());
       let result;
-      try { result = await nativeRequest('openSource', { origin: state.origin, projectId: state.project.id, source }); }
+      try { result = await nativeRequest(action, { origin: state.origin, projectId: state.project.id, source }); }
       catch (error) {
         if (!serviceChanged(error)) throw error;
         openingState = await lock(tabId, async () => {
@@ -6545,11 +6609,11 @@ if (typeof module !== 'undefined' && module.exports) {
         await assertTarget(tabId, state.origin, true);
         const latest = await readState(tabId);
         if (!latest.enabled || latest.status !== 'on' || latest.generation !== openingState.generation) throw new Error('当前页面的组件定位已停止');
-        result = await nativeRequest('openSource', { origin: state.origin, projectId: openingState.project.id, source: refreshedSource });
+        result = await nativeRequest(action, { origin: state.origin, projectId: openingState.project.id, source: refreshedSource });
       }
       snapshots.get(tabId)?.delete(payload.snapshotId);
       const latest = await readState(tabId);
-      if (latest.status === 'on' && latest.generation === openingState.generation) await writeState(tabId, { ...latest, lastOpened: result });
+      if (action === 'openSource' && latest.status === 'on' && latest.generation === openingState.generation) await writeState(tabId, { ...latest, lastOpened: result });
       return result;
     } catch (error) {
       const latest = await readState(tabId);
@@ -6561,7 +6625,10 @@ if (typeof module !== 'undefined' && module.exports) {
             await writeState(tabId, { ...current, status: 'recovering', generation: token(), error: '正在等待开发服务恢复，恢复后会自动启用定位。' });
           }
         });
-      } else if (latest.generation === openingState.generation && /编辑器|连接/.test(error.message)) await pause(tabId, error.message);
+      } else if (latest.generation === openingState.generation && /编辑器|连接/.test(error.message)) {
+        const settings = await policy.getSettings();
+        if (settings.clickAction !== 'copy' || /连接/.test(error.message)) await pause(tabId, error.message);
+      }
       throw error;
     }
   }
@@ -6574,7 +6641,8 @@ if (typeof module !== 'undefined' && module.exports) {
       return lock(tabId, () => restoreTab(tabId, sender, payload));
     }
     if (msg.type === 'COMPONENT_INSPECT') return inspect(sender, payload);
-    if (msg.type === 'COMPONENT_OPEN') return openSnapshot(sender, payload);
+    if (msg.type === 'COMPONENT_OPEN') return useSnapshot(sender, payload, 'openSource');
+    if (msg.type === 'COMPONENT_COPY') return useSnapshot(sender, payload, 'copySource');
     // 设置和系统窗口只接受扩展页面发起的操作。
     if (!sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('操作来源无效');
     switch (msg.type) {
@@ -6622,7 +6690,7 @@ if (typeof module !== 'undefined' && module.exports) {
       case 'COMPONENT_CLEAR_EDITOR': {
         assertHostReady(await readyHost());
         const result = await nativeRequest('clearEditor');
-        await pauseAll('请先选择编辑器，再启动当前页面');
+        if ((await policy.getSettings()).clickAction !== 'copy') await pauseAll('请先选择编辑器，再启动当前页面');
         return result;
       }
       case 'COMPONENT_SAVE_SETTINGS': {
@@ -6630,12 +6698,16 @@ if (typeof module !== 'undefined' && module.exports) {
         await chrome.storage.local.set({ [policy.SETTINGS_KEY]: settings });
         const all = await chrome.storage.session.get(null);
         for (const [key, state] of Object.entries(all)) {
-          if (!key.startsWith(policy.TAB_PREFIX) || state.status !== 'on') continue;
+          if (!key.startsWith(policy.TAB_PREFIX) || !['on', 'paused'].includes(state.status)) continue;
           const tabId = Number(key.slice(policy.TAB_PREFIX.length));
           await lock(tabId, async () => {
             const latest = await readState(tabId);
+            if (latest.status === 'paused' && latest.enabled && settings.clickAction === 'copy' && /编辑器/.test(latest.error || '')) {
+              await startTab(tabId, latest.origin, false); return;
+            }
             if (latest.status !== 'on') return;
             if (!policy.isAllowed(latest.origin, settings.origins)) await pause(tabId, '该开发地址已从允许列表移除');
+            else if (settings.clickAction !== 'copy' && !(await readyHost()).editorAvailable) await pause(tabId, '请先选择有效的编辑器');
             else await installRuntime(tabId, latest, settings).catch(() => {});
           });
         }

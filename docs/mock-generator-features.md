@@ -1,10 +1,28 @@
 # Mock 数据生成器功能说明
 
-## 🎯 概述
+## 两套生成器的使用位置
 
-基于流行的 **Faker.js** 思路实现的零依赖 Mock 数据生成器，支持 50+ 种智能字段识别和假数据生成。
+当前代码有两套独立实现：
 
-## ✨ 核心特性
+| 使用位置 | 实现文件 | 调用方式 |
+|---|---|---|
+| 接口 Mock 面板的「生成假数据」按钮 | `devtools/panel.js` | 使用该文件内的 `inferSchema()` 和简化版 `generateMockData()` |
+| 公共生成器及 Faker 风格辅助函数 | `src/common/mock-generator.js` | 通过 `globalThis.InternalDevToolkit.mockGenerator` 调用 |
+
+面板按钮从所选方向的真实数据推断结构，再把生成结果放入编辑草稿，点击「保存」提交。常见字段表现如下：
+
+| 字段 | 面板按钮 | 公共生成器 |
+|---|---|---|
+| `name`、`email`、`phone` | 姓名、邮箱、手机号格式字符串 | 姓名、邮箱、手机号格式字符串 |
+| `uuid` | 1000～999999 的整数 | UUID（通用唯一标识符）字符串 |
+| `createdAt` | 按原类型生成，数字生成 1～1000 的整数 | 时间戳 |
+| `created_at` | 时间戳 | 时间戳 |
+| `color` | 按原类型生成，字符串为随机字母和数字 | 十六进制颜色 |
+| `company` | 按原类型生成 | 公司名称 |
+
+下面的字段表、Faker 风格函数和复杂对象示例均对应公共生成器。维护面板按钮时应修改 `devtools/panel.js`；维护公共函数时应修改 `src/common/mock-generator.js`。OpenAPI / Swagger 导入另有按接口结构生成数据的逻辑，位于 `devtools/panel.js` 的导入部分。
+
+## 公共生成器功能
 
 ### 1. 智能字段识别（启发式）
 
@@ -38,9 +56,13 @@
 
 ### 2. Faker API（高级用户）
 
-在 Console 或 DevTools Panel 中可以直接使用 `faker` 对象：
+公共模块导出 `globalThis.InternalDevToolkit.mockGenerator.faker`。当前构建将模块打包进后台脚本和内容脚本，面板使用上文所述的本地实现。
+
+在扩展的后台 Service Worker 控制台，或选择了本扩展内容脚本执行环境的控制台中，先取得对象再调用：
 
 ```javascript
+const { faker } = globalThis.InternalDevToolkit.mockGenerator;
+
 // 人名
 faker.person.fullName()     // "王伟"
 faker.person.firstName()    // "伟"
@@ -98,7 +120,7 @@ faker.datatype.uuid()       // "550e8400-e29b-41d4-a716-446655440000"
 faker.datatype.boolean()    // true/false
 ```
 
-## 🔥 使用示例
+## 公共生成器使用示例
 
 ### 示例 1：基础使用
 
@@ -111,7 +133,15 @@ faker.datatype.boolean()    // true/false
 }
 ```
 
-点击「一键生成假数据」后：
+在已加载公共模块的环境中执行：
+
+```javascript
+const generator = globalThis.InternalDevToolkit.mockGenerator;
+const source = { name: '张三', email: 'test@example.com', phone: '13800138000' };
+const generated = generator.generateMockData(generator.inferSchema(source));
+```
+
+一次可能的结果：
 ```json
 {
   "name": "王伟",
@@ -162,7 +192,7 @@ faker.datatype.boolean()    // true/false
 }
 ```
 
-生成后（保持数组长度）：
+生成后（非空数组保持原长度，每项结构取自第一个元素）：
 ```json
 {
   "users": [
@@ -172,21 +202,7 @@ faker.datatype.boolean()    // true/false
 }
 ```
 
-## 📊 对比：原生 vs Faker 风格
-
-| 功能 | 原生版本 | Faker 风格版本 |
-|------|---------|---------------|
-| 姓名 | 张伟、王芳 | 李明、赵静（百家姓前50） |
-| 邮箱 | abc@example.com | 随机用户名@多种域名 |
-| 手机号 | 随机11位 | 真实号段（130-189） |
-| UUID | ❌ 不支持 | ✅ 标准 UUID v4 |
-| IP | ❌ 不支持 | ✅ 192.168.1.100 |
-| 颜色 | ❌ 不支持 | ✅ #3a7bd5 |
-| 公司 | ❌ 不支持 | ✅ 阿里科技有限公司 |
-| 经纬度 | ❌ 不支持 | ✅ 真实范围 |
-| 密码 | ❌ 不支持 | ✅ 复杂密码 |
-| Lorem | ❌ 简单字符串 | ✅ 中文 Lorem |
-| 金融 | ❌ 不支持 | ✅ 金额、账号 |
+空数组会推断为未知元素类型，生成时默认扩展为 1～5 个 `null`。面板简化生成器也采用这一处理。
 
 ## 🎨 字段识别规则
 
@@ -207,7 +223,7 @@ faker.datatype.boolean()    // true/false
 
 ## 💡 高级用法
 
-### 在 Console 中测试
+### 在扩展后台控制台中测试
 
 ```javascript
 // 获取 faker 对象
@@ -229,7 +245,7 @@ console.log(testUser);
 
 ### 自定义字段识别
 
-如果内置规则不满足需求，可以手动编辑生成的数据，或在 `src/common/mock-generator.js` 中添加自定义规则。
+公共模块的字段识别规则位于 `src/common/mock-generator.js`。面板按钮的字段识别规则位于 `devtools/panel.js` 内的简化版 `generateMockData()`；两处实现各自维护。
 
 ## 📝 实现细节
 
@@ -245,15 +261,13 @@ console.log(testUser);
 - **街道**：12 个常见街道名
 - **公司**：16 个知名公司前缀 + 9 种公司类型
 
-### 3. 性能
+### 3. 递归和性能
 
-- 生成 100 个字段：< 10ms
-- 生成 1000 个字段：< 50ms
-- 复杂嵌套对象：递归深度限制为 10 层
+`inferSchema()` 和 `generateMockData()` 会递归处理对象及数组，当前代码未设置递归深度上限。处理耗时取决于数据量和嵌套深度，实际性能需用目标数据测量。
 
 ## 🔧 扩展指南
 
-如果需要添加新的字段识别规则：
+如果需要扩展公共生成器的字段识别规则：
 
 1. 编辑 `src/common/mock-generator.js`
 2. 在 `generateByFieldName()` 函数中添加规则：
@@ -267,7 +281,9 @@ if (/department|dept/.test(lower)) {
 ```
 
 3. 重新构建：`npm run build`
-4. 重新加载插件
+4. 重新加载插件，在扩展后台控制台调用公共生成器验证结果。
+
+若要扩展面板的「生成假数据」按钮，应在 `devtools/panel.js` 的简化生成器中添加规则，再构建、重新加载扩展，重开开发者工具验证按钮。只修改公共模块时，面板按钮继续使用自己的实现。
 
 ## 📚 参考资料
 
@@ -278,5 +294,5 @@ if (/department|dept/.test(lower)) {
 ---
 
 **版本**: v1.0  
-**更新时间**: 2026-06-25  
+**文档核对时间**: 2026-10-28
 **状态**: ✅ 已实现

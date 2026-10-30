@@ -63,9 +63,25 @@ function inspectComponentPage(options) {
     return type?.displayName || type?.name || type?.render?.displayName || type?.render?.name || type?.type?.displayName || type?.type?.name || '匿名组件';
   }
 
+  // 与参考菜单一致，只展示字符串、数字等简单参数；参数名悬停时显示当前值。
+  function menuProps(props, defaults) {
+    const result = Object.create(null);
+    for (const key of Object.keys(props || {}).slice(0, 50)) {
+      if (key === 'key') continue;
+      try {
+        const descriptor = Object.getOwnPropertyDescriptor(props, key);
+        if (!descriptor || !('value' in descriptor)) continue;
+        const value = descriptor.value;
+        if (defaults && value === Object.getOwnPropertyDescriptor(defaults, key)?.value) continue;
+        if (['string', 'number', 'boolean', 'symbol'].includes(typeof value)) result[key] = value;
+      } catch (_) { /* 跳过当前无法读取的参数。 */ }
+    }
+    return snapshot(result);
+  }
+
   function sourceFromFiber(fiber) {
     const source = fiber._debugSource;
-    if (source?.fileName) return { file: source.fileName, line: source.lineNumber || null, column: source.columnNumber || null, kind: 'source' };
+    if (source?.fileName) return { file: source.fileName, line: source.lineNumber || null, column: source.columnNumber || null, ...(source.endLineNumber ? { endLine: source.endLineNumber } : {}), kind: 'source' };
     const stack = fiber._debugStack?.stack;
     return stack ? { stack: String(stack).slice(0, 24000), kind: 'stack' } : null;
   }
@@ -77,7 +93,7 @@ function inspectComponentPage(options) {
       visited.add(fiber);
       const type = fiber.type || fiber.elementType;
       if (type && typeof type !== 'symbol') {
-        result.push({ framework: 'React', name: typeName(type), source: sourceFromFiber(fiber), props: includeProps ? snapshot(fiber.memoizedProps || fiber.pendingProps || {}) : undefined });
+        result.push({ framework: 'React', name: typeName(type), source: sourceFromFiber(fiber), props: includeProps ? menuProps(fiber.memoizedProps || fiber.pendingProps, type?.defaultProps) : undefined });
       }
       fiber = fiber._debugOwner || fiber.return;
     }
@@ -99,8 +115,8 @@ function inspectComponentPage(options) {
           for (const key of Object.keys(type?.props || instance.$props || {}).slice(0, 50)) {
             try { values[key] = instance.$props?.[key]; } catch (_) { values[key] = '[暂时无法读取]'; }
           }
-          props = snapshot(values);
-        } else props = snapshot(instance.props || {});
+          props = menuProps(values);
+        } else props = menuProps(instance.props);
       }
       result.push({ framework: `Vue ${version}`, name: type?.name || type?.__name || type?._componentTag || file?.split('/').pop()?.replace(/\.vue$/, '') || '匿名组件', source: file ? { file, line: null, column: null, kind: 'source' } : null, props });
       instance = version === 2 ? instance.$parent : instance.parent;

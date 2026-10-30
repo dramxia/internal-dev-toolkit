@@ -41,12 +41,14 @@ const roster = [
 ];
 
 class Element {
-  constructor() {
+  constructor(tagName = 'div') {
+    this.tagName = tagName.toUpperCase();
     this.dataset = {};
     this.attrs = {};
     this.children = [];
     this.value = '';
     this.textContent = '';
+    this.listeners = {};
     this.style = { setProperty() {} };
     const classes = new Set();
     this.classList = {
@@ -62,7 +64,8 @@ class Element {
   getAttribute(name) { return this.attrs[name] ?? null; }
   removeAttribute(name) { delete this.attrs[name]; }
   appendChild(child) { this.children.push(child); }
-  addEventListener() {}
+  addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); }
+  async click() { for (const handler of this.listeners.click || []) await handler({ currentTarget: this, target: this }); }
   querySelector() { return null; }
   querySelectorAll() { return []; }
   focus() {}
@@ -73,7 +76,7 @@ function harness(tree = deptTree) {
   const elements = new Map();
   const calls = [];
   // 学生接口按请求的班级返回，模拟后端正确支持班级筛选。
-  const respond = async (message) => {
+  let respond = async (message) => {
     const payload = message.payload || {};
     if (message.type === 'FETCH_TEACHER_DETAIL') return { ok: true, res: { code: 200, data: teacherDetail } };
     if (message.type === 'FETCH_SCHOOL_DEPT_TREE') return { ok: true, res: { code: 200, data: tree } };
@@ -89,7 +92,7 @@ function harness(tree = deptTree) {
     requestAnimationFrame: (fn) => fn(),
     document: {
       getElementById(id) { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); },
-      createElement: () => new Element(),
+      createElement: (tagName) => new Element(tagName),
       querySelectorAll: () => [],
     },
     InternalDevToolkit: {
@@ -98,7 +101,7 @@ function harness(tree = deptTree) {
       ui: { toast() {} },
     },
   });
-  for (const file of ['src/common/tenant.js', 'src/popup/quick-login-ui.js']) {
+  for (const file of ['src/common/tenant.js', 'src/popup/user-card.js', 'src/popup/quick-login-ui.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file });
   }
   const ui = context.module.exports;
@@ -106,6 +109,8 @@ function harness(tree = deptTree) {
   ui.state.teacher.selectedUser = { id: 'user-1', userName: '教师入口', origin: 'https://ai.example.test', aiToken: 'ai-token' };
   return {
     calls, elements, ui, tenant: context.InternalDevToolkit.tenant,
+    get respond() { return respond; },
+    set respond(fn) { respond = fn; },
     lastStudentCall: () => clone([...calls].reverse().find((call) => call.type === 'FETCH_STUDENTS')),
     optionValues: (id) => [...String(elements.get(id)?.innerHTML || '').matchAll(/<option value="([^"]*)">([^<]*)<\/option>/g)]
       .map(([, value, label]) => ({ value, label })),
@@ -161,6 +166,16 @@ function harness(tree = deptTree) {
   const stale = h.tenant.resolveTeacherScope(entries, { subject: '数学', stageId: '9', gradeId: '10', classId: '3001' });
   assert.deepEqual(clone(stale.filter), { subject: '数学', stageId: '', gradeId: '', classId: '' }, '换学科后失效的下级选择须清空');
   assert.deepEqual(clone(stale.classIds), ['2979', '2980']);
+
+  // 标签保留原部门标识：年级与班级、不同年级的同名班级各自对应正确范围。
+  const dutyOptions = h.tenant.extractTeachDutyOptions(teacherDetail, h.tenant.buildDeptIdNameMap(deptTree));
+  assert.deepEqual(clone(dutyOptions), [
+    { label: '数学 · 小学三年级', subject: '数学', deptId: '3' },
+    { label: '语文 · 小学五年级1班', subject: '语文', deptId: '2989' },
+    { label: '语文 · 初中初一1班', subject: '语文', deptId: '3001' },
+  ]);
+  assert.deepEqual(clone(h.tenant.extractTeachDuties(teacherDetail, h.tenant.buildDeptIdNameMap(deptTree))),
+    clone(dutyOptions.map((item) => item.label)), '原有文字标签接口保持原样');
 
   // ── UI：选定教师后按四级筛选查询相关学生 ──
   const t = h.ui.state.teacher;
@@ -218,6 +233,115 @@ function harness(tree = deptTree) {
   await h.ui.selectTeacher({ id: 'teacher-2', name: '王老师' });
   assert.deepEqual(clone(t.scopeFilter), { subject: '', stageId: '', gradeId: '', classId: '' });
   assert.deepEqual(h.lastStudentCall().payload.clazzIds, ['2979', '2980', '2989', '3001']);
+
+  // ── 点击真实渲染的标签：单选、切换、取消，并与四级筛选共用状态 ──
+  const tags = harness();
+  await tags.ui.selectTeacher({ id: 'teacher-1', name: '李老师' });
+  const tagState = tags.ui.state.teacher;
+  const badges = tags.elements.get('teacherDuties').children;
+  assert.equal(badges.length, 3);
+  assert.equal(badges.every((badge) => badge.tagName === 'BUTTON'), true, '有明确教学范围的标签使用原生按钮');
+  assert.equal(badges.every((badge) => badge.getAttribute('aria-pressed') === 'false'), true);
+  tagState.studentNameKeyword = '学生';
+  tagState.studentCodeKeyword = '2026';
+  tagState.studentPage.current = 3;
+  await badges[0].click();
+  assert.deepEqual(clone(tagState.scopeFilter), { subject: '数学', stageId: '2', gradeId: '3', classId: '' });
+  assert.deepEqual(tags.lastStudentCall().payload.clazzIds, ['2979', '2980'], '年级标签展开为该年级下教师关联的班级');
+  assert.deepEqual(clone(tagState.studentPage.records.map((item) => item.id)), ['s1', 's2']);
+  assert.equal(tags.lastStudentCall().payload.current, 1, '切换标签回到第一页');
+  assert.equal(tags.lastStudentCall().payload.name, '学生', '标签筛选保留姓名');
+  assert.equal(tags.lastStudentCall().payload.code, '2026', '标签筛选保留学号');
+  assert.equal(tags.elements.get('studentSubjectFilter').value, '数学');
+  assert.equal(tags.elements.get('studentStageFilter').value, '2');
+  assert.equal(tags.elements.get('studentGradeFilter').value, '3');
+  assert.equal(tags.elements.get('studentClassFilter').value, '');
+  assert.equal(tags.elements.get('studentScopeCount').textContent, '3');
+  assert.equal(tags.elements.get('studentScopeFilters').classList.contains('hidden'), true, '点击标签保持下拉筛选原有的收起状态');
+  assert.equal(badges[0].getAttribute('aria-pressed'), 'true');
+  assert.strictEqual(tags.elements.get('teacherDuties').children[0], badges[0], '选中标签后复用原按钮，保留焦点');
+
+  await badges[1].click();
+  assert.deepEqual(clone(tagState.scopeFilter), { subject: '语文', stageId: '2', gradeId: '5', classId: '2989' });
+  assert.equal(tags.lastStudentCall().payload.clazzId, '2989');
+  assert.equal(tags.elements.get('studentClassFilter').value, '2989');
+  assert.equal(badges[0].getAttribute('aria-pressed'), 'false', '切换标签取消上一个选中状态');
+  assert.equal(badges[1].getAttribute('aria-pressed'), 'true');
+  await badges[2].click();
+  assert.equal(tags.lastStudentCall().payload.clazzId, '3001', '同名班级按标识准确切换');
+  assert.deepEqual(clone(tagState.studentPage.records.map((item) => item.id)), ['s4']);
+  assert.equal(badges.filter((badge) => badge.getAttribute('aria-pressed') === 'true').length, 1);
+  await badges[2].click();
+  assert.deepEqual(clone(tagState.scopeFilter), { subject: '', stageId: '', gradeId: '', classId: '' });
+  assert.deepEqual(tags.lastStudentCall().payload.clazzIds, ['2979', '2980', '2989', '3001'], '再次点击恢复该教师的全部相关班级');
+  assert.equal(badges.every((badge) => badge.getAttribute('aria-pressed') === 'false'), true);
+  assert.equal(tags.elements.get('studentScopeCount').hidden, true);
+  assert.equal(tags.lastStudentCall().payload.name, '学生');
+  assert.equal(tags.lastStudentCall().payload.code, '2026');
+
+  await badges[1].click();
+  await tags.ui.setTeacherScopeFilter('subject', '数学');
+  assert.equal(badges.every((badge) => badge.getAttribute('aria-pressed') === 'false'), true, '手动修改下拉筛选时更新标签状态');
+  assert.deepEqual(tags.lastStudentCall().payload.clazzIds, ['2979', '2980']);
+  await badges[1].click();
+  const tagSnapshot = tags.ui.createPersistedState();
+  tags.ui.resetForAdminSession({ id: 'another-admin' }, true);
+  tags.ui.restorePersistedState(tagSnapshot);
+  tags.ui.renderTeacherShell();
+  assert.equal(tags.elements.get('teacherDuties').children[1].getAttribute('aria-pressed'), 'true', '恢复侧栏后保留标签选中状态');
+  assert.equal(tags.elements.get('studentClassFilter').value, '2989');
+  delete tagState.selectedTeacher.detailDutyOptions;
+  tags.ui.renderTeacherShell();
+  assert.equal(tags.elements.get('teacherDuties').children[1].tagName, 'BUTTON', '旧查询记录从班级路径恢复标签关联');
+  await tags.elements.get('teacherDuties').children[1].click();
+  assert.deepEqual(clone(tagState.scopeFilter), { subject: '', stageId: '', gradeId: '', classId: '' });
+
+  // 快速切换标签时，较晚返回的旧请求应被忽略。
+  const pending = [];
+  tags.respond = (message) => {
+    assert.equal(message.type, 'FETCH_STUDENTS');
+    return new Promise((resolve) => pending.push({ payload: message.payload, resolve }));
+  };
+  const oldClick = tags.elements.get('teacherDuties').children[1].click();
+  const newClick = tags.elements.get('teacherDuties').children[2].click();
+  assert.equal(pending.length, 2);
+  const reply = (student) => ({ ok: true, res: { code: 200, data: { records: [student], total: 1 } } });
+  pending[1].resolve(reply(roster[3]));
+  await newClick;
+  pending[0].resolve(reply(roster[2]));
+  await oldClick;
+  assert.deepEqual(clone(tagState.studentPage.records.map((item) => item.id)), ['s4'], '旧响应应保留最新标签的结果');
+  assert.equal(tagState.scopeFilter.classId, '3001');
+
+  // 换教师时，上一位教师的全量扫描失败也应被作废。
+  const teacherRace = harness();
+  await teacherRace.ui.selectTeacher({ id: 'teacher-old', name: '原老师' });
+  const defaultRespond = teacherRace.respond;
+  let failOldScan;
+  let finishNewDetail;
+  teacherRace.respond = (message) => {
+    if (message.type === 'FETCH_TEACHER_DETAIL') return new Promise((resolve) => { finishNewDetail = resolve; });
+    if (message.type === 'FETCH_STUDENTS' && message.payload.size === 100) {
+      return new Promise((resolve) => { failOldScan = () => resolve({ ok: false, error: '旧教师查询失败' }); });
+    }
+    if (message.type === 'FETCH_STUDENTS') return { ok: true, res: { data: { records: [roster[3]], total: 1 } } };
+    return defaultRespond(message);
+  };
+  const oldTeacherQuery = teacherRace.elements.get('teacherDuties').children[0].click();
+  await new Promise(setImmediate);
+  assert.equal(typeof failOldScan, 'function', '旧请求已进入补充分页扫描');
+  const newTeacherQuery = teacherRace.ui.selectTeacher({ id: 'teacher-new', name: '新老师' });
+  assert.equal(teacherRace.ui.state.teacher.loadingStudents, false, '换教师立即结束旧学生请求的加载状态');
+  failOldScan();
+  await oldTeacherQuery;
+  assert.equal(teacherRace.ui.state.teacher.studentError, '');
+  assert.equal(teacherRace.elements.get('studentEmpty').textContent, '加载教师教学班级中...', '旧查询失败保留新教师的加载提示');
+  finishNewDetail({ ok: true, res: { data: {
+    schoolSubjectTeachersDetail: [{ subjectNames: ['英语'], deptIds: ['3001'] }],
+  } } });
+  await newTeacherQuery;
+  assert.deepEqual(clone(teacherRace.ui.state.teacher.scopeFilter), { subject: '', stageId: '', gradeId: '', classId: '' });
+  assert.deepEqual(clone(teacherRace.ui.state.teacher.studentPage.records.map((item) => item.id)), ['s4']);
 
   // ── 缺少学段层级的租户：学段筛选整格隐藏，年级仍可用 ──
   const flat = harness([

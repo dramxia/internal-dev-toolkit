@@ -18,6 +18,12 @@ async function until(fn, message, timeout = 15000) {
   }
   throw new Error(`${message}${last ? `: ${last.message}` : ''}`);
 }
+async function rightClick(page, target = page.locator('#target')) {
+  await target.hover();
+  const rect = await target.boundingBox();
+  // 菜单会在右键按下时出现，直接发送鼠标事件，完成随后的松开动作。
+  await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2, { button: 'right' });
+}
 
 (async () => {
   if (process.platform !== 'darwin') { console.log('macOS component browser test skipped'); return; }
@@ -198,16 +204,16 @@ renderRoute();
       const businessClicks = await targetPage.evaluate(() => window.businessClicks || 0);
       await targetPage.mouse.move(8, 8);
       await targetPage.keyboard.down('Meta'); await target.hover();
-      await until(async () => /^(React|Vue [23]) · /.test(await targetPage.locator('[data-idt-component-overlay] .badge').textContent()), `${file} 未识别出实际组件`);
-      const highlighted = await targetPage.locator('[data-idt-component-overlay] .outline').boundingBox();
+      await until(() => targetPage.locator('#target[data-idt-component-target="HOVER"]').count(), `${file} 未出现元素轮廓`);
+      assert.equal(await target.evaluate((element) => getComputedStyle(element).outlineColor), 'rgb(54, 139, 87)');
+      const highlighted = await targetPage.locator('[data-idt-component-target]').boundingBox();
       const bounds = await target.boundingBox();
       for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(highlighted[key] - bounds[key]) < 1, `${file} 高亮位置错误：${key}`);
-      await target.click({ button: 'right' }); await targetPage.keyboard.up('Meta');
+      await rightClick(targetPage, target); await targetPage.keyboard.up('Meta');
       const items = targetPage.locator('[data-idt-component-overlay] .item');
       await until(async () => await items.count() >= 2, `${file} 组件菜单缺少父组件`);
       assert.ok((await items.first().locator('.path').textContent()).includes(file), `${file} 菜单指向了其他组件的源码`);
-      await targetPage.keyboard.press('ArrowRight');
-      assert.ok((await targetPage.locator('[data-idt-component-overlay] .details').textContent()).includes(label), `${file} 组件参数未更新`);
+      assert.ok((await targetPage.locator('[data-idt-component-overlay] .item var').evaluateAll((elements) => elements.map((element) => element.title))).includes(label), `${file} 参数悬停内容缺失`);
       await targetPage.keyboard.press('Escape');
       const before = (await opened()).length;
       await targetPage.keyboard.down(openKey); await target.click(); await targetPage.keyboard.up(openKey);
@@ -289,12 +295,11 @@ renderRoute();
       await until(() => page.locator('[data-idt-component-overlay]').count(), `${framework} 未出现高亮`);
       // 右下角菜单会覆盖原点击坐标，仍应读取真正选中的业务元素。
       await page.locator('#target').evaluate((element) => { element.style.cssText = 'position:fixed;right:2px;bottom:2px'; });
-      await page.locator('#target').click({ button: 'right' }); await page.keyboard.up('Meta');
+      await rightClick(page); await page.keyboard.up('Meta');
       await page.waitForSelector('[data-idt-component-overlay] .item');
       console.log(framework, 'source:', await page.locator('[data-idt-component-overlay] .item .path').first().textContent());
       assert.ok((await page.locator('[data-idt-component-overlay] .item').count()) >= 2, `${framework} 父组件链缺失`);
-      await page.keyboard.press('ArrowRight');
-      assert.match(await page.locator('[data-idt-component-overlay] .details').textContent(), /hello/);
+      assert.ok((await page.locator('[data-idt-component-overlay] .item var').evaluateAll((elements) => elements.map((element) => element.title))).some((value) => value.includes('hello')), `${framework} 参数悬停内容缺失`);
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('[data-idt-component-overlay]').count(), 0);
       assert.equal(await page.locator('#target').evaluate((element) => element.getAttributeNames().some((name) => name.startsWith('data-idt-query-'))), false, '选择结束应清除临时标记');
@@ -318,7 +323,7 @@ renderRoute();
     assert.notEqual((await state()).generation, firstGeneration);
     // 先让页面完成一次服务检查，再在下次检查前重启，验证源码跳转自身的重试。
     await worker.evaluate((id) => chrome.scripting.executeScript({ target: { tabId: id }, world: 'ISOLATED', func: () => globalThis.__IDT_COMPONENT_DOCUMENT_READY__.wake() }), tabId);
-    await page.keyboard.down('Meta'); await page.locator('#target').click({ button: 'right' }); await page.keyboard.up('Meta');
+    await page.keyboard.down('Meta'); await rightClick(page); await page.keyboard.up('Meta');
     await page.waitForSelector('[data-idt-component-overlay] .item');
     await page.keyboard.press('Home');
     await page.evaluate(() => { window.serviceRestartDocument = 'same-document'; });
@@ -371,7 +376,7 @@ renderRoute();
       { navigate: () => history.go(-2), file: 'Users.jsx', label: 'hello Users' },
     ];
     for (const { navigate, file, label } of navigations) {
-      await page.keyboard.down('Meta'); await page.locator('#target').click({ button: 'right' }); await page.keyboard.up('Meta');
+      await page.keyboard.down('Meta'); await rightClick(page); await page.keyboard.up('Meta');
       await page.waitForSelector('[data-idt-component-overlay] .item');
       await page.evaluate(navigate);
       await until(async () => await page.locator('[data-idt-component-overlay]').count() === 0, '切路由应清除旧组件菜单');

@@ -27,12 +27,13 @@ const chrome = {
           let result;
           if (message.action === 'status') result = { editor, editorAvailable: !!editor, capabilities, revision: hostRevision };
           else if (message.action === 'update') { updates++; if (updateError) result = { ok: false, error: updateError }; else { hostRevision = message.bundle.revision; result = { updated: true }; } }
-          else if (['identifyProject', 'checkProject', 'openSource'].includes(message.action) && !serviceOnline) result = { ok: false, error: '未找到监听 5173 端口的本机开发服务', code: 'COMPONENT_SERVER_OFFLINE' };
-          else if (['checkProject', 'openSource'].includes(message.action) && message.projectId !== projectId) result = { ok: false, error: '开发服务已重启，正在重新识别项目', code: 'COMPONENT_PROJECT_STALE' };
+          else if (['identifyProject', 'checkProject', 'openSource', 'copySource'].includes(message.action) && !serviceOnline) result = { ok: false, error: '未找到监听 5173 端口的本机开发服务', code: 'COMPONENT_SERVER_OFFLINE' };
+          else if (['checkProject', 'openSource', 'copySource'].includes(message.action) && message.projectId !== projectId) result = { ok: false, error: '开发服务已重启，正在重新识别项目', code: 'COMPONENT_PROJECT_STALE' };
           else if (message.action === 'identifyProject') result = failProject ? { ok: false, error: '项目目录识别失败' } : { project: { id: projectId, root: '/project' } };
           else if (message.action === 'checkProject') result = { project: { id: projectId, root: '/project' } };
           else if (message.action === 'clearEditor') { editor = null; result = { editor: null }; }
           else if (message.action === 'openSource') { finishOpen = () => port.onMessage.emit({ id: message.id, ok: true, file: '/project/src/App.jsx', editor: 'Cursor' }); return; }
+          else if (message.action === 'copySource') result = { file: '/project/src/App.jsx', location: '/project/src/App.jsx#L10', text: '/project/src/App.jsx#L10 ' };
           port.onMessage.emit({ id: message.id, ok: true, ...result });
         });
       }, disconnect() { port.onDisconnect.emit(); } };
@@ -317,8 +318,26 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
   detection = { frameworks: ['React'], hints: ['/project/src/App.jsx'] };
   await handle('COMPONENT_RECONNECT_HOST');
   assert.equal((await bg.readState(10)).status, 'on', '超时后应释放操作队列，检查连接即可恢复');
+  await handle('COMPONENT_SAVE_SETTINGS', { clickAction: 'copy' });
+  assert.equal(injections.filter((item) => item.args?.[0]?.generation).at(-1).args[0].clickAction, 'copy');
+  await handle('COMPONENT_CLEAR_EDITOR');
+  assert.equal((await bg.readState(10)).status, 'on', '复制模式下清空编辑器后继续工作');
+  await handle('COMPONENT_SAVE_SETTINGS', { clickAction: 'open' });
+  assert.equal((await bg.readState(10)).status, 'paused');
+  await handle('COMPONENT_SAVE_SETTINGS', { clickAction: 'copy' });
+  assert.equal((await bg.readState(10)).status, 'on', '切回复制模式应自动恢复因编辑器缺失而暂停的页面');
+  const copySnapshot = await bg.handle({ type: 'COMPONENT_INSPECT', payload: { generation: (await bg.readState(10)).generation, x: 1, y: 1, details: true } }, coldSender);
+  const openCalls = nativeCalls.filter((call) => call.action === 'openSource').length;
+  projectId = 'copy-restarted';
+  const copied = await bg.handle({ type: 'COMPONENT_COPY', payload: { snapshotId: copySnapshot.snapshotId, index: 0 } }, coldSender);
+  assert.equal(copied.location, '/project/src/App.jsx#L10');
+  assert.equal(nativeCalls.filter((call) => call.action === 'openSource').length, openCalls);
+  assert.equal(nativeCalls.filter((call) => call.action === 'copySource').at(-1).projectId, 'copy-restarted');
+  assert.equal((await bg.readState(10)).lastOpened, undefined, '复制操作保持最近打开记录原样');
+  await assert.rejects(() => bg.handle({ type: 'COMPONENT_COPY', payload: { snapshotId: copySnapshot.snapshotId, index: 0 } }, coldSender), /过期/);
   await assert.rejects(() => bg.handle({ type: 'COMPONENT_CHOOSE_EDITOR' }, { tab: tabs.get(2), url: tabs.get(2).url }), /操作来源/);
   await assert.rejects(() => bg.handle({ type: 'COMPONENT_OPEN', payload: { snapshotId: 'forged' } }, { tab: tabs.get(2), url: tabs.get(2).url }), /过期/);
+  await assert.rejects(() => bg.handle({ type: 'COMPONENT_COPY', payload: { snapshotId: 'forged' } }, { tab: tabs.get(2), url: tabs.get(2).url }), /过期/);
   chrome.tabs.onRemoved.emit(1); await settle();
   assert.equal((await bg.readState(1)).status, 'off');
   console.log('component origin persistence, navigation and tab state tests passed');

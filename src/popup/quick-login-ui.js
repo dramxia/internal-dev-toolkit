@@ -5,7 +5,8 @@
   const ns = globalThis.InternalDevToolkit;
   const tenant = ns.tenant;
   const messages = ns.messages;
-  const DEFAULT_DEV_PORT = '8088';
+  const userCard = ns.userCard;
+  const DEFAULT_DEV_PORT = userCard.DEFAULT_DEV_PORT;
   const SEARCH_DEBOUNCE = 300;
   const DEFAULT_RECENT_VISIBLE = 3;
   const DEFAULT_STUDENT_PASSWORD = 'Xx@123456';
@@ -18,26 +19,25 @@
     'teacherTenantStep', 'teacherTenantState', 'teacherTenantSummary',
     'teacherTenantSummaryTitle', 'teacherTenantSummaryMeta', 'changeTeacherTenantBtn',
     'teacherTenantStepBody', 'tenantSearchStatus',
-    'teacherUserStep', 'teacherUserState', 'teacherUserSummary', 'teacherUserSummaryTitle',
-    'teacherUserSummaryMeta', 'changeTeacherUserBtn', 'teacherUserSummaryActions',
+    'teacherUserStep', 'teacherUserState', 'teacherUserSummary',
     'teacherUserStepBody', 'teacherSessionStatus',
     'teacherIdentityStep', 'teacherIdentityState', 'teacherIdentitySummary',
     'teacherIdentitySummaryTitle', 'teacherIdentitySummaryMeta', 'changeTeacherIdentityBtn',
     'teacherIdentityStepBody',
-    'tenantSearch', 'tenantList', 'tenantEmpty', 'deptSelect',
+    'tenantSearch', 'tenantList', 'tenantEmpty', 'tenantPager', 'deptSelect',
     'teacherDeptField', 'teacherDeptStatus', 'teacherDeptRetryBtn',
     'userSearch', 'userList', 'userEmpty', 'userPager',
     'teacherRefreshBtn', 'teacherNameSearch', 'teacherAccountSearch',
-    'teacherList', 'teacherEmpty', 'teacherPager', 'studentSection',
-    'studentSectionTitle', 'studentRefreshBtn', 'teacherDuties', 'studentAppSiteUrl',
+    'teacherList', 'teacherEmpty', 'teacherPager', 'teacherMatchStatus', 'studentSection',
+    'studentSectionTitle', 'studentResultCount', 'studentRefreshBtn', 'teacherDuties', 'studentAppSiteUrl',
+    'studentAppSiteSettings', 'studentAppSiteSummary',
     'studentScopeFilters', 'studentScopeToggle', 'studentScopeCount',
     'studentSubjectFilter', 'studentStageFilter',
     'studentGradeFilter', 'studentClassFilter',
     'studentNameSearch', 'studentCodeSearch', 'studentList', 'studentEmpty', 'studentPager',
     'accountSearchField', 'accountSearch', 'accountList', 'accountEmpty', 'accountPager',
     'studentAccountStep', 'studentAccountState', 'studentAccountSummary',
-    'studentAccountSummaryTitle', 'studentAccountSummaryMeta', 'changeStudentAccountBtn',
-    'studentAccountSummaryActions', 'studentAccountStepBody', 'accountSessionStatus',
+    'studentAccountStepBody', 'accountSessionStatus',
     'studentRelationPanel', 'studentRelationRefreshBtn', 'lookupByStudentBtn',
     'lookupByClassBtn', 'teacherLookupSemesterSelect', 'studentSessionNote',
     'relationSelectionSummary', 'relationSelectionSummaryTitle', 'relationSelectionSummaryMeta',
@@ -54,18 +54,12 @@
   let lastPersistedSignature = '';
   let adminSessionId = '';
   let sessionEpoch = 0;
+  let pendingLoginAction = null;
+  const contactRequests = new Map();
+  let recentRenderId = 0;
   const renderSignatures = new Map();
 
-  const icons = {
-    login: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>',
-    apply: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v14"/><path d="m6 11 6 6 6-6"/><path d="M5 21h14"/></svg>',
-    open: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
-    copy: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
-    student: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/></svg>',
-    aiReview: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M11 3.2l1.9 4.9 4.9 1.9-4.9 1.9L11 16.8 9.1 11.9 4.2 10l4.9-1.9z"/><path d="M18 15.4l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z"/></svg>',
-    teacher: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
-    delete: '<svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
-  };
+  const icons = userCard.icons;
 
   const state = {
     expanded: true,
@@ -80,6 +74,7 @@
       selectedTenant: null,
       tenantKeyword: '',
       tenantRecords: [],
+      tenantPage: { current: 1, size: 10, total: 0, records: [] },
       tenantRequestId: 0,
       loadingTenants: false,
       deptId: '',
@@ -114,6 +109,7 @@
       studentCodeKeyword: '',
       studentRequestId: 0,
       loadingStudents: false,
+      studentQueryPending: false,
       studentError: '',
       studentPage: { current: 1, size: 10, total: 0, records: [] },
     },
@@ -325,6 +321,7 @@
     teacherState.classIds = [];
     teacherState.classScopes = [];
     teacherState.scopeFilter = normalizeScopeFilter(null);
+    teacherState.studentQueryPending = false;
   }
 
   function getTeacherReachableStep(teacherState = state.teacher) {
@@ -332,6 +329,18 @@
     if (!teacherState.selectedUser) return 1;
     if (!teacherState.selectedTeacher) return 2;
     return 3;
+  }
+
+  function findUniqueTeacherMatch(page, user) {
+    if (!user || Number(page.total) !== 1 || page.records?.length !== 1) return null;
+    const teacher = page.records[0];
+    if (!teacher.id) return null;
+    if (teacher.tenantId && user.tenantId && teacher.tenantId !== user.tenantId) return null;
+    // 只比对两端共有的用户标识；后台账号 id 和教师 id 各自使用独立编号。
+    if (teacher.userId && user.userId) return teacher.userId === user.userId ? teacher : null;
+    const identifiers = [user.account, user.phone].map((value) => String(value || '').trim()).filter(Boolean);
+    return [teacher.account, teacher.phone].some((value) => value && identifiers.includes(String(value).trim()))
+      ? teacher : null;
   }
 
   function getStudentReachableStep(studentState = state.student) {
@@ -369,6 +378,7 @@
         selectedTenant: t.selectedTenant,
         tenantKeyword: t.tenantKeyword,
         tenantRecords: Array.isArray(t.tenantRecords) ? t.tenantRecords : [],
+        tenantPage: pageSnapshot(t.tenantPage),
         deptId: t.deptId,
         deptOptions: Array.isArray(t.deptOptions) ? t.deptOptions : [],
         userKeyword: t.userKeyword,
@@ -384,6 +394,7 @@
         studentNameKeyword: t.studentNameKeyword,
         studentCodeKeyword: t.studentCodeKeyword,
         studentPage: pageSnapshot(t.studentPage),
+        studentQueryPending: Boolean(t.studentQueryPending || t.loadingStudents || t.loadingDuties),
       },
       student: {
         activeStep: boundedStep(s.activeStep, 1),
@@ -413,6 +424,7 @@
       state.teacher.selectedTenant = t.selectedTenant && typeof t.selectedTenant === 'object' ? t.selectedTenant : null;
       state.teacher.tenantKeyword = typeof t.tenantKeyword === 'string' ? t.tenantKeyword : '';
       state.teacher.tenantRecords = Array.isArray(t.tenantRecords) ? t.tenantRecords : [];
+      state.teacher.tenantPage = pageSnapshot(t.tenantPage);
       state.teacher.deptOptions = Array.isArray(t.deptOptions) ? t.deptOptions : [];
       state.teacher.deptId = state.teacher.deptOptions.some((dept) => dept.deptId === t.deptId) ? t.deptId : '';
       state.teacher.deptLoaded = false;
@@ -430,6 +442,7 @@
       state.teacher.studentNameKeyword = typeof t.studentNameKeyword === 'string' ? t.studentNameKeyword : '';
       state.teacher.studentCodeKeyword = typeof t.studentCodeKeyword === 'string' ? t.studentCodeKeyword : '';
       state.teacher.studentPage = pageSnapshot(t.studentPage);
+      state.teacher.studentQueryPending = Boolean(t.studentQueryPending);
       state.teacher.activeStep = Number.isInteger(t.activeStep)
         ? boundedStep(t.activeStep, getTeacherReachableStep(state.teacher))
         : getTeacherReachableStep(state.teacher);
@@ -577,14 +590,11 @@
   }
 
   function normalizeEnv(env) {
-    return env === 'local' || env === 'dev' ? 'local' : 'online';
+    return userCard.normalizeEnv(env);
   }
 
   function normalizePort(value) {
-    const raw = String(value || '').trim();
-    if (!/^\d+$/.test(raw)) return DEFAULT_DEV_PORT;
-    const n = Number.parseInt(raw, 10);
-    return Number.isInteger(n) && n >= 1 && n <= 65535 ? String(n) : DEFAULT_DEV_PORT;
+    return userCard.normalizePort(value);
   }
 
   function buildRecentTeacherSelection(record = {}) {
@@ -597,6 +607,8 @@
       userId: record.userId,
       username: record.userName,
       account: record.account,
+      phone: record.phone,
+      roleName: record.roleName,
       tenantId: record.tenantId,
     });
     if (!selectedTenant.tenantId) throw new Error('最近登录记录缺少租户信息');
@@ -671,6 +683,7 @@
       state.mode = next;
       // 两种查询模式各自维护独立状态，切换时保留已选账号、分页和关联结果。
       updateModeUI();
+      if (next === 'teacher') resumeTeacherStudentQuery().catch((error) => setStatus(error.message, 'err'));
     };
     if (ns.ui?.transitionView) ns.ui.transitionView(update, 'quick');
     else update();
@@ -846,27 +859,84 @@
     el.appendChild(info);
   }
 
-  function actionButtons(meta, disabled) {
-    const attrs = [
-      'data-id="' + escapeHtml(meta.id || '') + '"',
-      'data-tenant-id="' + escapeHtml(meta.tenantId || '') + '"',
-      'data-tenant-name="' + escapeHtml(meta.tenantName || '') + '"',
-      'data-domain="' + escapeHtml(meta.domain || '') + '"',
-      'data-industry="' + escapeHtml(meta.industry || '') + '"',
-      'data-user-name="' + escapeHtml(meta.userName || '') + '"',
-      'data-role="' + escapeHtml(meta.role || 'teacher') + '"',
-      'data-env="' + escapeHtml(meta.env ? normalizeEnv(meta.env) : '') + '"',
-      'data-local-port="' + escapeHtml(meta.localPort ? normalizePort(meta.localPort) : '') + '"',
-    ].join(' ');
-    const unavailable = disabled || state.loadingLogin || state.adminTokenAvailable === false;
-    const suffix = unavailable ? ' disabled aria-disabled="true"' : '';
-    return '<div class="list-item-actions">' +
-      '<button class="action-btn quick-action-btn primary" type="button" data-action="open" ' + attrs + suffix + ' title="打开 AI 平台" aria-label="打开 AI 平台">' + icons.open + '</button>' +
-      '<button class="action-btn quick-action-btn" type="button" data-action="copy" ' + attrs + suffix + ' title="复制 token" aria-label="复制 token">' + icons.copy + '</button>' +
-      '<button class="action-btn quick-action-btn" type="button" data-action="student" ' + attrs + suffix + ' title="学生评价" aria-label="学生评价">' + icons.student + '</button>' +
-      '<button class="action-btn quick-action-btn" type="button" data-action="aiReview" ' + attrs + suffix + ' title="AI评价（前海港湾）" aria-label="AI评价（前海港湾）">' + icons.aiReview + '</button>' +
-      '<button class="action-btn quick-action-btn" type="button" data-action="teacher" ' + attrs + suffix + ' title="教师评价" aria-label="教师评价">' + icons.teacher + '</button>' +
-      '</div>';
+  function cardOptions(options) {
+    const meta = withKnownContact(options.meta || {});
+    const pending = pendingLoginAction;
+    const phone = tenant.resolveUserPhone({ phone: options.phone }, meta);
+    return Object.assign({ busy: state.loadingLogin, adminTokenAvailable: state.adminTokenAvailable }, options, {
+      pendingAction: pending && pending.id === meta.id && pending.tenantId === meta.tenantId && pending.role === (meta.role || 'teacher') ? pending.action : '',
+      phone,
+      meta: {
+        id: meta.id, tenantId: meta.tenantId, tenantName: meta.tenantName,
+        domain: meta.domain, industry: meta.industry, userName: meta.userName,
+        account: meta.account || '', phone,
+        roleName: meta.roleName || options.roleLabel || '',
+        role: meta.role || 'teacher', env: normalizeEnv(meta.env), localPort: normalizePort(meta.localPort),
+      },
+    });
+  }
+
+  function withKnownContact(meta) {
+    const tenantId = String(meta.tenantId || '');
+    const id = String(meta.loginId || meta.id || '');
+    const t = state.teacher;
+    const s = state.student;
+    const candidates = [t.selectedUser, s.selectedAccount, ...s.accountPage.records,
+      ...(s.regularAccountsByTenant[tenantId] || []),
+      ...(String(t.selectedTenant?.tenantId || '') === tenantId
+        ? t.userPage.records.map((record) => ({ ...record, tenantId })) : []),
+    ].filter((record) => record && id && tenantId && String(record.loginId || record.id || '') === id && String(record.tenantId || '') === tenantId);
+    return { ...meta, account: tenant.pickFirstString(meta.account, ...candidates.map((record) => record.account)), phone: tenant.resolveUserPhone(meta, ...candidates) };
+  }
+
+  async function completeUserContact(meta) {
+    const known = withKnownContact(meta);
+    if (known.phone || !(known.loginId || known.id) || !known.tenantId) return known;
+    const id = String(known.loginId || known.id);
+    const key = [sessionEpoch, known.tenantId, id, known.role || 'teacher'].join('|');
+    if (!contactRequests.has(key) && state.adminTokenAvailable !== true) return known;
+    if (!contactRequests.has(key)) {
+      contactRequests.set(key, (async () => {
+        // 按原租户和姓名缩小查询范围，最终只接受用户主键一致的记录。
+        for (let current = 1; current <= 5; current += 1) {
+          const response = known.role === 'student'
+            ? await request('FETCH_ACCOUNT_USERS', { current, size: 100, username: known.userName || known.username || '', tenantName: known.tenantName || '', accountType: 1 })
+            : await request('FETCH_USERS', { current, size: 100, tenantId: known.tenantId, keyword: known.userName || known.username || known.account || '' });
+          const page = pageFrom(response);
+          const match = page.records.find((record) => String(record.id || '') === id &&
+            ((!record.tenantId && known.role !== 'student') || String(record.tenantId || '') === String(known.tenantId)));
+          if (match) return { phone: tenant.resolveUserPhone(match), account: tenant.pickFirstString(match.account) };
+          const payload = response?.data ?? response?.result ?? response;
+          const pageSize = Number(payload?.size) || 100;
+          if (!page.records.length || (page.total > 0 ? current * pageSize >= page.total : page.records.length < pageSize)) break;
+        }
+        return {};
+      })().catch(() => { contactRequests.delete(key); return {}; }));
+    }
+    const contact = await contactRequests.get(key);
+    return { ...known, phone: tenant.resolveUserPhone(contact, known), account: known.account || contact.account || '' };
+  }
+
+  async function completeSelectedContacts() {
+    const epoch = sessionEpoch;
+    await Promise.all([['teacher', 'selectedUser'], ['student', 'selectedAccount']].map(async ([mode, field]) => {
+      const selected = state[mode][field];
+      if (!selected) return;
+      const contact = await completeUserContact({ ...selected, role: mode });
+      if (epoch === sessionEpoch && state[mode][field] === selected) Object.assign(selected, { phone: contact.phone, account: contact.account });
+    }));
+  }
+
+  function renderUserSummary(id, options) {
+    const container = $(id);
+    if (!container) return;
+    if (!options) {
+      userCard.closeMenu(container);
+      container.innerHTML = '';
+      delete container.dataset.cardSignature;
+      return;
+    }
+    userCard.render(container, cardOptions(Object.assign({ selected: true }, options)));
   }
 
   function extractTokenQuery(url) {
@@ -939,12 +1009,22 @@
   }
 
   async function copyToClipboard(value) {
-    try {
-      await navigator.clipboard.writeText(value);
-      return true;
-    } catch (_) {
-      return false;
+    if (globalThis.navigator?.clipboard?.writeText) {
+      try { await navigator.clipboard.writeText(value); return true; } catch (_) {}
     }
+    const previous = document.activeElement;
+    const field = document.createElement('textarea');
+    field.className = 'quick-user-clipboard';
+    field.value = value;
+    field.readOnly = true;
+    field.setAttribute('aria-label', '复制内容');
+    document.body.appendChild(field);
+    field.select();
+    let copied = false;
+    try { copied = document.execCommand('copy'); } catch (_) {}
+    field.remove();
+    if (previous?.isConnected) previous.focus();
+    return copied;
   }
 
   function buildStudentCredentialsText(student = {}, fallbackTenantName = '') {
@@ -999,17 +1079,27 @@
     return /^登录失败\s*[:：]/.test(message) ? message : '登录失败：' + message;
   }
 
+  function renderStudentAppSiteSummary() {
+    const input = $('studentAppSiteUrl');
+    const summary = $('studentAppSiteSummary');
+    if (!input || !summary) return;
+    summary.textContent = normalizeAppSiteUrl(input.value) || '请设置';
+    summary.title = input.value.trim();
+  }
+
   function validateStudentAppSiteInput(notify = false) {
     const input = $('studentAppSiteUrl');
     if (!input) return '';
     const raw = input.value.trim();
     const normalized = normalizeAppSiteUrl(raw);
     input.setAttribute('aria-invalid', String(!normalized));
+    renderStudentAppSiteSummary();
     if (normalized) {
       input.value = normalized;
       return normalized;
     }
     if (notify) {
+      if ($('studentAppSiteSettings')) $('studentAppSiteSettings').open = true;
       const message = raw ? 'APP 站点地址无效，请输入 HTTP(S) 地址' : '请输入 APP 站点地址';
       setActionStatus(message, 'error');
       setStatus(message, 'err');
@@ -1026,6 +1116,8 @@
       if (siteUrl) input.value = siteUrl;
     } catch (_) {}
     input.setAttribute('aria-invalid', String(!normalizeAppSiteUrl(input.value)));
+    renderStudentAppSiteSummary();
+    if (!normalizeAppSiteUrl(input.value) && $('studentAppSiteSettings')) $('studentAppSiteSettings').open = true;
   }
 
   async function performStudentAppLogin(student, button, row) {
@@ -1042,7 +1134,10 @@
       validateStudentAppSiteInput(false);
       setActionStatus(error.message, 'error');
       setStatus(error.message, 'err');
-      if (/站点地址/.test(error.message)) focusControl('studentAppSiteUrl');
+      if (/站点地址/.test(error.message)) {
+        if ($('studentAppSiteSettings')) $('studentAppSiteSettings').open = true;
+        focusControl('studentAppSiteUrl');
+      }
       return;
     }
 
@@ -1050,6 +1145,7 @@
     if (input) {
       input.value = payload.siteUrl;
       input.setAttribute('aria-invalid', 'false');
+      renderStudentAppSiteSummary();
     }
     const originalHtml = button.innerHTML;
     const originalAriaLabel = button.getAttribute('aria-label');
@@ -1064,6 +1160,9 @@
     try {
       const response = await messages.sendToBackground({ type: 'APP_LOGIN', payload });
       if (!response?.ok) throw new Error(response?.error || '登录失败');
+      if (epoch !== sessionEpoch) return;
+      setActionStatus('已登录学生 APP', 'success');
+      setStatus('已登录学生 APP', 'ok');
     } catch (error) {
       if (epoch !== sessionEpoch) return;
       const message = formatAppLoginError(error);
@@ -1084,10 +1183,11 @@
 
   // ── 教师查学生 ──
 
-  async function loadTenants() {
+  async function loadTenants(reset = true) {
     if (state.mode !== 'teacher') return;
     const t = state.teacher;
     const keyword = t.tenantKeyword.trim();
+    if (reset) t.tenantPage = resetPage();
     if (!keyword) {
       // 清空输入时也要使在途请求失效，避免旧租户结果回填到空搜索状态。
       t.tenantRequestId += 1;
@@ -1095,6 +1195,7 @@
       t.tenantRecords = [];
       setInlineStatus('tenantSearchStatus', '');
       clearList('tenantList', 'tenantEmpty', '请输入租户条件');
+      $('tenantPager')?.classList.add('hidden');
       renderTeacherShell();
       return;
     }
@@ -1102,13 +1203,16 @@
     t.loadingTenants = true;
     setInlineStatus('tenantSearchStatus', '正在搜索租户...');
     clearList('tenantList', 'tenantEmpty', '正在搜索租户...');
+    $('tenantPager')?.classList.add('hidden');
     renderTeacherShell();
     try {
       if (!(await hasAdminToken())) throw new Error('请先在「后台账号」获取后台 Token');
-      const response = await request('FETCH_TENANTS', { current: 1, size: 10, keyword });
+      const response = await request('FETCH_TENANTS', { current: t.tenantPage.current, size: t.tenantPage.size, keyword });
       if (requestId !== t.tenantRequestId) return;
       setInlineStatus('tenantSearchStatus', '');
-      renderTenantList(pageFrom(response).records || []);
+      const page = pageFrom(response);
+      t.tenantPage.total = page.total || 0;
+      renderTenantList(page.records || []);
     } catch (error) {
       if (requestId === t.tenantRequestId) {
         setInlineStatus('tenantSearchStatus', error.message, 'error');
@@ -1130,6 +1234,10 @@
     const list = $('tenantList');
     const empty = $('tenantEmpty');
     if (!list || !empty) return;
+    buildPagerUI($('tenantPager'), state.teacher.tenantPage, (current) => {
+      state.teacher.tenantPage.current = current;
+      loadTenants(false);
+    });
     if (!records.length) {
       list.innerHTML = '';
       list.classList.add('hidden');
@@ -1163,6 +1271,10 @@
 
   async function selectTeacherTenant(item) {
     const t = state.teacher;
+    if (t.selectedTenant?.tenantId === item.tenantId) {
+      navigateToStep('teacher', 1);
+      return;
+    }
     t.selectedTenant = item;
     t.activeStep = 1;
     t.userKeyword = '';
@@ -1313,6 +1425,7 @@
     const getEl = d.$ || $;
     const t = state.teacher;
     const list = getEl('userList');
+    list?.classList.add('quick-user-card-list');
     const empty = getEl('userEmpty');
     const normalized = (t.userPage.records || []).map(tenant.normalizeUser);
     if (!list || !empty) return;
@@ -1344,51 +1457,40 @@
       // 选中态不入签名：换选中项时所有行原样复用，只走下面的 sync 改 class。
       signature: (user) => [
         user.id, user.userName, user.account, user.phone, user.userId, user.roleName,
-        t.selectedTenant.tenantId, t.loadingSession,
+        t.selectedTenant.tenantId, t.selectedTenant.tenantName, t.selectedTenant.domain, t.selectedTenant.industry,
+        t.loadingSession, state.adminTokenAvailable,
       ],
       create: (user) => {
-        const env = 'online';
-        const localPort = DEFAULT_DEV_PORT;
-        const displayName = user.userName || '(未命名)';
-        const avatarText = Array.from(String(user.userName || user.account || '?').trim())[0] || '?';
-        const row = doc.createElement('div');
-        row.className = 'list-item quick-action-row quick-target-container quick-tenant-user-row';
-        row.dataset.env = env;
-        row.dataset.localPort = localPort;
-        row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="false"' + (t.loadingSession ? ' disabled' : '') + '>' +
-          '<span class="quick-user-avatar" aria-hidden="true">' + escapeHtml(avatarText.toUpperCase()) + '</span>' +
-          '<span class="list-item-content"><span class="list-item-title">' +
-          '<span class="quick-user-name">' + escapeHtml(displayName) + '</span>' +
-          (user.roleName ? '<span class="list-item-role">' + escapeHtml(user.roleName) + '</span>' : '') +
-          '</span><span class="list-item-meta">' + escapeHtml(user.account || user.phone || user.userId) + '</span></span></button>' +
-          '<div class="quick-user-toolbar">' +
-          actionTargetControls({
-            id: user.id,
-            tenantName: t.selectedTenant.tenantName,
-            userName: user.userName,
-          }, env, localPort) +
-          actionButtons({
+        const row = userCard.create(cardOptions({
+          className: 'quick-tenant-user-row',
+          name: user.userName,
+          account: user.account || user.userId,
+          phone: user.phone,
+          roleLabel: user.roleName,
+          selectable: true,
+          selectionDisabled: t.loadingSession,
+          disabled: t.loadingSession,
+          meta: {
             id: user.id,
             tenantId: t.selectedTenant.tenantId,
             tenantName: t.selectedTenant.tenantName,
             domain: t.selectedTenant.domain,
             industry: t.selectedTenant.industry,
             userName: user.userName,
+            account: user.account, phone: user.phone, roleName: user.roleName,
             role: 'teacher',
-            env,
-            localPort,
-          }, !user.id || t.loadingSession) +
-          '</div>';
+            env: 'online',
+            localPort: DEFAULT_DEV_PORT,
+          },
+        }), doc);
         if (!deps) {
           row.querySelector('.quick-row-select')?.addEventListener('click', () => selectTeacherUser(row.__item, row));
         }
-        syncActionTarget(row, env, localPort);
         return row;
       },
       sync: (row, user) => {
         const selected = t.selectedUser?.id === user.id;
-        row.classList.toggle('active', selected);
-        row.querySelector('.quick-row-select')?.setAttribute('aria-pressed', String(selected));
+        userCard.setSelected(row, selected);
       },
     });
     const pagerEl = getEl('userPager');
@@ -1406,8 +1508,8 @@
     const t = state.teacher;
     if (t.loadingSession || !t.selectedTenant || !user.id) return false;
     if (t.selectedUser?.id === user.id) {
-      changeTeacherUser();
-      return false;
+      navigateToStep('teacher', t.selectedTeacher ? 3 : 2);
+      return true;
     }
     clearTeacherSession();
     const requestId = ++t.sessionRequestId;
@@ -1425,7 +1527,9 @@
         id: user.id,
         userId: user.userId,
         userName: user.userName,
-        account: user.account || user.phone || '',
+        account: user.account || '',
+        phone: user.phone || '',
+        roleName: user.roleName || '',
         tenantId: t.selectedTenant.tenantId,
         tenantName: t.selectedTenant.tenantName,
         domain: t.selectedTenant.domain,
@@ -1438,13 +1542,25 @@
       t.activeStep = 2;
       t.sessionError = '';
       t.loadingSession = false;
-      t.teacherNameKeyword = String(t.selectedUser.userName || '').trim();
-      t.teacherAccountKeyword = '';
+      t.teacherAccountKeyword = String(t.selectedUser.account || t.selectedUser.phone || '').trim();
+      t.teacherNameKeyword = t.teacherAccountKeyword ? '' : String(t.selectedUser.userName || '').trim();
       $('teacherNameSearch').value = t.teacherNameKeyword;
-      $('teacherAccountSearch').value = '';
+      $('teacherAccountSearch').value = t.teacherAccountKeyword;
       renderTeacherUsers();
+      const teacherRequestId = t.teacherRequestId + 1;
       await loadTeachers(true);
-      focusControl('teacherNameSearch');
+      // 账号在两个系统中的格式可能不同，精确查询无结果时再按姓名找候选人。
+      if (requestId !== t.sessionRequestId) return false;
+      if (teacherRequestId !== t.teacherRequestId) return true;
+      if (!t.teacherError && !t.teacherPage.total && t.teacherAccountKeyword && t.selectedUser.userName) {
+        t.teacherNameKeyword = t.selectedUser.userName.trim();
+        t.teacherAccountKeyword = '';
+        $('teacherNameSearch').value = t.teacherNameKeyword;
+        $('teacherAccountSearch').value = '';
+        await loadTeachers(true);
+      }
+      if (requestId !== t.sessionRequestId) return false;
+      focusControl(t.activeStep === 3 ? 'studentNameSearch' : 'teacherNameSearch');
       return true;
     } catch (error) {
       if (requestId === t.sessionRequestId) {
@@ -1460,14 +1576,15 @@
     }
   }
 
-  async function loadTeachers(reset) {
+  async function loadTeachers(reset, preserveSelection = false) {
     if (state.mode !== 'teacher') return;
     const t = state.teacher;
     if (!t.selectedUser || !t.selectedUser.aiToken) {
       renderTeacherShell();
       return;
     }
-    if (reset) {
+    const previousTeacher = preserveSelection ? t.selectedTeacher : null;
+    if (reset && !preserveSelection) {
       t.teacherPage = resetPage();
       t.selectedTeacher = null;
       t.studentPage = resetPage();
@@ -1495,18 +1612,34 @@
       const page = pageFrom(response);
       t.teacherPage.total = page.total || 0;
       t.teacherPage.records = (page.records || []).map(tenant.normalizeTeacher);
-      const firstMatchedTeacher = reset && (t.teacherNameKeyword || t.teacherAccountKeyword)
-        ? t.teacherPage.records[0]
-        : null;
+      if (previousTeacher && t.selectedTeacher?.id === previousTeacher.id) {
+        const updated = t.teacherPage.records.find((item) => item.id === previousTeacher.id);
+        if (updated) t.selectedTeacher = Object.assign({}, previousTeacher, updated);
+        else {
+          t.selectedTeacher = null;
+          t.studentRequestId += 1;
+          t.teacherDetailRequestId += 1;
+          t.loadingStudents = false;
+          t.loadingDuties = false;
+          t.studentPage = resetPage();
+          resetTeacherScope(t);
+          t.activeStep = 2;
+          t.teacherError = '当前结果中已找不到原教师，请重新选择';
+        }
+      }
+      const matchedTeacher = reset && !preserveSelection
+        ? findUniqueTeacherMatch(t.teacherPage, t.selectedUser) : null;
       renderTeachers();
-      if (firstMatchedTeacher) {
+      if (matchedTeacher) {
         t.loadingTeachers = false;
-        await selectTeacher(firstMatchedTeacher);
+        await selectTeacher(matchedTeacher);
       }
     } catch (error) {
       if (requestId === t.teacherRequestId) {
-        t.teacherPage.records = [];
-        t.teacherPage.total = 0;
+        if (!preserveSelection) {
+          t.teacherPage.records = [];
+          t.teacherPage.total = 0;
+        }
         t.teacherError = error.message;
         clearList('teacherList', 'teacherEmpty', error.message);
         setStatus(error.message, 'err');
@@ -1575,10 +1708,14 @@
     const t = state.teacher;
     if (!t.selectedUser) return;
     if (t.selectedTeacher?.id === teacherItem.id) {
-      changeTeacherIdentity();
+      navigateToStep('teacher', 3);
       return;
     }
     t.selectedTeacher = teacherItem;
+    // 先作废上一位教师的学生请求，连同分页扫描失败的回调一起隔离。
+    t.studentRequestId += 1;
+    t.loadingStudents = false;
+    t.studentError = '';
     t.activeStep = 3;
     t.studentPage = resetPage();
     resetTeacherScope(t);
@@ -1612,7 +1749,8 @@
       if (requestId !== t.teacherDetailRequestId) return;
       const idNameMap = tenant.buildDeptIdNameMap(treeResponse);
       const classOptions = tenant.extractClassOptions(treeResponse);
-      teacherItem.detailDuties = tenant.extractTeachDuties(detail, idNameMap);
+      teacherItem.detailDutyOptions = tenant.extractTeachDutyOptions(detail, idNameMap);
+      teacherItem.detailDuties = [...new Set(teacherItem.detailDutyOptions.map((item) => item.label))];
       const extractedClassIds = tenant.extractTeacherClassIds(detail);
       // 教师教学职务可以挂在班级、年级或学段；若详情给的是上级部门，
       // 将班级树中所有下级班级展开，确保“教师查学生”不漏掉下级班级。
@@ -1631,6 +1769,7 @@
     } catch (error) {
       if (requestId === t.teacherDetailRequestId) {
         teacherItem.detailDuties = [];
+        teacherItem.detailDutyOptions = [];
         t.studentError = error.message;
         renderTeacherStudentArea(error.message);
         setStatus(error.message, 'err');
@@ -1685,16 +1824,62 @@
     return { stale: false, records: [...deduped.values()] };
   }
 
+  function getTeacherDutyOptions() {
+    const t = state.teacher;
+    if (Array.isArray(t.selectedTeacher?.detailDutyOptions)) return t.selectedTeacher.detailDutyOptions;
+    // 旧查询记录只保存标签文字，用已保存的完整班级路径补齐对应标识。
+    const byLabel = new Map();
+    for (const row of t.classScopes) {
+      const path = String(row.classLabel || '').split(' / ');
+      const targets = [
+        [row.classId, path.join('')],
+        [row.gradeId, path.slice(0, -1).join('')],
+        [row.stageId, path.slice(0, -2).join('')],
+      ];
+      if (row.subject) targets.push(['', '']);
+      for (const [deptId, name] of targets) {
+        if (deptId && !name) continue;
+        const label = row.subject && name ? row.subject + ' · ' + name : row.subject || name;
+        if (label) byLabel.set(label, { label, subject: row.subject, deptId });
+      }
+    }
+    return (t.selectedTeacher?.detailDuties || []).map((label) => byLabel.get(label) || { label });
+  }
+
+  function getTeacherDutyFilter(duty) {
+    const rows = state.teacher.classScopes.filter((row) => !duty.subject || row.subject === duty.subject);
+    if (!rows.length) return null;
+    if (!duty.deptId) return duty.subject && duty.label === duty.subject ? normalizeScopeFilter({ subject: duty.subject }) : null;
+    const row = rows.find((item) => [item.classId, item.gradeId, item.stageId].includes(duty.deptId));
+    if (!row) return null;
+    return normalizeScopeFilter({
+      subject: duty.subject,
+      stageId: row.stageId,
+      gradeId: duty.deptId === row.stageId ? '' : row.gradeId,
+      classId: duty.deptId === row.classId ? row.classId : '',
+    });
+  }
+
+  function toggleTeacherDutyFilter(duty) {
+    if (state.mode !== 'teacher' || state.loadingLogin || state.teacher.loadingDuties) return;
+    const filter = getTeacherDutyFilter(duty);
+    if (!filter) return;
+    const selected = JSON.stringify(filter) === JSON.stringify(state.teacher.scopeFilter);
+    return applyTeacherScopeFilter(selected ? normalizeScopeFilter(null) : filter);
+  }
+
   function renderTeacherDuties() {
     const el = $('teacherDuties');
     const t = state.teacher;
     persistStateSoon();
     if (!el || !t.selectedTeacher) return;
-    const duties = t.selectedTeacher.detailDuties || [];
+    const duties = getTeacherDutyOptions().map((item) => Object.assign({}, item, { filter: getTeacherDutyFilter(item) }));
     if (!shouldRender('teacher-duties', {
       selectedId: t.selectedTeacher.id,
       loading: t.loadingDuties,
       duties,
+      filter: t.scopeFilter,
+      disabled: state.loadingLogin,
     })) return;
     if (t.loadingDuties) {
       el.textContent = '正在读取教学班级…';
@@ -1706,7 +1891,29 @@
       el.classList.add('hidden');
       return;
     }
-    el.innerHTML = duties.map((item) => '<span class="teacher-badge teach">' + escapeHtml(item) + '</span>').join('');
+    if (el.firstChild?.nodeType === 3) el.textContent = '';
+    reconcileList(el, duties, {
+      key: (item) => JSON.stringify([item.label, item.subject, item.deptId]),
+      signature: (item) => [item.label, Boolean(item.filter)],
+      create: (item) => {
+        const badge = document.createElement(item.filter ? 'button' : 'span');
+        badge.className = 'teacher-badge teach' + (item.filter ? ' teacher-duty-filter' : '');
+        badge.textContent = item.label;
+        if (item.filter) {
+          badge.type = 'button';
+          badge.setAttribute('aria-controls', 'studentList');
+          badge.addEventListener('click', () => toggleTeacherDutyFilter(badge.__item));
+        }
+        return badge;
+      },
+      sync: (badge, item) => {
+        if (!item.filter) return;
+        const selected = JSON.stringify(item.filter) === JSON.stringify(t.scopeFilter);
+        badge.setAttribute('aria-pressed', String(selected));
+        badge.title = (selected ? '取消筛选：' : '筛选学生：') + item.label;
+        badge.disabled = state.loadingLogin;
+      },
+    });
     el.classList.remove('hidden');
   }
 
@@ -1775,12 +1982,17 @@
 
   // 四级筛选联动：只改动当前层级，失效的下级选择由 resolveTeacherScope 清空。
   function setTeacherScopeFilter(key, value) {
+    return applyTeacherScopeFilter(Object.assign({}, state.teacher.scopeFilter, { [key]: String(value || '') }));
+  }
+
+  function applyTeacherScopeFilter(filter) {
     const t = state.teacher;
     if (!Array.isArray(t.classScopes) || !t.classScopes.length) return;
-    const next = normalizeScopeFilter(Object.assign({}, t.scopeFilter, { [key]: String(value || '') }));
+    const next = tenant.resolveTeacherScope(t.classScopes, normalizeScopeFilter(filter)).filter;
     if (JSON.stringify(next) === JSON.stringify(t.scopeFilter)) return;
-    t.scopeFilter = tenant.resolveTeacherScope(t.classScopes, next).filter;
+    t.scopeFilter = next;
     renderTeacherScopeFilters();
+    renderTeacherDuties();
     persistStateSoon();
     return loadTeacherStudents(true, t.teacherDetailRequestId);
   }
@@ -1789,6 +2001,7 @@
     if (state.mode !== 'teacher') return;
     const t = state.teacher;
     if (!t.selectedUser || !t.selectedTeacher || !t.classIds.length) return;
+    t.studentQueryPending = false;
     if (reset) {
       t.studentPage = resetPage();
       t.studentError = '';
@@ -1861,15 +2074,15 @@
       }
       renderTeacherStudents();
     } catch (error) {
-      if (requestId === t.studentRequestId) {
+      if (requestId === t.studentRequestId && detailRequestId === t.teacherDetailRequestId) {
         t.studentPage.records = [];
         t.studentPage.total = 0;
         t.studentError = error.message;
         renderTeacherStudentArea(error.message);
       }
-      if (requestId === t.studentRequestId) setStatus(error.message, 'err');
+      if (requestId === t.studentRequestId && detailRequestId === t.teacherDetailRequestId) setStatus(error.message, 'err');
     } finally {
-      if (requestId === t.studentRequestId) t.loadingStudents = false;
+      if (requestId === t.studentRequestId && detailRequestId === t.teacherDetailRequestId) t.loadingStudents = false;
     }
   }
 
@@ -1882,9 +2095,10 @@
       section.classList.add('hidden');
       return;
     }
-    section.classList.remove('hidden');
+    section.classList.toggle('hidden', state.teacher.activeStep !== 3);
     $('studentSectionTitle').textContent = (state.teacher.selectedTeacher.name || '') + ' 的相关学生';
     if (message) {
+      if ($('studentResultCount')) $('studentResultCount').textContent = '';
       if (list) {
         list.innerHTML = '';
         list.classList.add('hidden');
@@ -1905,6 +2119,12 @@
     const list = $('studentList');
     const empty = $('studentEmpty');
     if (!list || !empty) return;
+    if ($('studentResultCount')) $('studentResultCount').textContent = t.selectedTeacher && !t.studentError && !t.studentQueryPending
+      ? '共 ' + (Number(t.studentPage.total) || 0) + ' 人' : '';
+    if (t.studentQueryPending) {
+      renderTeacherStudentArea(t.sessionError || '正在恢复学生列表...');
+      return;
+    }
     if (!t.studentPage.records.length) {
       list.innerHTML = '';
       list.classList.add('hidden');
@@ -1935,7 +2155,7 @@
           '</div></div><div class="student-item-actions">' + status +
           '<button class="action-btn quick-action-btn student-app-login-btn" type="button" title="一键登录 APP" aria-label="一键登录 APP"' +
           (!(student.account || student.code) || !t.selectedTenant?.tenantId ? ' disabled aria-disabled="true"' : '') + '>' +
-          icons.login + '</button>' +
+          icons.login + '<span>登录 APP</span></button>' +
           '<button class="action-btn quick-action-btn student-copy-btn" type="button" title="复制学生登录信息" aria-label="复制学生登录信息">' +
           icons.copy + '</button></div>';
         row.querySelector('.student-app-login-btn')?.addEventListener('click', (event) => {
@@ -1993,39 +2213,14 @@
     });
     toggleRegion('teacherUserSummary', userReady && activeStep !== 1);
     toggleRegion('teacherUserStepBody', tenantReady && activeStep === 1);
-    if (userReady) {
-      $('teacherUserSummaryTitle').textContent = t.selectedUser.userName || '(未命名账号)';
-      $('teacherUserSummaryMeta').textContent = [t.selectedUser.account, t.selectedUser.tenantName].filter(Boolean).join(' / ');
-      const env = normalizeEnv(t.selectedUser.env);
-      const localPort = normalizePort(t.selectedUser.localPort);
-      const summaryActions = $('teacherUserSummaryActions');
-      const summaryChanged = setHtmlIfChanged(summaryActions, {
-        id: t.selectedUser.id,
-        tenantId: t.selectedUser.tenantId,
-        env,
-        localPort,
-      }, '<div class="quick-summary-target">' +
-        actionTargetControls({
-          id: t.selectedUser.id,
-          tenantName: t.selectedUser.tenantName,
-          userName: t.selectedUser.userName,
-        }, env, localPort) +
-        '</div>' +
-        actionButtons({
-          id: t.selectedUser.id,
-          tenantId: t.selectedUser.tenantId,
-          tenantName: t.selectedUser.tenantName,
-          domain: t.selectedUser.domain,
-          industry: t.selectedUser.industry,
-          userName: t.selectedUser.userName,
-          role: 'teacher',
-          env,
-          localPort,
-        }, false));
-      if (summaryChanged) syncActionTarget(summaryActions, env, localPort);
-    } else {
-      setHtmlIfChanged($('teacherUserSummaryActions'), 'empty', '');
-    }
+    renderUserSummary('teacherUserSummary', userReady ? {
+      name: t.selectedUser.userName,
+      details: t.selectedUser.tenantName,
+      detailsSeparator: ' / ',
+      roleLabel: t.selectedUser.roleName,
+      meta: t.selectedUser,
+      extraActions: [{ action: 'changeTeacherUser', label: '更换账号', icon: 'change', placement: 'toolbar', id: 'changeTeacherUserBtn' }],
+    } : null);
     setInlineStatus(
       'teacherSessionStatus',
       t.loadingSession ? '正在建立 AI 会话...' : (t.sessionError || t.userError || (t.loadingUsers ? '正在加载租户用户...' : '')),
@@ -2040,12 +2235,17 @@
     });
     toggleRegion('teacherIdentitySummary', teacherReady && activeStep !== 2);
     toggleRegion('teacherIdentityStepBody', userReady && activeStep === 2);
+    setInlineStatus('teacherMatchStatus', t.teacherError || (t.teacherPage.total > 1
+      ? '找到 ' + t.teacherPage.total + ' 位教师，请核对账号后选择'
+      : (t.teacherPage.records.length && !teacherReady ? '请核对教师账号后选择' : '')), t.teacherError ? 'error' : '');
     if (teacherReady) {
+      $('studentSectionTitle').textContent = (t.selectedTeacher.name || '') + ' 的相关学生';
       $('teacherIdentitySummaryTitle').textContent = t.selectedTeacher.name || '(未命名教师)';
       $('teacherIdentitySummaryMeta').textContent = [t.selectedTeacher.account, t.selectedTeacher.statusText].filter(Boolean).join(' / ');
     }
 
     toggleRegion('studentSection', teacherReady && activeStep === 3);
+    $('studentSection')?.classList.toggle('is-current', activeStep === 3);
     renderTeacherUsers();
     renderTeachers();
     renderTeacherDuties();
@@ -2108,6 +2308,7 @@
   function renderAccountUsers() {
     const s = state.student;
     const list = $('accountList');
+    list?.classList.add('quick-user-card-list');
     const empty = $('accountEmpty');
     if (!list || !empty) return;
     if (!s.accountPage.records.length) {
@@ -2126,48 +2327,32 @@
     reconcileList(list, s.accountPage.records, {
       key: (account) => account.id,
       signature: (account) => [
-        account.id, account.loginId, account.username, account.account, account.tenantId,
+        account.id, account.loginId, account.username, account.account, account.phone, account.tenantId,
         account.tenantName, account.type, account.accountType, account.env, account.localPort,
-        s.loadingSession,
+        s.loadingSession, state.adminTokenAvailable,
       ],
       create: (account) => {
-        const env = normalizeEnv(account.env);
-        const localPort = normalizePort(account.localPort);
-        const row = document.createElement('div');
-        row.className = 'list-item quick-action-row quick-target-container';
-        row.dataset.env = env;
-        row.dataset.localPort = localPort;
         const typeText = account.type === '1' || account.accountType === '1' || /学生|student/i.test(String(account.type || '')) ? '学生' : '账号';
-        row.innerHTML = '<button class="quick-row-select" type="button" aria-pressed="false"' + (s.loadingSession ? ' disabled' : '') + '><span class="list-item-content"><span class="list-item-title">' +
-          escapeHtml(account.username || '(未命名)') + '<span class="list-item-role">' + typeText + '</span></span>' +
-          '<span class="list-item-meta">' + escapeHtml(account.account || '无账号') + ' · ' +
-          escapeHtml(account.tenantName || account.tenantId || '未知租户') + '</span></span></button>' +
-          '<div class="quick-user-toolbar">' +
-          actionTargetControls({
+        const row = userCard.create(cardOptions({
+          name: account.username,
+          account: account.account || '无账号',
+          details: account.tenantName || account.tenantId || '未知租户',
+          roleLabel: typeText,
+          selectable: true,
+          selectionDisabled: s.loadingSession,
+          disabled: s.loadingSession,
+          meta: Object.assign({}, account, {
             id: account.loginId,
-            tenantName: account.tenantName,
-            userName: account.username,
-          }, env, localPort, !account.loginId || !account.tenantId || s.loadingSession) +
-          actionButtons({
-            id: account.loginId,
-            tenantId: account.tenantId,
-            tenantName: account.tenantName,
-            domain: account.domain,
-            industry: account.industry,
             userName: account.username,
             role: 'student',
-            env,
-            localPort,
-          }, !account.loginId || !account.tenantId || s.loadingSession) +
-          '</div>';
+          }),
+        }));
         row.querySelector('.quick-row-select')?.addEventListener('click', () => selectStudentAccount(row.__item, row));
-        syncActionTarget(row, env, localPort);
         return row;
       },
       sync: (row, account) => {
         const selected = s.selectedAccount?.id === account.id;
-        row.classList.toggle('active', selected);
-        row.querySelector('.quick-row-select')?.setAttribute('aria-pressed', String(selected));
+        userCard.setSelected(row, selected);
       },
     });
     buildPagerUI($('accountPager'), s.accountPage, (page) => {
@@ -2235,6 +2420,7 @@
     const title = $('lookupTeacherResultTitle');
     const count = $('lookupTeacherResultCount');
     const list = $('lookupTeacherList');
+    list?.classList.add('quick-user-card-list');
     const empty = $('lookupTeacherEmpty');
     if (head) head.classList.add('hidden');
     if (title) title.textContent = '';
@@ -2403,39 +2589,18 @@
     });
     toggleRegion('studentAccountSummary', accountReady && activeStep !== 0);
     toggleRegion('studentAccountStepBody', activeStep === 0);
-    if (accountReady) {
-      $('studentAccountSummaryTitle').textContent = s.selectedAccount.username || '(未命名学生)';
-      $('studentAccountSummaryMeta').textContent = [s.selectedAccount.account, s.selectedAccount.tenantName].filter(Boolean).join(' / ');
-      const env = normalizeEnv(s.selectedAccount.env);
-      const localPort = normalizePort(s.selectedAccount.localPort);
-      const summaryActions = $('studentAccountSummaryActions');
-      const summaryChanged = setHtmlIfChanged(summaryActions, {
+    renderUserSummary('studentAccountSummary', accountReady ? {
+      name: s.selectedAccount.username,
+      details: s.selectedAccount.tenantName,
+      detailsSeparator: ' / ',
+      roleLabel: '学生',
+      meta: Object.assign({}, s.selectedAccount, {
         id: s.selectedAccount.loginId,
-        tenantId: s.selectedAccount.tenantId,
-        env,
-        localPort,
-      }, '<div class="quick-summary-target">' +
-        actionTargetControls({
-          id: s.selectedAccount.loginId,
-          tenantName: s.selectedAccount.tenantName,
-          userName: s.selectedAccount.username,
-        }, env, localPort, !s.selectedAccount.loginId || !s.selectedAccount.tenantId) +
-        '</div>' +
-        actionButtons({
-          id: s.selectedAccount.loginId,
-          tenantId: s.selectedAccount.tenantId,
-          tenantName: s.selectedAccount.tenantName,
-          domain: s.selectedAccount.domain,
-          industry: s.selectedAccount.industry,
-          userName: s.selectedAccount.username,
-          role: 'student',
-          env,
-          localPort,
-        }, !s.selectedAccount.loginId || !s.selectedAccount.tenantId));
-      if (summaryChanged) syncActionTarget(summaryActions, env, localPort);
-    } else {
-      setHtmlIfChanged($('studentAccountSummaryActions'), 'empty', '');
-    }
+        userName: s.selectedAccount.username,
+        role: 'student',
+      }),
+      extraActions: [{ action: 'changeStudentAccount', label: '更换账号', icon: 'change', placement: 'toolbar', id: 'changeStudentAccountBtn' }],
+    } : null);
     setInlineStatus(
       'accountSessionStatus',
       s.loadingSession ? '正在建立 AI 会话...' : (!accountReady && s.relationError ? s.relationError : ''),
@@ -2709,8 +2874,9 @@
       const matched = cached || resolveRelationAccount(relation, accounts, account.tenantId);
       const result = Object.assign({}, relation, {
         loginId: matched?.loginId || '',
-        loginName: matched?.username || relation.name || '',
-        loginAccount: matched?.account || relation.account || '',
+        loginName: matched?.loginName || matched?.username || relation.name || '',
+        loginAccount: matched?.loginAccount || matched?.account || relation.account || '',
+        phone: tenant.resolveUserPhone(matched, relation),
         tenantId: account.tenantId,
         tenantName: account.tenantName,
         domain: session.origin,
@@ -2745,6 +2911,7 @@
     const title = $('lookupTeacherResultTitle');
     const count = $('lookupTeacherResultCount');
     const list = $('lookupTeacherList');
+    list?.classList.add('quick-user-card-list');
     const empty = $('lookupTeacherEmpty');
     if (!head || !title || !count || !list || !empty) return;
     head.classList.remove('hidden');
@@ -2775,45 +2942,26 @@
         key: (teacherItem, index) => teacherItem.loginId || teacherItem.tmbId || teacherItem.userId || `idx-${index}`,
         signature: (teacherItem) => [
           teacherItem.loginId, teacherItem.loginName, teacherItem.name, teacherItem.loginAccount,
-          teacherItem.account, teacherItem.userId, teacherItem.tenantId, teacherItem.tenantName,
+          teacherItem.account, teacherItem.phone, teacherItem.userId, teacherItem.tenantId, teacherItem.tenantName,
           teacherItem.domain, teacherItem.industry, teacherItem.env, teacherItem.localPort,
-          teacherItem.duties, note,
+          teacherItem.duties, note, state.adminTokenAvailable,
         ],
         create: (teacherItem) => {
-          const env = normalizeEnv(teacherItem.env);
-          const localPort = normalizePort(teacherItem.localPort);
-          const row = document.createElement('div');
-          row.className = 'list-item lookup-teacher-item quick-action-row quick-target-container' + (!teacherItem.loginId ? ' relation-disabled' : '');
-          row.dataset.env = env;
-          row.dataset.localPort = localPort;
-          const duties = teacherItem.duties?.length
-            ? '<div class="lookup-teacher-duties">' + teacherItem.duties.map((duty) => '<span class="teacher-badge teach">' + escapeHtml(duty) + '</span>').join('') + '</div>'
-            : '';
           const accountText = teacherItem.loginAccount || teacherItem.account || teacherItem.userId || '未解析后台账号';
-          const unresolvedText = !teacherItem.loginId ? ' · 关系字段未反查到后台账号' : '';
-          row.innerHTML = '<div class="list-item-content"><div class="list-item-title">' +
-            escapeHtml(teacherItem.loginName || teacherItem.name || '(未命名)') + '</div><div class="list-item-meta">' +
-            escapeHtml(accountText) + unresolvedText + (note ? ' · ' + escapeHtml(note) : '') + '</div>' + duties + '</div>' +
-            '<div class="quick-user-toolbar">' +
-            actionTargetControls({
+          const unresolvedText = !teacherItem.loginId ? '关系字段未反查到后台账号' : '';
+          return userCard.create(cardOptions({
+            className: 'lookup-teacher-item' + (!teacherItem.loginId ? ' relation-disabled' : ''),
+            name: teacherItem.loginName || teacherItem.name,
+            account: accountText,
+            duties: teacherItem.duties,
+            note: [unresolvedText, note].filter(Boolean).join(' · '),
+            meta: Object.assign({}, teacherItem, {
               id: teacherItem.loginId,
-              tenantName: teacherItem.tenantName,
-              userName: teacherItem.loginName || teacherItem.name,
-            }, env, localPort, !teacherItem.loginId) +
-            actionButtons({
-              id: teacherItem.loginId,
-              tenantId: teacherItem.tenantId,
-              tenantName: teacherItem.tenantName,
-              domain: teacherItem.domain,
-              industry: teacherItem.industry,
+              account: teacherItem.loginAccount || teacherItem.account,
               userName: teacherItem.loginName || teacherItem.name,
               role: 'teacher',
-              env,
-              localPort,
-            }, !teacherItem.loginId) +
-            '</div>';
-          syncActionTarget(row, env, localPort);
-          return row;
+            }),
+          }));
         },
       });
       if (!teachers.length) {
@@ -2916,28 +3064,35 @@
       domain: button.dataset.domain || '',
       industry: button.dataset.industry || '',
       userName: button.dataset.userName || '',
+      account: button.dataset.account || '',
+      phone: button.dataset.phone || '',
+      roleName: button.dataset.roleName || '',
       role: button.dataset.role || 'teacher',
       env: normalizeEnv(button.dataset.env),
       localPort: normalizePort(button.dataset.localPort),
     };
   }
 
+  function restoreLoginButtons(disabledStates) {
+    disabledStates.forEach((wasDisabled, button) => { button.disabled = wasDisabled; });
+    // 在途查询可能新增卡片，恢复时也处理这些新节点，并保留各自的禁用原因。
+    document.querySelectorAll('.quick-user-card').forEach((card) => userCard.setBusy(card, false));
+  }
+
   async function performLoginAction(meta, action, button, row) {
     const epoch = sessionEpoch;
     if (!meta.id || !meta.tenantId || state.loadingLogin) return;
-    const allActions = [...document.querySelectorAll('#quickLoginBody .action-btn, #quickLoginBody .recent-action-btn')];
+    const allActions = [...document.querySelectorAll('#quickLoginBody .action-btn, #recentList .action-btn, .quick-user-extra-btn')];
     const disabledStates = new Map(allActions.map((item) => [item, item.disabled]));
-    const original = button?.innerHTML || '';
-    const originalLabel = button?.getAttribute('aria-label') || '';
     let refreshRecentAfter = false;
     state.loadingLogin = true;
+    pendingLoginAction = { id: meta.id, tenantId: meta.tenantId, role: meta.role || 'teacher', action };
     allActions.forEach((item) => { item.disabled = true; });
+    document.querySelectorAll('.quick-user-card').forEach((card) => userCard.setBusy(card, true));
     if (row) row.setAttribute('aria-busy', 'true');
-    if (button) {
-      button.innerHTML = '<span class="spinner"></span>';
-      button.setAttribute('aria-label', '处理中');
-    }
-    setActionStatus(action === 'copy' ? '正在获取 Token query...' : '正在获取登录链接...');
+    userCard.setActionPending(button);
+    const appName = { open: 'AI 平台', student: '学生评价', teacher: '教师评价', aiReview: 'AI评价（前海港湾）' }[action];
+    setActionStatus(action === 'copy' ? '正在复制 Token…' : '正在打开 ' + appName + '…');
     try {
       const env = meta.env === 'local' ? 'local' : 'online';
       const savedLocalPort = meta.localPort ? normalizePort(meta.localPort) : '';
@@ -2955,7 +3110,7 @@
         const copied = await copyToClipboard(query);
         if (epoch !== sessionEpoch) return;
         if (!copied) throw new Error('复制失败，请检查浏览器剪贴板权限');
-        setActionStatus('已复制 Token query', 'success');
+        setActionStatus('已复制 Token', 'success');
         setStatus('已复制 ?token=…', 'ok');
         return;
       }
@@ -2976,9 +3131,10 @@
       const opened = await request('OPEN_LOGIN_URL', { url: target, reuseCurrentTab: action === 'open' });
       const successText = action === 'open'
         ? (opened?.reused ? '已在当前标签页打开 AI 平台' : '已打开 AI 平台')
-        : '已打开评价页面';
-      setActionStatus(successText, 'success');
-      setStatus(successText, 'ok');
+        : '已打开 ' + appName;
+      const feedback = successText + ' · ' + meta.userName + ' · ' + (env === 'local' ? '本地 :' + targetLocalPort : '线上');
+      setActionStatus(feedback, 'success');
+      setStatus(feedback, 'ok');
       refreshRecentAfter = true;
     } catch (error) {
       if (epoch !== sessionEpoch) return;
@@ -2987,13 +3143,13 @@
     } finally {
       if (epoch !== sessionEpoch) return;
       state.loadingLogin = false;
-      disabledStates.forEach((wasDisabled, item) => { item.disabled = wasDisabled; });
+      pendingLoginAction = null;
+      restoreLoginButtons(disabledStates);
       if (row) row.removeAttribute('aria-busy');
-      if (button) {
-        button.innerHTML = original;
-        if (originalLabel) button.setAttribute('aria-label', originalLabel);
+      if (refreshRecentAfter) {
+        if (['student', 'aiReview', 'teacher'].includes(action)) userCard.closeMenu(row);
+        await renderRecent();
       }
-      if (refreshRecentAfter) await renderRecent();
     }
   }
 
@@ -3003,51 +3159,17 @@
     event.preventDefault();
     event.stopPropagation();
     if (button.disabled) return;
+    if (!userCard.validateTarget(button.closest('.quick-user-card'))) return;
     performLoginAction(
       actionMeta(button),
       button.dataset.action,
       button,
-      button.closest('.quick-stage-summary, .list-item'),
+      button.closest('.quick-user-card'),
     );
   }
 
-  function actionTargetControls(meta, env, localPort, disabled = false) {
-    const online = env === 'online';
-    const unavailable = disabled ? ' disabled aria-disabled="true"' : '';
-    const label = (meta.tenantName || '未知租户') + ' ' + (meta.userName || meta.id || '') + ' 登录环境';
-    return '<div class="quick-recent-env-switcher quick-user-env-switcher" role="group" aria-label="' + escapeHtml(label) + '">' +
-        '<button class="quick-recent-env-btn quick-user-env-btn' + (online ? ' active' : '') + '" type="button" data-target-env="online" aria-pressed="' + online + '"' + unavailable + '>线上</button>' +
-        '<button class="quick-recent-env-btn quick-user-env-btn' + (!online ? ' active' : '') + '" type="button" data-target-env="local" aria-pressed="' + (!online) + '"' + unavailable + '>本地</button>' +
-      '</div>' +
-      '<label class="quick-recent-port-field quick-user-port-field' + (online ? ' hidden' : '') + '"><span>端口</span>' +
-        '<input class="quick-recent-port quick-user-port" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="本地端口" value="' + escapeHtml(localPort) + '"' + unavailable + '>' +
-      '</label>';
-  }
-
   function syncActionTarget(container, env, localPort, syncInput = true) {
-    if (!container) return;
-    const normalizedEnv = normalizeEnv(env);
-    const normalizedPort = normalizePort(localPort);
-    container.dataset.env = normalizedEnv;
-    container.dataset.localPort = normalizedPort;
-    container.querySelectorAll('.quick-user-env-btn').forEach((button) => {
-      const active = button.dataset.targetEnv === normalizedEnv;
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', String(active));
-    });
-    container.querySelector('.quick-user-port-field')?.classList.toggle('hidden', normalizedEnv !== 'local');
-    const input = container.querySelector('.quick-user-port');
-    if (input && syncInput) input.value = normalizedPort;
-    container.querySelectorAll('.action-btn').forEach((button) => {
-      button.dataset.env = normalizedEnv;
-      button.dataset.localPort = normalizedPort;
-      const baseLabel = button.dataset.baseLabel || button.getAttribute('aria-label') || '';
-      button.dataset.baseLabel = baseLabel;
-      const targetLabel = normalizedEnv === 'local' ? '本地端口 ' + normalizedPort : '线上';
-      const label = baseLabel + '（' + targetLabel + '）';
-      button.title = label;
-      button.setAttribute('aria-label', label);
-    });
+    userCard.syncTarget(container, env, localPort, syncInput);
   }
 
   function persistSummaryTarget(container) {
@@ -3072,15 +3194,34 @@
     }
   }
 
-  function onActionTargetClick(event) {
-    const envButton = event.target.closest('.quick-user-env-btn');
-    if (!envButton) return;
+  function onActionTargetChange(event) {
+    const select = event.target.closest('.quick-user-env-select');
+    if (!select) return;
+    event.stopPropagation();
+    const container = select.closest('.quick-target-container');
+    const input = container?.querySelector('.quick-user-port');
+    syncActionTarget(container, select.value, input?.value || container?.dataset.localPort);
+    persistSummaryTarget(container);
+  }
+
+  async function onUserPhoneCopy(event) {
+    const button = event.target.closest('.quick-user-phone-copy');
+    if (!button || button.disabled) return;
     event.preventDefault();
     event.stopPropagation();
-    const container = envButton.closest('.quick-target-container');
-    const input = container?.querySelector('.quick-user-port');
-    syncActionTarget(container, envButton.dataset.targetEnv, input?.value || container?.dataset.localPort);
-    persistSummaryTarget(container);
+    const phone = button.dataset.phone || '';
+    if (!phone) return;
+    button.disabled = true;
+    const copied = await copyToClipboard(phone);
+    button.disabled = false;
+    userCard.markPhoneCopied(button, copied);
+    if (copied) {
+      setActionStatus('已复制手机号 ' + phone, 'success');
+      setStatus('已复制手机号 ' + phone, 'ok');
+    } else {
+      setActionStatus('复制失败，请检查剪贴板权限', 'error');
+      setStatus('复制手机号失败', 'err');
+    }
   }
 
   function onActionTargetPortInput(event, commit) {
@@ -3088,62 +3229,16 @@
     if (!input) return;
     const container = input.closest('.quick-target-container');
     if (!container) return;
-    syncActionTarget(container, container.dataset.env, input.value, commit);
-    if (commit) persistSummaryTarget(container);
-  }
-
-  function recentTargetControls(record, env, localPort) {
-    const online = env === 'online';
-    const label = (record.tenantName || '未知租户') + ' ' + (record.userName || record.id || '') + ' 登录环境';
-    return '<div class="quick-recent-target-controls">' +
-      '<div class="quick-recent-env-switcher" role="group" aria-label="' + escapeHtml(label) + '">' +
-        '<button class="quick-recent-env-btn' + (online ? ' active' : '') + '" type="button" data-recent-env="online" aria-pressed="' + online + '">线上</button>' +
-        '<button class="quick-recent-env-btn' + (!online ? ' active' : '') + '" type="button" data-recent-env="local" aria-pressed="' + (!online) + '">本地</button>' +
-      '</div>' +
-      '<label class="quick-recent-port-field' + (online ? ' hidden' : '') + '"><span>端口</span>' +
-        '<input class="quick-recent-port" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" aria-label="本地端口" value="' + escapeHtml(localPort) + '">' +
-      '</label>' +
-    '</div>';
-  }
-
-  function syncRecentRowTarget(row, env, localPort, syncInput = true) {
-    if (!row) return;
-    const normalizedEnv = normalizeEnv(env);
-    const normalizedPort = normalizePort(localPort);
-    row.dataset.env = normalizedEnv;
-    row.dataset.localPort = normalizedPort;
-    row.querySelectorAll('.quick-recent-env-btn').forEach((button) => {
-      const active = button.dataset.recentEnv === normalizedEnv;
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', String(active));
-    });
-    row.querySelector('.quick-recent-port-field')?.classList.toggle('hidden', normalizedEnv !== 'local');
-    const input = row.querySelector('.quick-recent-port');
-    if (input && syncInput) input.value = normalizedPort;
-    row.querySelectorAll('.recent-action-btn').forEach((button) => {
-      button.dataset.env = normalizedEnv;
-      button.dataset.localPort = normalizedPort;
-      const baseLabel = button.dataset.baseLabel || button.getAttribute('aria-label') || '';
-      const targetLabel = normalizedEnv === 'local' ? '本地端口 ' + normalizedPort : '线上';
-      const label = button.dataset.action === 'delete' || button.dataset.action === 'apply'
-        ? baseLabel
-        : baseLabel + '（' + targetLabel + '）';
-      button.title = label;
-      button.setAttribute('aria-label', label);
-    });
-  }
-
-  function onRecentPortInput(event, commit) {
-    const input = event.target.closest('.quick-recent-port');
-    if (!input) return;
-    const row = input.closest('.quick-recent-row');
-    if (!row) return;
-    syncRecentRowTarget(row, row.dataset.env, input.value, commit);
+    event.stopPropagation();
+    syncActionTarget(container, container.dataset.env, input.value, false);
+    if (commit && userCard.validateTarget(container)) persistSummaryTarget(container);
   }
 
   async function renderRecent() {
     const epoch = sessionEpoch;
+    const renderId = ++recentRenderId;
     const list = $('recentList');
+    list?.classList.add('quick-user-card-list');
     const count = $('quickRecentCount');
     if (!list) return;
     list.setAttribute('aria-busy', 'true');
@@ -3152,13 +3247,15 @@
     try {
       const response = await request('GET_QUICK_LOGIN_RECENT');
       records = Array.isArray(response.records) ? response.records : (Array.isArray(response) ? response : []);
+      records = await Promise.all(records.slice(0, 10).map(completeUserContact));
     } catch (error) {
-      if (epoch !== sessionEpoch) return;
+      if (epoch !== sessionEpoch || renderId !== recentRenderId) return;
       list.innerHTML = '<div class="recent-empty">' + escapeHtml(error.message || '最近登录读取失败') + '</div>';
       if (count) count.textContent = '读取失败';
       list.removeAttribute('aria-busy');
       return;
     }
+    if (epoch !== sessionEpoch || renderId !== recentRenderId) return;
     list.innerHTML = '';
     const allRecords = records.slice(0, 10);
     records = allRecords.filter((record) => {
@@ -3183,30 +3280,22 @@
     }
     const shown = state.recentExpanded ? records : records.slice(0, DEFAULT_RECENT_VISIBLE);
     shown.forEach((record) => {
-      const env = normalizeEnv(record.env);
-      const localPort = normalizePort(record.localPort);
-      const row = document.createElement('div');
-      row.className = 'recent-item quick-recent-row';
-      row.dataset.env = env;
-      row.dataset.localPort = localPort;
-      row.innerHTML = '<div class="recent-item-info"><div class="recent-item-text"><span class="recent-role-badge">' +
-        (record.role === 'student' ? '学生' : '教师') + '</span>' +
-        escapeHtml(record.tenantName || '(未知租户)') + ' · ' + escapeHtml(record.userName || record.id) +
-        '</div><div class="recent-item-time">' + escapeHtml(record.at ? new Date(record.at).toLocaleString() : '') + '</div></div>' +
-        '<div class="recent-item-actions quick-recent-actions-main">' +
-        recentActionButton('open', record, env, localPort, '打开 AI 平台') +
-        recentActionButton('copy', record, env, localPort, '复制 token') +
-        recentActionButton('student', record, env, localPort, '学生评价') +
-        recentActionButton('aiReview', record, env, localPort, 'AI评价（前海港湾）') +
-        recentActionButton('teacher', record, env, localPort, '教师评价') +
-        '</div>' +
-        recentTargetControls(record, env, localPort) +
-        '<div class="recent-item-actions quick-recent-actions-aux">' +
-        recentActionButton('apply', record, env, localPort, '应用到教师查学生') +
-        recentActionButton('delete', record, env, localPort, '删除记录', true) +
-        '</div>';
+      const row = userCard.create(cardOptions({
+        className: 'quick-recent-row',
+        name: record.userName || record.id,
+        details: record.account ? '' : record.tenantName || '(未知租户)',
+        roleLabel: record.role === 'student' ? '学生' : '教师',
+        time: record.at ? new Date(record.at).toLocaleString() : '',
+        meta: record,
+        extraActions: [
+          {
+            action: 'apply', label: '应用', icon: 'apply', ariaLabel: '应用到教师查学生',
+            disabled: !record.id || !record.tenantId || record.role !== 'teacher' || state.adminTokenAvailable === false,
+          },
+          { action: 'delete', label: '删除', icon: 'delete', ariaLabel: '删除记录', danger: true, disabled: !record.id || !record.tenantId },
+        ],
+      }));
       list.appendChild(row);
-      syncRecentRowTarget(row, env, localPort);
     });
     if (records.length > DEFAULT_RECENT_VISIBLE) {
       const more = document.createElement('button');
@@ -3223,29 +3312,6 @@
     list.removeAttribute('aria-busy');
   }
 
-  function recentActionButton(action, record, env, localPort, title, danger) {
-    const attrs = [
-      'data-action="' + action + '"',
-      'data-base-label="' + escapeHtml(title) + '"',
-      'data-id="' + escapeHtml(record.id || '') + '"',
-      'data-tenant-id="' + escapeHtml(record.tenantId || '') + '"',
-      'data-tenant-name="' + escapeHtml(record.tenantName || '') + '"',
-      'data-domain="' + escapeHtml(record.domain || '') + '"',
-      'data-industry="' + escapeHtml(record.industry || '') + '"',
-      'data-user-name="' + escapeHtml(record.userName || '') + '"',
-      'data-role="' + escapeHtml(record.role || 'teacher') + '"',
-      'data-env="' + env + '"',
-      'data-local-port="' + escapeHtml(localPort) + '"',
-    ].join(' ');
-    const disabledForRole = action === 'apply' && record.role !== 'teacher';
-    const unavailable = !record.id || !record.tenantId || state.loadingLogin || disabledForRole ||
-      (action !== 'delete' && state.adminTokenAvailable === false);
-    const disabled = unavailable ? ' disabled aria-disabled="true"' : '';
-    const primary = action === 'open' ? ' quick-recent-action-primary' : '';
-    const apply = action === 'apply' ? ' quick-recent-action-apply' : '';
-    return '<button class="recent-action-btn quick-recent-action' + primary + apply + (danger ? ' danger' : '') + '" type="button" ' + attrs + disabled + ' title="' + escapeHtml(title) + '" aria-label="' + escapeHtml(title) + '">' + icons[action === 'aiReview' ? 'student' : action] + '</button>';
-  }
-
   async function applyRecentToTeacherLookup(meta, button, row) {
     const epoch = sessionEpoch;
     let selection;
@@ -3259,12 +3325,13 @@
     if (state.loadingLogin) return;
 
     switchMode('teacher');
-    const allActions = [...document.querySelectorAll('#quickLoginBody .action-btn, #quickLoginBody .recent-action-btn')];
+    const allActions = [...document.querySelectorAll('#quickLoginBody .action-btn, #recentList .action-btn, .quick-user-extra-btn')];
     const disabledStates = new Map(allActions.map((item) => [item, item.disabled]));
     const original = button?.innerHTML || '';
     const originalLabel = button?.getAttribute('aria-label') || '';
     state.loadingLogin = true;
     allActions.forEach((item) => { item.disabled = true; });
+    document.querySelectorAll('.quick-user-card').forEach((card) => userCard.setBusy(card, true));
     row?.setAttribute('aria-busy', 'true');
     if (button) {
       button.disabled = true;
@@ -3311,6 +3378,11 @@
       if (epoch !== sessionEpoch) return;
       if (!selected) throw new Error(t.sessionError || '最近登录账号应用失败');
       if (!t.selectedTeacher) {
+        if (t.teacherPage.records.length && !t.teacherError) {
+          setActionStatus('账号已应用，请核对并选择教师', '');
+          setStatus('账号已应用，请核对并选择教师', '');
+          return;
+        }
         throw new Error(t.teacherError || '未找到与该账号对应的 AI 教师');
       }
       if (t.studentError) throw new Error(t.studentError);
@@ -3323,7 +3395,7 @@
     } finally {
       if (epoch !== sessionEpoch) return;
       state.loadingLogin = false;
-      disabledStates.forEach((wasDisabled, item) => { item.disabled = wasDisabled; });
+      restoreLoginButtons(disabledStates);
       row?.removeAttribute('aria-busy');
       if (button) {
         button.classList.remove('is-loading');
@@ -3335,30 +3407,23 @@
     }
   }
 
-  async function onRecentClick(event) {
-    const envButton = event.target.closest('.quick-recent-env-btn');
-    if (envButton) {
-      event.preventDefault();
-      event.stopPropagation();
-      const row = envButton.closest('.quick-recent-row');
-      const input = row?.querySelector('.quick-recent-port');
-      syncRecentRowTarget(row, envButton.dataset.recentEnv, input?.value || row?.dataset.localPort);
-      return;
-    }
-
-    const button = event.target.closest('.recent-action-btn');
+  async function onUserCardExtraClick(event) {
+    const button = event.target.closest('.quick-user-extra-btn');
     if (!button) return;
     event.preventDefault();
     event.stopPropagation();
     if (state.loadingLogin || button.disabled) return;
+    userCard.closeMenu(button.closest('.quick-user-card'));
+    const action = button.dataset.cardAction;
+    if (action === 'changeTeacherUser') return changeTeacherUser();
+    if (action === 'changeStudentAccount') return changeStudentAccount();
     const meta = actionMeta(button);
-    const action = button.dataset.action;
     if (action === 'apply') {
-      await applyRecentToTeacherLookup(meta, button, button.closest('.recent-item'));
+      await applyRecentToTeacherLookup(meta, button, button.closest('.quick-user-card'));
       return;
     }
     if (action === 'delete') {
-      const row = button.closest('.recent-item');
+      const row = button.closest('.quick-user-card');
       row?.setAttribute('aria-busy', 'true');
       button.disabled = true;
       setActionStatus('正在删除最近登录记录...');
@@ -3379,7 +3444,6 @@
       }
       return;
     }
-    await performLoginAction(meta, action, button, button.closest('.recent-item'));
   }
 
   // ── 事件绑定 / 初始化 ──
@@ -3415,6 +3479,8 @@
       t.tenantRequestId += 1;
       t.loadingTenants = false;
       t.tenantRecords = [];
+      t.tenantPage = resetPage();
+      $('tenantPager')?.classList.add('hidden');
       if (t.selectedTenant) {
         t.selectedTenant = null;
         t.userPage = resetPage();
@@ -3494,6 +3560,7 @@
       const t = state.teacher;
       t.studentRequestId += 1;
       t.loadingStudents = false;
+      t.studentQueryPending = true;
       t.studentPage = resetPage();
       renderTeacherStudentArea('等待搜索...');
     };
@@ -3514,7 +3581,7 @@
       scheduleTeacherStudentSearch();
     });
     $('teacherRefreshBtn')?.addEventListener('click', () => {
-      if (state.mode === 'teacher') loadTeachers(true);
+      if (state.mode === 'teacher') loadTeachers(true, true);
     });
     $('studentScopeToggle')?.addEventListener('click', () => {
       if (state.mode === 'teacher') toggleTeacherScopeFilters();
@@ -3531,7 +3598,9 @@
       });
     });
     $('studentRefreshBtn')?.addEventListener('click', () => {
-      if (state.mode === 'teacher') loadTeacherStudents(true, state.teacher.teacherDetailRequestId);
+      if (state.mode !== 'teacher' || !state.teacher.selectedTeacher) return;
+      if (!state.teacher.classIds.length) loadTeacherRelations(state.teacher.selectedTeacher);
+      else loadTeacherStudents(true, state.teacher.teacherDetailRequestId);
     });
 
     const field = $('accountSearchField');
@@ -3563,9 +3632,7 @@
       scheduleAccountSearch();
     });
     $('changeTeacherTenantBtn')?.addEventListener('click', changeTeacherTenant);
-    $('changeTeacherUserBtn')?.addEventListener('click', changeTeacherUser);
     $('changeTeacherIdentityBtn')?.addEventListener('click', changeTeacherIdentity);
-    $('changeStudentAccountBtn')?.addEventListener('click', changeStudentAccount);
     $('changeRelationSelectionBtn')?.addEventListener('click', changeRelationSelection);
     $('studentRelationRefreshBtn')?.addEventListener('click', () => {
       if (state.mode === 'student') refreshStudentRelation();
@@ -3589,13 +3656,16 @@
       renderStudentRelationShell();
     });
     $('studentAppSiteUrl')?.addEventListener('change', () => validateStudentAppSiteInput(true));
-    $('quickLoginBody')?.addEventListener('click', onActionClick);
-    $('quickLoginBody')?.addEventListener('click', onActionTargetClick);
-    $('quickLoginBody')?.addEventListener('input', (event) => onActionTargetPortInput(event, false));
-    $('quickLoginBody')?.addEventListener('change', (event) => onActionTargetPortInput(event, true));
-    $('recentList')?.addEventListener('click', onRecentClick);
-    $('recentList')?.addEventListener('input', (event) => onRecentPortInput(event, false));
-    $('recentList')?.addEventListener('change', (event) => onRecentPortInput(event, true));
+    $('studentAppSiteUrl')?.addEventListener('input', renderStudentAppSiteSummary);
+    // 最近登录会被工作台移到独立页面，两处入口使用同一组卡片事件。
+    for (const id of ['quickLoginBody', 'recentList']) {
+      $(id)?.addEventListener('click', onActionClick);
+      $(id)?.addEventListener('click', onUserPhoneCopy);
+      $(id)?.addEventListener('change', onActionTargetChange);
+      $(id)?.addEventListener('click', onUserCardExtraClick);
+      $(id)?.addEventListener('input', (event) => onActionTargetPortInput(event, false));
+      $(id)?.addEventListener('change', (event) => onActionTargetPortInput(event, true));
+    }
     $('quickHistoryRoleFilter')?.addEventListener('change', (event) => {
       state.recentRoleFilter = event.target.value || '';
       state.recentExpanded = false;
@@ -3611,6 +3681,8 @@
 
   async function resetForAdminSession(session, tokenAvailable = null) {
     sessionEpoch += 1;
+    contactRequests.clear();
+    pendingLoginAction = null;
     adminSessionId = session?.id || '';
     activationPromise = null;
     clearTimeout(persistenceTimer);
@@ -3683,6 +3755,7 @@
     restoreFormValues();
     updateModeUI();
     await hasAdminToken();
+    await completeSelectedContacts();
     if (!state.teacher.selectedTenant && state.teacher.tenantKeyword) {
       renderTenantList(state.teacher.tenantRecords);
     }
@@ -3692,12 +3765,21 @@
     await renderRecent();
   }
 
+  async function resumeTeacherStudentQuery() {
+    const t = state.teacher;
+    if (!t.studentQueryPending || state.mode !== 'teacher' || !t.selectedTeacher || !t.selectedUser?.aiToken) return;
+    if (!t.classIds.length) return loadTeacherRelations(t.selectedTeacher);
+    return loadTeacherStudents(false, t.teacherDetailRequestId);
+  }
+
   function activate() {
     if (activationPromise) return activationPromise;
     activationPromise = (async () => {
       await hasAdminToken();
       if (state.teacher.selectedTenant && !state.teacher.deptLoaded) await loadTeacherDepartments();
       await rehydratePersistedSessions();
+      await resumeTeacherStudentQuery();
+      await completeSelectedContacts();
       renderTeacherShell();
       renderTeacherStudents();
       renderStudentShell();
@@ -3730,12 +3812,21 @@
       createPersistedState,
       getStudentReachableStep,
       getTeacherReachableStep,
+      findUniqueTeacherMatch,
       normalizeAppSiteUrl,
+      bindEvents,
+      renderTeacherShell,
       renderTeacherUsers,
+      renderStudentShell,
+      renderRelationTeachers,
+      renderRecent,
       loadTeacherDepartments,
+      loadTenants,
       selectTeacherDepartment,
       selectTeacherTenant,
+      selectTeacherUser,
       selectTeacher,
+      loadTeachers,
       loadTeacherUsers,
       loadTeacherStudents,
       setTeacherScopeFilter,

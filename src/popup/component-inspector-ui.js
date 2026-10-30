@@ -94,9 +94,10 @@
     const needsHostUpdate = host.connected && host.needsInstall;
     const updateFailed = !!host.updateError;
     const hostReady = host.connected && !needsHostUpdate && !updateFailed;
-    const ready = hostReady && host.editorAvailable;
+    const copyMode = settings.clickAction === 'copy';
+    const ready = hostReady && (copyMode || host.editorAvailable);
     const running = state.enabled ?? status === 'on';
-    const nextTarget = !hostReady ? 'componentHostSection' : !host.editorAvailable ? 'componentEditorSection' : '';
+    const nextTarget = !hostReady ? 'componentHostSection' : !copyMode && !host.editorAvailable ? 'componentEditorSection' : '';
     // 仅在缺少的设置发生变化时展开，保留用户手动收起、展开的选择。
     if (nextTarget !== setupTarget) {
       if (setupTarget) $(setupTarget).open = false;
@@ -115,7 +116,7 @@
       label = needsHostUpdate || updateFailed ? '待更新' : '待设置'; tone = 'setup';
       hint = updateFailed ? '辅助程序更新失败，请检查连接重试。'
         : needsHostUpdate ? '重装一次辅助程序，即可启用自动更新。'
-        : !host.connected ? '先连接辅助程序，再选择编辑器。'
+        : !host.connected ? copyMode ? '先连接本机辅助程序。' : '先连接辅助程序，再选择编辑器。'
         : host.editor ? '编辑器已移动或删除，请重新选择。' : '选择编辑器后，即可开启。';
     } else if (!allowed) {
       label = '暂不可用'; tone = 'off';
@@ -152,7 +153,7 @@
     $('componentClearEditor').hidden = !host.editor;
     $('componentClearEditor').disabled = busy || !hostReady || !host.editor;
 
-    if (setupKind === 'connected') setupMessage(host.connected && !host.editorAvailable ? '辅助程序已连接，请选择编辑器。' : '', 'connected');
+    if (setupKind === 'connected') setupMessage(host.connected && !host.editorAvailable && !copyMode ? '辅助程序已连接，请选择编辑器。' : '', 'connected');
     $('componentHostSummary').textContent = updateFailed ? '更新失败' : needsHostUpdate ? '待更新' : host.connected ? '已连接' : '待连接';
     $('componentHostSummary').dataset.pending = String(!hostReady);
     $('componentHostStatus').textContent = host.connected ? host.updated ? '本机程序已连接 · 已自动更新' : '已连接，后续随扩展自动更新。' : host.error || '请先安装本机辅助程序，再检查连接。';
@@ -170,6 +171,11 @@
     for (const id of ['componentCopyInstall', 'componentDownloadInstall', 'componentCopyQuarantine', 'componentUninstallHost', 'componentConfirmUninstall', 'componentCancelUninstall', 'componentCheckHost', 'componentResetShortcuts', 'componentAddOrigin', 'componentOriginInput']) $(id).disabled = busy;
     $('componentUninstallHost').textContent = host.connected && host.capabilities?.includes('uninstall') ? '卸载' : '复制卸载命令';
     $('componentUninstallConfirm').hidden = !confirmingUninstall;
+
+    $('componentClickAction').value = copyMode ? 'copy' : 'open';
+    $('componentClickAction').disabled = busy || !!recording;
+    $('componentCopyLocationHint').hidden = !copyMode;
+    $('componentClickShortcutTitle').textContent = copyMode ? '复制源码位置' : '打开源码';
 
     for (const [field, id, labelId] of [['openShortcut', 'componentOpenShortcut', 'componentOpenShortcutLabel'], ['menuShortcut', 'componentMenuShortcut', 'componentMenuShortcutLabel']]) {
       const shortcut = policy.shortcutLabel(settings[field]);
@@ -303,6 +309,10 @@
       setupMessage('辅助程序已卸载，所有页面的组件定位已停止。编辑器设置已保留。');
     }));
     $('componentCopyInstall').addEventListener('click', () => action(() => copySetupCommand('install')));
+    $('componentClickAction').addEventListener('change', (event) => {
+      const clickAction = event.target.value;
+      action(() => saveSettings({ clickAction }));
+    });
     $('componentOpenShortcut').addEventListener('click', () => record('openShortcut'));
     $('componentMenuShortcut').addEventListener('click', () => record('menuShortcut'));
     $('componentResetShortcuts').addEventListener('click', () => action(() => saveSettings({ openShortcut: policy.DEFAULT_SHORTCUT, menuShortcut: policy.DEFAULT_SHORTCUT })));

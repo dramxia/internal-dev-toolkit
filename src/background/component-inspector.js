@@ -195,7 +195,7 @@
       if (location.origin === config.origin) globalThis.__IDT_COMPONENT_INSPECTOR__?.start(config);
       else globalThis.__IDT_COMPONENT_INSPECTOR__?.destroy();
       return globalThis.__IDT_COMPONENT_INSPECTOR__?.isRunning(config) === true;
-    }, args: [{ origin: state.origin, generation: state.generation, openShortcut: settings.openShortcut, menuShortcut: settings.menuShortcut }] });
+    }, args: [{ origin: state.origin, generation: state.generation, clickAction: settings.clickAction, openShortcut: settings.openShortcut, menuShortcut: settings.menuShortcut }] });
     if (!results.some((result) => result.frameId === (frameId ?? 0) && result.result === true)) throw new Error('定位脚本尚未启动，请等待页面加载完成后重试');
   }
 
@@ -212,7 +212,7 @@
     try {
       await stopRuntime(tabId);
       const host = await readyHost();
-      if (!host.editor || !host.editorAvailable) throw new Error('请先选择有效的编辑器');
+      if (settings.clickAction !== 'copy' && (!host.editor || !host.editorAvailable)) throw new Error('请先选择有效的编辑器');
       assertHostReady(host);
       let project = previous.project, frameworks = previous.frameworks;
       if (reuse) {
@@ -378,7 +378,7 @@
     return { snapshotId: id, components, rect: result.rect };
   }
 
-  async function openSnapshot(sender, payload) {
+  async function useSnapshot(sender, payload, action) {
     const tabId = sender.tab?.id;
     const state = await readState(tabId);
     const entry = snapshots.get(tabId)?.get(payload.snapshotId);
@@ -390,7 +390,7 @@
     try {
       assertHostReady(await readyHost());
       let result;
-      try { result = await nativeRequest('openSource', { origin: state.origin, projectId: state.project.id, source }); }
+      try { result = await nativeRequest(action, { origin: state.origin, projectId: state.project.id, source }); }
       catch (error) {
         if (!serviceChanged(error)) throw error;
         openingState = await lock(tabId, async () => {
@@ -408,11 +408,11 @@
         await assertTarget(tabId, state.origin, true);
         const latest = await readState(tabId);
         if (!latest.enabled || latest.status !== 'on' || latest.generation !== openingState.generation) throw new Error('当前页面的组件定位已停止');
-        result = await nativeRequest('openSource', { origin: state.origin, projectId: openingState.project.id, source: refreshedSource });
+        result = await nativeRequest(action, { origin: state.origin, projectId: openingState.project.id, source: refreshedSource });
       }
       snapshots.get(tabId)?.delete(payload.snapshotId);
       const latest = await readState(tabId);
-      if (latest.status === 'on' && latest.generation === openingState.generation) await writeState(tabId, { ...latest, lastOpened: result });
+      if (action === 'openSource' && latest.status === 'on' && latest.generation === openingState.generation) await writeState(tabId, { ...latest, lastOpened: result });
       return result;
     } catch (error) {
       const latest = await readState(tabId);
@@ -424,7 +424,10 @@
             await writeState(tabId, { ...current, status: 'recovering', generation: token(), error: '正在等待开发服务恢复，恢复后会自动启用定位。' });
           }
         });
-      } else if (latest.generation === openingState.generation && /编辑器|连接/.test(error.message)) await pause(tabId, error.message);
+      } else if (latest.generation === openingState.generation && /编辑器|连接/.test(error.message)) {
+        const settings = await policy.getSettings();
+        if (settings.clickAction !== 'copy' || /连接/.test(error.message)) await pause(tabId, error.message);
+      }
       throw error;
     }
   }
@@ -437,7 +440,8 @@
       return lock(tabId, () => restoreTab(tabId, sender, payload));
     }
     if (msg.type === 'COMPONENT_INSPECT') return inspect(sender, payload);
-    if (msg.type === 'COMPONENT_OPEN') return openSnapshot(sender, payload);
+    if (msg.type === 'COMPONENT_OPEN') return useSnapshot(sender, payload, 'openSource');
+    if (msg.type === 'COMPONENT_COPY') return useSnapshot(sender, payload, 'copySource');
     // 设置和系统窗口只接受扩展页面发起的操作。
     if (!sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('操作来源无效');
     switch (msg.type) {
@@ -485,7 +489,7 @@
       case 'COMPONENT_CLEAR_EDITOR': {
         assertHostReady(await readyHost());
         const result = await nativeRequest('clearEditor');
-        await pauseAll('请先选择编辑器，再启动当前页面');
+        if ((await policy.getSettings()).clickAction !== 'copy') await pauseAll('请先选择编辑器，再启动当前页面');
         return result;
       }
       case 'COMPONENT_SAVE_SETTINGS': {
@@ -493,12 +497,16 @@
         await chrome.storage.local.set({ [policy.SETTINGS_KEY]: settings });
         const all = await chrome.storage.session.get(null);
         for (const [key, state] of Object.entries(all)) {
-          if (!key.startsWith(policy.TAB_PREFIX) || state.status !== 'on') continue;
+          if (!key.startsWith(policy.TAB_PREFIX) || !['on', 'paused'].includes(state.status)) continue;
           const tabId = Number(key.slice(policy.TAB_PREFIX.length));
           await lock(tabId, async () => {
             const latest = await readState(tabId);
+            if (latest.status === 'paused' && latest.enabled && settings.clickAction === 'copy' && /编辑器/.test(latest.error || '')) {
+              await startTab(tabId, latest.origin, false); return;
+            }
             if (latest.status !== 'on') return;
             if (!policy.isAllowed(latest.origin, settings.origins)) await pause(tabId, '该开发地址已从允许列表移除');
+            else if (settings.clickAction !== 'copy' && !(await readyHost()).editorAvailable) await pause(tabId, '请先选择有效的编辑器');
             else await installRuntime(tabId, latest, settings).catch(() => {});
           });
         }

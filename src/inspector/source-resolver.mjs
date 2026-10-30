@@ -173,7 +173,8 @@ export async function resolveComponentSource(source, origin, scripts = []) {
   if (!source) return null;
   if (source.kind !== 'stack') {
     if (!source.file) return null;
-    return { file: sourcePath(source.file, origin), line: source.line || null, column: source.column || null, precision: source.line ? 'line' : 'file' };
+    const endLine = Number.isSafeInteger(source.endLine) && source.endLine > source.line ? source.endLine : null;
+    return { file: sourcePath(source.file, origin), line: source.line || null, column: source.column || null, ...(endLine ? { endLine } : {}), precision: source.line ? 'line' : 'file' };
   }
   const frames = parseStack(source.stack);
   for (const frame of frames.slice(0, 12)) {

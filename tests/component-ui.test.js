@@ -129,6 +129,24 @@ const read = (file) => fs.readFileSync(path.join(repo, file), 'utf8');
     await value('componentRetry').click(); await settle();
     assert.equal(await value('componentRefreshError').isHidden(), true);
 
+    // 左键操作可切换并保留选择，复制模式在辅助程序就绪后即可开启。
+    await value('componentClickAction').selectOption('copy'); await settle();
+    assert.equal(await page.evaluate(() => fixture.settings.clickAction), 'copy');
+    assert.equal(await value('componentClickShortcutTitle').textContent(), '复制源码位置');
+    await refresh(); assert.equal(await value('componentClickAction').inputValue(), 'copy');
+    await page.evaluate(() => { fixture.host.editorAvailable = false; fixture.host.editor = null; });
+    await refresh(); assert.equal(await value('componentToggle').isEnabled(), true);
+    assert.equal(await value('componentEditorSection').getAttribute('open'), null);
+    for (const width of [320, 380]) {
+      await page.setViewportSize({ width, height: 750 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+    fs.mkdirSync(path.join(repo, 'test-results'), { recursive: true });
+    await page.screenshot({ path: path.join(repo, 'test-results/component-copy-mode.png'), fullPage: true });
+    await value('componentClickAction').selectOption('open'); await settle();
+    assert.equal(await value('componentToggle').isDisabled(), true);
+    await value('componentChooseEditor').click(); await settle();
+
     // 不支持的按键保留原快捷键，继续录制有效组合后才保存。
     await page.locator('#componentShortcutSection > summary').click();
     await value('componentOpenShortcut').click();

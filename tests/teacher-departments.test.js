@@ -65,7 +65,7 @@ function harness() {
       ui: { toast() {} },
     },
   });
-  for (const file of ['src/common/tenant.js', 'src/popup/quick-login-ui.js']) {
+  for (const file of ['src/common/tenant.js', 'src/popup/user-card.js', 'src/popup/quick-login-ui.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), context, { filename: file });
   }
   return {

@@ -74,7 +74,7 @@ function harness() {
   for (const file of [
     'src/common/admin-login-history.js', 'src/common/token.js', 'src/common/tenant.js',
     'src/common/quick-login-state.js', 'src/background/api.js', 'src/background/tenant-api.js',
-    'src/background/index.js', 'src/popup/quick-login-ui.js',
+    'src/background/index.js', 'src/popup/user-card.js', 'src/popup/quick-login-ui.js',
   ]) load(file);
   return {
     storage, requests, responses, injections,

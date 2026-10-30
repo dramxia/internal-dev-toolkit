@@ -85,6 +85,7 @@ function collectSensitivePaths(value, path = 'state', found = []) {
 
   globalThis.InternalDevToolkit.tenant = {};
   globalThis.InternalDevToolkit.messages = {};
+  globalThis.InternalDevToolkit.userCard = require('../src/popup/user-card.js');
   const uiModulePath = require.resolve('../src/popup/quick-login-ui.js');
   delete require.cache[uiModulePath];
   const { createPersistedState, restorePersistedState, state } = require(uiModulePath);

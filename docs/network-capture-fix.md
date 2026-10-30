@@ -1,123 +1,91 @@
-# 网络请求捕获修复说明
+# 网络请求捕获实现与排查
 
-## 问题描述
+本文说明「接口 Mock」捕获页面请求的当前实现，以及列表为空时的检查顺序。
 
-DevTools Panel 中的"接口列表"一直为空，无法捕获到页面的网络请求。
+## 脚本运行位置
 
-## 根本原因
+内容脚本运行在 Chrome 扩展的隔离环境，负责接收和转发消息。页面自身发起的 `fetch`、`XMLHttpRequest` 由运行在页面主环境的 `src/content/mock-hook.js` 拦截。
 
-在 Chrome 扩展的 Manifest V3 中，**content script 运行在隔离上下文（isolated world）**，而页面的 JavaScript 代码运行在**主上下文（main world）**。
+面板激活或开启 Mock 总开关时，后台检查开关状态，再调用 `chrome.scripting.executeScript()` 注入 `mock-hook.js`。注入后，脚本会替换当前页面的请求函数，直至页面环境被刷新或导航重建。再次注入同一页面时，脚本内的标记会避免重复安装。
 
-原有代码在 content script 中直接修改 `window.fetch` 和 `window.XMLHttpRequest`，这只影响 content script 自己发起的请求，**无法拦截页面代码发起的真实网络请求**。
+## 调用流程
 
-## 解决方案
-
-将网络拦截代码通过 `<script>` 标签注入到页面的主上下文中，使其能够真正拦截页面的网络请求。
-
-### 架构改动
-
-```
-旧架构：
-Content Script (isolated world) → 修改 window.fetch/XHR → ❌ 无法拦截页面请求
-
-新架构：
-Content Script (isolated world)
-    ↓ 注入脚本
-Page Context (main world) → 修改 window.fetch/XHR → ✅ 成功拦截页面请求
-    ↓ postMessage
-Content Script → 接收请求记录 → 通知 DevTools Panel
+```text
+接口 Mock 面板
+  → SET_HOOK_ACTIVE / SET_MOCK_ENABLED
+  → 后台确认 Mock 总开关开启
+  → chrome.scripting.executeScript({ world: 'MAIN', files: ['mock-hook.js'] })
+  → 内容脚本向页面同步规则和激活状态
+  → 页面脚本拦截 fetch / XMLHttpRequest
+  → window.postMessage 上报 IDT_REQUEST_LOGGED
+  → 内容脚本合并接口记录并发送 REQUEST_LOGGED
+  → 面板读取和展示捕获列表
 ```
 
-### 通信机制
+后台注入代码位于 `src/background/index.js`：
 
-1. **Content Script → Page Context**: 通过 `window.postMessage` 传递 Mock 规则更新
-2. **Page Context → Content Script**: 通过 `window.postMessage` 传递请求记录
-3. **Content Script → DevTools Panel**: 通过 `chrome.runtime.sendMessage` 传递请求记录
+```javascript
+await chrome.scripting.executeScript({
+  target: { tabId, allFrames: true },
+  world: 'MAIN',
+  files: ['mock-hook.js'],
+});
+```
+
+内容脚本在页面加载时注册消息监听；页面请求拦截脚本由上述流程按需注入。页面刷新后，面板的导航处理会重新激活并触发注入，注入完成前已结束的请求需再次触发。
+
+## 规则与开关
+
+- `IDT_UPDATE_MOCK_RULES`：更新页面规则。
+- `IDT_SET_ACTIVE`：控制请求记录和上报。
+- `IDT_SET_MOCK_ENABLED`：控制总开关，关闭时停止拦截和记录。
+- `IDT_UPDATE_MONITOR_DISABLED`：更新禁监接口列表，命中的接口跳过记录。
+
+已注入脚本的 Mock 响应由总开关及规则配置控制；面板激活状态用于控制捕获和上报。保存规则后，后台先写入扩展存储，再通过 `APPLY_MOCK_RULES` 通知内容脚本，由内容脚本发送 `IDT_UPDATE_MOCK_RULES` 更新页面中的规则。
+
+捕获记录按“方法＋去掉查询参数和片段的地址”合并，最多保留 100 个接口条目；同一接口再次请求更新原条目。
 
 ## 测试步骤
 
-### 1. 重新加载扩展
+1. 执行 `npm run build`，重新加载扩展。
+2. 执行 `npm run test-server`，打开 `http://localhost:8080`。
+3. 重开开发者工具中的「接口 Mock」，确认总开关开启并等待注入完成。
+4. 点击测试页面的请求按钮，查看捕获列表及页面控制台。
+5. 选择捕获接口，开启接口拦截，切到「出参」，编辑 JSON 或点击「生成假数据」，再点击「保存」。
+6. 保持当前页面，再次发送请求，确认使用刚保存的假数据。
 
-1. 打开 Chrome 扩展管理页面：`chrome://extensions/`
-2. 找到"内部开发工具箱"扩展
-3. 点击"刷新"按钮
+页面控制台可出现以下日志：
 
-### 2. 打开目标页面
-
-访问配置的目标站点，例如：
-- https://gpt-admin-pre.hwzxs.com
-- http://localhost:3000
-
-### 3. 打开 DevTools
-
-1. 按 F12 打开 Chrome DevTools
-2. 切换到"接口 Mock"标签页
-3. 查看左侧"接口列表"区域
-
-### 4. 触发网络请求
-
-在页面中执行任何操作（登录、列表加载等），观察：
-- Console 中应该看到 `[Mock Interceptor] Hooks installed in page context`
-- DevTools Panel 的接口列表中应该实时出现捕获的请求
-- 每个请求显示：方法（GET/POST）、URL、时间戳
-
-### 5. 验证 Mock 功能
-
-1. 点击左侧列表中的某个请求
-2. 右侧显示请求详情和 Mock 配置界面
-3. 点击"一键生成假数据"
-4. 点击"保存 Mock 规则"
-5. 刷新页面，该接口应返回 Mock 数据
-
-## 技术细节
-
-### 注入方式
-
-```javascript
-function injectPageScript() {
-  const script = document.createElement('script');
-  script.textContent = `(${pageScriptCode.toString()})();`;
-  (document.head || document.documentElement).appendChild(script);
-  script.remove();
-}
+```text
+[Mock Interceptor - Page Context] Script started
+[Mock Interceptor - Page Context] fetch hooked
+[Mock Interceptor - Page Context] XMLHttpRequest hooked
+[Mock Interceptor - Page Context] Rules updated:
+[Mock Interceptor - Page Context] Active set to true
+[Mock Interceptor - Page Context] Recording request:
+[Mock Interceptor - Page Context] Mock response for
 ```
 
-### 消息通信
+XMLHttpRequest 命中出参规则时输出 `Mock response for XHR`。同一页面重复注入时输出 `Already installed, skip`。
 
-```javascript
-// Content Script → Page Context
-window.postMessage({
-  type: 'IDT_UPDATE_MOCK_RULES',
-  rules: mockRules,
-}, '*');
+当前保存提示仍含「刷新页面后生效」的旧文字。脚本已注入、总开关开启且规则消息送达时，新规则会直接用于后续请求。
 
-// Page Context → Content Script
-window.postMessage({
-  type: 'IDT_REQUEST_LOGGED',
-  record: { url, method, ... },
-}, '*');
-```
+## 捕获列表为空时
 
-## 常见问题
+1. 检查 Mock 总开关、面板激活状态及接口的禁监状态。
+2. 确认请求由当前页面的 fetch 或 XMLHttpRequest 发起，且在脚本就绪后再次触发。
+3. 检查 `manifest.json` 的 `content_scripts.matches` 与 `devtools_page` 配置，及后台注入是否报错。
+4. 扩展重载后出现发送消息错误或上下文失效提示时，关闭并重新打开开发者工具，再刷新被调试页面。
 
-### Q: 为什么不使用 chrome.scripting API？
+## 文件分工
 
-A: `chrome.scripting.executeScript` 的 `world: 'MAIN'` 选项虽然可以在主上下文执行代码，但无法持久化 hook，且需要在每次页面加载时重新注入。直接注入 `<script>` 标签更简单可靠。
+| 文件 | 作用 |
+|---|---|
+| `src/background/index.js` | 按需注入页面脚本、同步激活和总开关状态 |
+| `src/background/mock-handler.js` | 保存并推送规则 |
+| `src/content/mock-hook.js` | 拦截页面请求、按条件上报记录 |
+| `src/content/mock-interceptor.js` | 中转消息、合并和保存运行时记录 |
+| `devtools/panel.js` | 激活面板、编辑规则和展示数据 |
+| `scripts/build.js` | 复制 `mock-hook.js` 及开发者工具资源 |
 
-### Q: 如何确认代码运行在正确的上下文？
-
-A: 在 Console 中执行：
-```javascript
-// 页面上下文中应该能看到被修改的 fetch
-console.log(window.fetch.toString());
-```
-
-### Q: 如果还是看不到请求？
-
-1. 检查 Console 是否有错误
-2. 确认页面 URL 匹配 manifest.json 中的 `content_scripts.matches`
-3. 检查页面是否真的使用了 fetch/XHR（某些框架可能使用 Service Worker）
-
-## 修改文件
-
-- `src/content/mock-interceptor.js`: 重构网络拦截逻辑，将 hook 代码注入到页面上下文
+完整操作见 [Mock 使用指南](mock-feature-guide.md)，验证清单见 [快速测试指南](mock-test-guide.md)。

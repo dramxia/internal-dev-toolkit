@@ -20,6 +20,8 @@ const assert = require('node:assert/strict');
     assert.equal(missingMap.line, null, '未经映射的生成行号不能冒充源码行号');
     assert.equal(requests.length, 2, '源码读取应限制在当前开发地址');
     assert.deepEqual(await resolveComponentSource({ kind: 'source', file: '/src/App.vue' }, 'http://localhost:5173'), { file: '/src/App.vue', line: null, column: null, precision: 'file' });
+    assert.equal((await resolveComponentSource({ file: '/src/App.tsx', line: 10, endLine: 29 }, 'http://localhost:5173')).endLine, 29);
+    assert.equal((await resolveComponentSource({ file: '/src/App.tsx', line: 10, endLine: 9 }, 'http://localhost:5173')).endLine, undefined);
     console.log('component source map tests passed');
   } finally { global.fetch = originalFetch; }
 })().catch((error) => { console.error(error); process.exitCode = 1; });
