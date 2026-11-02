@@ -33,7 +33,7 @@ const repo = path.join(__dirname, '..');
       const root = document.getElementById('shadow-host').attachShadow({ mode: 'open' });
       root.innerHTML = '<button id="nested" style="position:fixed;left:250px;top:100px">Shadow 按钮</button>';
       root.querySelector('button').__reactFiber$fixture = { type: 'button', memoizedProps: {}, _debugOwner: child };
-      window.chrome = { runtime: { async sendMessage({ type, payload }) {
+      window.chrome = { runtime: { id: 'fixture-extension', async sendMessage({ type, payload }) {
         if (type === 'COMPONENT_INSPECT') {
           fixture.queries.push(payload);
           if (fixture.holdInspect) await new Promise((resolve) => { fixture.releaseInspect = resolve; });
@@ -246,6 +246,42 @@ const repo = path.join(__dirname, '..');
     await page.waitForFunction((count) => fixture.opened.length === count + 1, openedBefore);
     await page.keyboard.down('Shift'); await openMenu('Alt'); await page.keyboard.up('Shift');
     await page.keyboard.press('Escape'); await assertClean();
+
+    // 复制完成后继续按住快捷键移动鼠标，再松开按键，提示仍保留到原定时间。
+    await start(false, 'copy');
+    const toast = page.locator('[data-idt-component-overlay] .toast');
+    await page.keyboard.down('Meta'); await mouseClick(target);
+    await toast.waitFor();
+    await page.mouse.move(55, 305);
+    await page.waitForFunction(() => document.getElementById('outside').getAttribute('data-idt-component-target') === 'HOVER');
+    await page.keyboard.up('Meta');
+    assert.equal(await toast.isVisible(), true, '松开 Command 应保留复制结果');
+    assert.equal(await page.locator('[data-idt-component-target], [data-idt-component-state]').count(), 0, '高亮和鼠标状态照常恢复');
+    const businessClicks = await page.evaluate(() => fixture.businessClicks);
+    await page.locator('#outside').click();
+    assert.equal(await page.evaluate(() => fixture.businessClicks), businessClicks + 1, '提示显示期间普通网页点击照常响应');
+    await page.keyboard.down('Meta'); await page.keyboard.up('Meta');
+    assert.equal(await toast.isVisible(), true, '再次按下和松开快捷键应保留现有提示');
+    await toast.waitFor({ state: 'detached' }); await assertClean();
+
+    // 左键打开失败的提示也独立计时；窗口失焦后保留提示，Escape 仍可提前关闭。
+    await start();
+    await page.evaluate(() => { fixture.failOpen = true; });
+    await page.keyboard.down('Meta'); await mouseClick(target);
+    await toast.waitFor();
+    assert.match(await toast.textContent(), /编辑器暂时无法打开文件/);
+    await page.keyboard.up('Meta');
+    assert.equal(await toast.isVisible(), true, '松开 Command 应保留打开失败的提示');
+    await page.evaluate(() => window.dispatchEvent(new FocusEvent('blur')));
+    assert.equal(await toast.isVisible(), true, '窗口失焦应保留提示');
+    await page.keyboard.press('Escape'); await assertClean();
+    await page.evaluate(() => { fixture.failOpen = false; });
+
+    // 路由重置仍完整清理提示及计时器。
+    await start(false, 'copy');
+    await page.keyboard.down('Meta'); await mouseClick(target); await page.keyboard.up('Meta');
+    await toast.waitFor();
+    await page.evaluate(() => __IDT_COMPONENT_INSPECTOR__.resetInteraction()); await assertClean();
     await start();
     const nested = page.locator('#shadow-host #nested');
     await nested.hover(); await page.keyboard.down('Meta');

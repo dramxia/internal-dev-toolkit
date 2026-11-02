@@ -2774,8 +2774,11 @@ IDT_COMPONENT_SETUP
     $('componentUninstallHost').textContent = host.connected && host.capabilities?.includes('uninstall') ? '卸载' : '复制卸载命令';
     $('componentUninstallConfirm').hidden = !confirmingUninstall;
 
-    $('componentClickAction').value = copyMode ? 'copy' : 'open';
-    $('componentClickAction').disabled = busy || !!recording;
+    for (const button of $('componentClickAction').querySelectorAll('[data-click-action]')) {
+      button.setAttribute('aria-pressed', String(button.dataset.clickAction === (copyMode ? 'copy' : 'open')));
+      button.disabled = busy || !!recording;
+    }
+    $('componentOpenSourceHint').hidden = copyMode;
     $('componentCopyLocationHint').hidden = !copyMode;
     $('componentClickShortcutTitle').textContent = copyMode ? '复制源码位置' : '打开源码';
 
@@ -2911,10 +2914,17 @@ IDT_COMPONENT_SETUP
       setupMessage('辅助程序已卸载，所有页面的组件定位已停止。编辑器设置已保留。');
     }));
     $('componentCopyInstall').addEventListener('click', () => action(() => copySetupCommand('install')));
-    $('componentClickAction').addEventListener('change', (event) => {
-      const clickAction = event.target.value;
-      action(() => saveSettings({ clickAction }));
-    });
+    for (const button of $('componentClickAction').querySelectorAll('[data-click-action]')) {
+      button.addEventListener('click', () => {
+        const clickAction = button.dataset.clickAction;
+        const currentAction = response?.settings.clickAction === 'copy' ? 'copy' : 'open';
+        if (recording || clickAction === currentAction) return;
+        action(async () => {
+          await saveSettings({ clickAction });
+          ns.ui.toast(`已切换为${clickAction === 'copy' ? '复制源码位置' : '打开源码'}`, 'ok');
+        });
+      });
+    }
     $('componentOpenShortcut').addEventListener('click', () => record('openShortcut'));
     $('componentMenuShortcut').addEventListener('click', () => record('menuShortcut'));
     $('componentResetShortcuts').addEventListener('click', () => action(() => saveSettings({ openShortcut: policy.DEFAULT_SHORTCUT, menuShortcut: policy.DEFAULT_SHORTCUT })));

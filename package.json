@@ -12,7 +12,7 @@
     "test:user-card": "node tests/user-card.test.js && node tests/user-card-page.test.js",
     "test:teacher-flow": "node tests/teacher-lookup-flow.test.js",
     "test:teacher-scope:browser": "npm run build && node tests/teacher-scope-lifecycle.test.js",
-    "test:component": "node tests/component-settings.test.js && node tests/component-ui.test.js && node tests/component-interaction.test.js && node tests/component-native.test.js && node --test tests/component-copy.test.js tests/component-cache.test.js tests/component-vscode.test.js tests/component-termrelay.test.js && node tests/component-state.test.js && node tests/component-watch.test.js && node tests/component-source.test.js && node tests/component-installation.test.js && node tests/component-update.test.js",
+    "test:component": "node tests/component-settings.test.js && node tests/component-ui.test.js && node tests/component-interaction.test.js && node tests/component-native.test.js && node --test tests/component-copy.test.js tests/component-cache.test.js tests/component-vscode.test.js tests/component-termrelay.test.js && node tests/component-state.test.js && node tests/component-watch.test.js && node tests/component-reload.test.js && node tests/component-source.test.js && node tests/component-installation.test.js && node tests/component-update.test.js",
     "test:component:browser": "npm run build && node tests/component-browser.test.js"
   },
   "keywords": [

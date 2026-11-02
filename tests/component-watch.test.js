@@ -3,7 +3,18 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const eventTarget = () => ({ listeners: new Map(), addEventListener(name, fn) { this.listeners.set(name, fn); }, emit(name, value = {}) { this.listeners.get(name)?.(value); } });
+const eventTarget = () => ({
+  listeners: new Map(),
+  addEventListener(name, fn, options = {}) {
+    const listeners = this.listeners.get(name) || new Set();
+    this.listeners.set(name, listeners); listeners.add(fn);
+    options.signal?.addEventListener('abort', () => {
+      listeners.delete(fn); if (!listeners.size) this.listeners.delete(name);
+    });
+  },
+  emit(name, value = {}) { this.listeners.get(name)?.forEach(fn => fn(value)); },
+  dispatchEvent(event) { this.emit(event.type, event); return true; },
+});
 
 (async () => {
   const timers = new Map(), requests = [], observers = [];
@@ -12,7 +23,7 @@ const eventTarget = () => ({ listeners: new Map(), addEventListener(name, fn) { 
   let serial = 0, response = { ok: true, watch: true, retryAfter: 15000 }, release;
   let held = false, inFlight = 0, maxInFlight = 0;
   const context = vm.createContext({
-    document, window,
+    document, window, Event, AbortController,
     setTimeout(fn, delay) { const id = ++serial; timers.set(id, { fn, delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
     MutationObserver: class {
@@ -20,7 +31,7 @@ const eventTarget = () => ({ listeners: new Map(), addEventListener(name, fn) { 
       observe() { this.connected = true; }
       disconnect() { this.connected = false; }
     },
-    chrome: { runtime: { async sendMessage(message) {
+    chrome: { runtime: { id: 'fixture-extension', async sendMessage(message) {
       requests.push(message); inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
       if (held) await new Promise((resolve) => { release = resolve; });
       inFlight--; return response;
@@ -29,7 +40,8 @@ const eventTarget = () => ({ listeners: new Map(), addEventListener(name, fn) { 
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
   const next = async () => { const [id, timer] = timers.entries().next().value; timers.delete(id); timer.fn(); await flush(); };
   const delay = () => [...timers.values()].map((timer) => timer.delay);
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../src/inspector/document-ready.js'), 'utf8'), context);
+  const source = fs.readFileSync(path.join(__dirname, '../src/inspector/document-ready.js'), 'utf8');
+  vm.runInContext(source, context);
   await flush();
   assert.deepEqual(delay(), [15000], '可见页面正常运行时应每 15 秒检查');
   document.hidden = true; document.emit('visibilitychange'); await flush();
@@ -62,5 +74,29 @@ const eventTarget = () => ({ listeners: new Map(), addEventListener(name, fn) { 
   context.__IDT_COMPONENT_DOCUMENT_READY__.wake(); await flush();
   window.emit('pagehide');
   assert.equal(timers.size, 0, '离开页面时应清理定时器');
+
+  const existing = context.__IDT_COMPONENT_DOCUMENT_READY__;
+  vm.runInContext(source, context); await flush();
+  assert.equal(context.__IDT_COMPONENT_DOCUMENT_READY__, existing, '当前版本重复注入时沿用原通知器');
+  assert.equal(window.listeners.get('focus').size, 1);
+  assert.equal(timers.size, 1);
+
+  // 模拟扩展更新：新旧脚本环境共享页面，旧请求迟到时也应保持原环境已停止。
+  held = true; existing.wake(); await flush();
+  const releaseOld = release;
+  held = false;
+  const replacement = vm.createContext({ ...context, chrome: { runtime: { ...context.chrome.runtime } } });
+  delete replacement.__IDT_COMPONENT_DOCUMENT_READY__;
+  vm.runInContext(source, replacement); await flush();
+  releaseOld(); await flush();
+  assert.equal(existing.isRunning(), false, '新版本应销毁旧环境中的通知器');
+  assert.equal(context.__IDT_COMPONENT_DOCUMENT_READY__, undefined);
+  assert.equal(replacement.__IDT_COMPONENT_DOCUMENT_READY__.isRunning(), true);
+  assert.equal(window.listeners.get('focus').size, 1, '多次更新后仍只保留一个焦点监听器');
+  assert.equal(timers.size, 1, '旧请求迟到时应保持单个恢复计时器');
+  replacement.chrome.runtime.id = undefined;
+  window.emit('focus'); await flush();
+  assert.equal(timers.size, 0, '扩展连接已失效时应停止旧通知器');
+  assert.equal(window.listeners.has('focus'), false);
   console.log('component visibility, polling intervals, mutation batching and recovery notification tests passed');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

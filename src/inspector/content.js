@@ -3,6 +3,9 @@
  */
 (() => {
   'use strict';
+  const REPLACE_EVENT = 'idt-component-inspector-replace';
+  // 扩展重载后会进入新的脚本环境，通过页面事件通知旧环境释放菜单和监听器。
+  window.dispatchEvent(new Event(REPLACE_EVENT));
   globalThis.__IDT_COMPONENT_INSPECTOR__?.destroy();
   const policy = globalThis.InternalDevToolkit.componentSettings;
   let config, controller, host, shadow, menu, list, arrow;
@@ -14,6 +17,12 @@
   const pressed = new Set();
   const markers = new Map();
   const indicatorStyles = new Map();
+
+  function contextActive() {
+    if (chrome.runtime.id) return true;
+    destroy();
+    return false;
+  }
 
   async function send(type, payload) {
     const response = await chrome.runtime.sendMessage({ type, payload: { ...payload, generation: config.generation } });
@@ -115,10 +124,12 @@
   function removeOverlay() {
     host?.remove(); host = shadow = menu = list = arrow = null;
   }
-  function cleanupInteraction(restoreFocus = true) {
+  function cleanupInteraction(restoreFocus = true, { keepToast = false } = {}) {
     epoch++;
-    clearTimeout(toastTimer); cancelAnimationFrame(animationFrame); cancelAnimationFrame(indicatorFrame);
-    toastTimer = animationFrame = indicatorFrame = null;
+    const toast = keepToast && shadow?.querySelector('.toast');
+    if (!toast) { clearTimeout(toastTimer); toastTimer = null; }
+    cancelAnimationFrame(animationFrame); cancelAnimationFrame(indicatorFrame);
+    animationFrame = indicatorFrame = null;
     const focus = previousFocus;
     previousFocus = null;
     menuOpen = held = busy = false;
@@ -127,7 +138,11 @@
     restoreScroll?.(); restoreScroll = null;
     for (const [marker, element] of markers) element.removeAttribute(marker);
     markers.clear();
-    removeOverlay();
+    if (toast) {
+      // 松开快捷键只结束高亮，提示沿用原来的倒计时。
+      shadow.querySelector('.backdrop')?.remove();
+      menu = list = arrow = null;
+    } else removeOverlay();
     if (restoreFocus && focus?.isConnected) focus.focus?.({ preventScroll: true });
   }
   function notify(message) {
@@ -146,11 +161,12 @@
   function consume(event) { event.preventDefault(); event.stopImmediatePropagation(); }
 
   function onMove(event) {
+    if (!contextActive()) return;
     if (!event.isTrusted || ownEvent(event) || menuOpen || busy) return;
     point = { x: event.clientX, y: event.clientY };
     target = event.composedPath()[0];
     if (!anyHot(event)) {
-      if (held) cleanupInteraction(false);
+      if (held) cleanupInteraction(false, { keepToast: true });
       return;
     }
     if (!held) { held = true; showIndicator(); return; }
@@ -164,6 +180,7 @@
   }
 
   function onKeyDown(event) {
+    if (!contextActive()) return;
     if (!event.isTrusted) return;
     pressed.add(event.code);
     if (menuOpen) {
@@ -187,9 +204,10 @@
     if (anyHot(event)) { held = true; showIndicator(); }
   }
   function onKeyUp(event) {
+    if (!contextActive()) return;
     pressed.delete(event.code);
     if (['Meta', 'Control', 'Alt'].includes(event.key)) pressed.clear();
-    if (held && !menuOpen && !busy && !anyHot(event)) cleanupInteraction(false);
+    if (held && !menuOpen && !busy && !anyHot(event)) cleanupInteraction(false, { keepToast: true });
   }
 
   function selectItem(focus, scroll = false) {
@@ -276,6 +294,7 @@
   }
 
   async function select(event, showMenu) {
+    if (!contextActive()) return;
     if (!event.isTrusted || ownEvent(event)) return;
     if (menuOpen) { if (!ownEvent(event)) { consume(event); cleanupInteraction(); } return; }
     if (!hot(event, showMenu ? config.menuShortcut : config.openShortcut)) return;
@@ -305,6 +324,7 @@
   }
 
   function guardPointer(event) {
+    if (!contextActive()) return;
     if (!event.isTrusted || ownEvent(event)) return;
     if (menuOpen) { consume(event); if (event.type === 'pointerdown') cleanupInteraction(); return; }
     if ((event.button === 0 && hot(event, config.openShortcut)) || (event.button === 2 && hot(event, config.menuShortcut))) {
@@ -330,6 +350,7 @@
     controller?.abort(); cleanupInteraction(false);
     config = value; controller = new AbortController();
     const capture = { capture: true, signal: controller.signal };
+    window.addEventListener(REPLACE_EVENT, destroy, capture);
     window.addEventListener('mousemove', onMove, capture);
     window.addEventListener('keydown', onKeyDown, capture);
     window.addEventListener('keyup', onKeyUp, capture);
@@ -338,13 +359,13 @@
     for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'auxclick']) window.addEventListener(type, guardPointer, capture);
     window.addEventListener('scroll', reposition, { ...capture, passive: true });
     window.addEventListener('resize', reposition, capture);
-    window.addEventListener('blur', (event) => { if (event.target === window) { pressed.clear(); if (!menuOpen && !busy) cleanupInteraction(false); } }, capture);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) { pressed.clear(); if (!menuOpen && !busy) cleanupInteraction(false); } }, capture);
+    window.addEventListener('blur', (event) => { if (event.target === window) { pressed.clear(); if (!menuOpen && !busy) cleanupInteraction(false, { keepToast: true }); } }, capture);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { pressed.clear(); if (!menuOpen && !busy) cleanupInteraction(false, { keepToast: true }); } }, capture);
     window.addEventListener('pagehide', destroy, capture);
   }
   globalThis.__IDT_COMPONENT_INSPECTOR__ = {
     start, destroy,
-    isRunning(value) { return !!controller && !controller.signal.aborted && config?.origin === value.origin && config?.generation === value.generation; },
+    isRunning(value) { return !!chrome.runtime.id && !!controller && !controller.signal.aborted && config?.origin === value.origin && config?.generation === value.generation; },
     resetInteraction() { pressed.clear(); point = target = null; cleanupInteraction(false); },
   };
 })();

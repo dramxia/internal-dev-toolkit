@@ -6543,9 +6543,11 @@ if (typeof module !== 'undefined' && module.exports) {
 
   async function restoreEnabledTabs() {
     const tabs = await chrome.tabs.query({});
-    await Promise.allSettled(tabs.filter((tab) => tab.status !== 'loading').map((tab) => lock(tab.id, async () => {
-      const origin = policy.originOf(tab.url);
+    const settings = await policy.getSettings();
+    await Promise.allSettled(tabs.map((tab) => lock(tab.id, async () => {
+      const origin = policy.originOf(tab.pendingUrl || tab.url);
       if (!origin || !await originEnabled(origin)) return;
+      if (!policy.isAllowed(origin, settings.origins)) return;
       await executeScript({ target: { tabId: tab.id, allFrames: true }, world: 'ISOLATED', files: ['component-document-ready.js'] });
       await restoreTab(tab.id);
     })));

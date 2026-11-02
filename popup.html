@@ -2806,11 +2806,20 @@
     .component-path { font: 12px/1.7 ui-monospace, SFMono-Regular, monospace; color: var(--text-2); overflow-wrap: anywhere; }
     .component-usage { padding: 22px 0 18px; border-bottom: 1px solid var(--border); }
     .component-section-title { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+    .component-usage > .component-section-title { margin-bottom: 17px; }
     .component-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; }
     .component-row > :first-child { min-width: 0; }
-    .component-click-action { flex-shrink: 0; max-width: 52%; padding: 7px 5px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); color: var(--text-1); font: inherit; font-size: 13px; cursor: pointer; }
+    .component-click-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+    .component-click-actions { display: flex; gap: 4px; padding: 4px; border-radius: 9px; background: var(--sage-100); }
+    .component-click-action { flex: 1; min-width: 0; min-height: 40px; padding: 8px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; transition: background .14s, color .14s; }
+    .component-click-action[aria-pressed="true"] { background: var(--sage-600); color: var(--text-inv); font-weight: 500; }
+    .component-click-action:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--sage-100); }
     .component-click-action:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 3px; }
     .component-click-action:disabled { opacity: .5; cursor: not-allowed; }
+    .component-click-help { min-height: 44px; margin-top: 12px; }
+    .component-parent-action { min-height: 0; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+    @media (pointer: coarse) { .component-click-action { min-height: 44px; } }
+    @media (prefers-reduced-motion: reduce) { .component-click-action { transition: none; } }
     .component-key-line { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; color: var(--text-2); }
     .component-key-line kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); color: var(--text-1); font-family: inherit; font-size: 13px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
     .component-mouse-action { white-space: nowrap; }
@@ -3527,9 +3536,16 @@
       </details>
       <section class="component-usage" aria-label="快捷操作">
         <h2 class="component-section-title">在网页上操作</h2>
-        <div class="component-row"><select class="component-click-action" id="componentClickAction" aria-label="快捷键加左键的操作"><option value="open">打开源码</option><option value="copy">复制源码位置</option></select><span class="component-key-line"><kbd id="componentOpenShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 左键</span></span></div>
-        <p class="component-muted" id="componentCopyLocationHint" hidden>复制本机绝对路径和行号，例如 /项目/src/App.tsx#L10。</p>
-        <div class="component-row"><span>查看父组件</span><span class="component-key-line"><kbd id="componentMenuShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 右键</span></span></div>
+        <div class="component-click-trigger"><span class="component-muted">左键操作</span><span class="component-key-line"><kbd id="componentOpenShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 左键</span></span></div>
+        <div class="component-click-actions" id="componentClickAction" role="group" aria-label="选择左键操作" aria-describedby="componentClickActionHelp">
+          <button class="component-click-action" id="componentClickActionOpen" type="button" data-click-action="open" aria-pressed="true">打开源码</button>
+          <button class="component-click-action" id="componentClickActionCopy" type="button" data-click-action="copy" aria-pressed="false">复制源码位置</button>
+        </div>
+        <div class="component-click-help component-muted" id="componentClickActionHelp">
+          <p id="componentOpenSourceHint">在编辑器中打开组件对应的源码。</p>
+          <p id="componentCopyLocationHint" hidden>复制本机绝对路径和行号，例如 /项目/src/App.tsx#L10。</p>
+        </div>
+        <div class="component-row component-parent-action"><span>查看父组件</span><span class="component-key-line"><kbd id="componentMenuShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 右键</span></span></div>
       </section>
       <section class="component-settings" aria-label="定位设置">
         <h2 class="component-section-title">设置</h2>

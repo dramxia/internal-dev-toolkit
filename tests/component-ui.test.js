@@ -31,7 +31,6 @@ const read = (file) => fs.readFileSync(path.join(repo, file), 'utf8');
         tabs: { async query() { return [fixture.tab]; }, onActivated: event(), onUpdated: event() },
       };
       window.InternalDevToolkit = {
-        ui: { toast: (...args) => fixture.toasts.push(args) },
         messages: { async sendToBackground(message) {
           fixture.calls.push(message);
           if (message.type === 'COMPONENT_STATUS') {
@@ -40,6 +39,8 @@ const read = (file) => fs.readFileSync(path.join(repo, file), 'utf8');
             return structuredClone({ ok: true, settings: fixture.settings, state: fixture.state, host: fixture.host });
           }
           if (message.type === 'COMPONENT_SAVE_SETTINGS') {
+            if (fixture.holdSave) await new Promise((resolve) => { fixture.releaseSave = resolve; });
+            if (fixture.failSave) throw new Error('测试设置保存失败');
             fixture.settings = InternalDevToolkit.componentSettings.normalizeSettings(message.payload);
             return { ok: true, settings: fixture.settings };
           }
@@ -50,7 +51,11 @@ const read = (file) => fs.readFileSync(path.join(repo, file), 'utf8');
         } },
       };
     });
-    for (const file of ['src/common/component-settings.js', 'src/popup/component-inspector-ui.js']) await page.addScriptTag({ content: read(file) });
+    for (const file of ['src/common/component-settings.js', 'src/popup/ui.js', 'src/popup/component-inspector-ui.js']) await page.addScriptTag({ content: read(file) });
+    await page.evaluate(() => {
+      const toast = InternalDevToolkit.ui.toast;
+      InternalDevToolkit.ui.toast = (...args) => { fixture.toasts.push(args); toast(...args); };
+    });
     const refresh = () => page.evaluate(() => InternalDevToolkit.componentInspectorUi.activate());
     await page.evaluate(async () => { await InternalDevToolkit.componentInspectorUi.init(); await InternalDevToolkit.componentInspectorUi.activate(); });
     const value = (id) => page.locator(`#${id}`);
@@ -129,31 +134,87 @@ const read = (file) => fs.readFileSync(path.join(repo, file), 'utf8');
     await value('componentRetry').click(); await settle();
     assert.equal(await value('componentRefreshError').isHidden(), true);
 
-    // 左键操作可切换并保留选择，复制模式在辅助程序就绪后即可开启。
-    await value('componentClickAction').selectOption('copy'); await settle();
+    // 并排按钮单击切换；保存完成后使用全局 toast 反馈，重复点击当前选项保持安静。
+    const saves = () => page.evaluate(() => fixture.calls.filter((item) => item.type === 'COMPONENT_SAVE_SETTINGS').length);
+    const beforeSelectedClick = await saves();
+    const beforeSelectedToast = await page.evaluate(() => fixture.toasts.length);
+    assert.equal(await value('componentClickActionOpen').getAttribute('aria-pressed'), 'true');
+    assert.equal(await value('componentOpenSourceHint').isVisible(), true);
+    await value('componentClickActionOpen').click();
+    assert.equal(await saves(), beforeSelectedClick);
+    assert.equal(await page.evaluate(() => fixture.toasts.length), beforeSelectedToast);
+    await page.evaluate(() => { fixture.holdSave = true; });
+    await value('componentClickActionCopy').click();
+    await page.waitForFunction(() => typeof fixture.releaseSave === 'function');
+    assert.equal(await value('componentClickActionOpen').isDisabled(), true);
+    assert.equal(await value('componentClickActionCopy').isDisabled(), true);
+    assert.equal(await page.evaluate(() => fixture.toasts.length), beforeSelectedToast, '保存成功后才提示切换完成');
+    await page.evaluate(() => { fixture.holdSave = false; fixture.releaseSave(); delete fixture.releaseSave; });
+    await settle();
+    assert.equal(await saves(), beforeSelectedClick + 1);
     assert.equal(await page.evaluate(() => fixture.settings.clickAction), 'copy');
+    assert.equal(await value('componentClickActionOpen').getAttribute('aria-pressed'), 'false');
+    assert.equal(await value('componentClickActionCopy').getAttribute('aria-pressed'), 'true');
+    assert.equal(await value('componentOpenSourceHint').isHidden(), true);
+    assert.equal(await value('componentCopyLocationHint').isVisible(), true);
     assert.equal(await value('componentClickShortcutTitle').textContent(), '复制源码位置');
-    await refresh(); assert.equal(await value('componentClickAction').inputValue(), 'copy');
+    assert.deepEqual(await page.evaluate(() => fixture.toasts.at(-1)), ['已切换为复制源码位置', 'ok']);
+    assert.equal(await value('globalToast').textContent(), '已切换为复制源码位置');
+    assert.equal(await page.locator('#globalToast.show.ok').count(), 1);
+    assert.doesNotMatch(await page.locator('.component-usage').textContent(), /已切换为/);
+    const afterSwitchToast = await page.evaluate(() => fixture.toasts.length);
+    await refresh(); assert.equal(await value('componentClickActionCopy').getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.evaluate(() => fixture.toasts.length), afterSwitchToast, '刷新保留选择并保持安静');
+    await page.waitForFunction(() => !document.getElementById('globalToast').classList.contains('show'));
+    assert.equal(await value('globalToast').textContent(), '');
+
+    // 保存失败保留已保存的选择，提示错误并恢复两个按钮。
+    await page.evaluate(() => { fixture.failSave = true; });
+    await value('componentClickActionOpen').click(); await settle();
+    assert.equal(await page.evaluate(() => fixture.settings.clickAction), 'copy');
+    assert.equal(await value('componentClickActionCopy').getAttribute('aria-pressed'), 'true');
+    assert.equal(await value('componentClickActionOpen').getAttribute('aria-pressed'), 'false');
+    assert.equal(await value('componentClickActionOpen').isEnabled(), true);
+    assert.equal(await value('componentClickActionCopy').isEnabled(), true);
+    assert.deepEqual(await page.evaluate(() => fixture.toasts.at(-1)), ['测试设置保存失败', 'err']);
+    assert.equal(await page.locator('#globalToast.show.err').count(), 1);
+    await page.evaluate(() => { fixture.failSave = false; });
+
+    // 复制模式在辅助程序就绪后即可开启，窄侧栏仍保留并排按钮。
     await page.evaluate(() => { fixture.host.editorAvailable = false; fixture.host.editor = null; });
     await refresh(); assert.equal(await value('componentToggle').isEnabled(), true);
     assert.equal(await value('componentEditorSection').getAttribute('open'), null);
     for (const width of [320, 380]) {
       await page.setViewportSize({ width, height: 750 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      const buttons = await page.locator('#componentClickAction button').evaluateAll((items) => items.map(item => {
+        const rect = item.getBoundingClientRect();
+        const style = getComputedStyle(item);
+        return { top: rect.top, width: rect.width, height: rect.height, background: style.backgroundColor, color: style.color };
+      }));
+      assert.equal(buttons[0].top, buttons[1].top);
+      assert.ok(Math.abs(buttons[0].width - buttons[1].width) <= 1);
+      assert.equal(buttons[0].height, 40);
+      assert.notEqual(buttons[0].background, buttons[1].background);
+      assert.notEqual(buttons[0].color, buttons[1].color);
     }
     fs.mkdirSync(path.join(repo, 'test-results'), { recursive: true });
     await page.screenshot({ path: path.join(repo, 'test-results/component-copy-mode.png'), fullPage: true });
-    await value('componentClickAction').selectOption('open'); await settle();
+    await value('componentClickActionOpen').focus();
+    await value('componentClickActionOpen').press('Space'); await settle();
+    assert.equal(await value('componentClickActionOpen').getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(await page.evaluate(() => fixture.toasts.at(-1)), ['已切换为打开源码', 'ok']);
     assert.equal(await value('componentToggle').isDisabled(), true);
     await value('componentChooseEditor').click(); await settle();
 
     // 不支持的按键保留原快捷键，继续录制有效组合后才保存。
     await page.locator('#componentShortcutSection > summary').click();
     await value('componentOpenShortcut').click();
+    assert.equal(await value('componentClickActionOpen').isDisabled(), true);
+    assert.equal(await value('componentClickActionCopy').isDisabled(), true);
     const keys = async (events) => page.evaluate((items) => {
       for (const item of items) document.dispatchEvent(new KeyboardEvent(item.type, { ...item, bubbles: true }));
     }, events);
-    const saves = () => page.evaluate(() => fixture.calls.filter((item) => item.type === 'COMPONENT_SAVE_SETTINGS').length);
     const beforeInvalid = await saves();
     await keys([
       { type: 'keydown', key: 'Meta', code: 'MetaLeft', metaKey: true },
@@ -170,6 +231,8 @@ const read = (file) => fs.readFileSync(path.join(repo, file), 'utf8');
       { type: 'keyup', key: 'x', code: 'KeyX', altKey: true },
     ]);
     await settle();
+    assert.equal(await value('componentClickActionOpen').isEnabled(), true);
+    assert.equal(await value('componentClickActionCopy').isEnabled(), true);
     assert.equal(await page.evaluate(() => fixture.settings.openShortcut.code), 'KeyX');
     assert.match(await value('componentOpenShortcutLabel').textContent(), /Option \+ X/);
 
