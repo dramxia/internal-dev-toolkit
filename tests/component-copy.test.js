@@ -59,6 +59,19 @@ test('reports clipboard errors without falling back to opening an editor', async
   assert.equal(f.commands.includes('/usr/bin/open'), false);
 });
 
+test('reads the full source address without clipboard changes and copies exactly what the task displays', async () => {
+  const f = await fixture();
+  const message = { origin: 'http://127.0.0.1:5173', projectId: 'project', source: { file: pathToFileURL(f.file).href, line: 10, endLine: 29 } };
+  const result = await f.host.handle({ action: 'sourceLocation', ...message });
+  assert.equal(result.location, `${f.file}#L10-L29`);
+  assert.equal(result.project, undefined);
+  assert.deepEqual(f.copied, []);
+  assert.equal(f.commands.includes('/usr/bin/open'), false);
+  const copied = await f.host.handle({ action: 'copySource', ...message, trailingSpace: false });
+  assert.equal(copied.text, result.location);
+  assert.equal(f.copied.at(-1), result.location);
+});
+
 test('writes UTF-8 text to pbcopy through stdin and waits for its result', async () => {
   const filename = path.join(__dirname, '../native-host/lib.cjs');
   const localRequire = createRequire(filename), writes = [];

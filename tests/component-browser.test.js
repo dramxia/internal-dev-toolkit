@@ -226,6 +226,25 @@ renderRoute();
         assert.equal(actualFile, `${expectedFile}:${expectedLine}:10`, `${file} 源码行列错误`);
       }
       assert.equal(await targetPage.evaluate(() => window.businessClicks || 0), businessClicks, `${file} 定位时触发了业务点击`);
+      const previousSettings = await worker.evaluate(async () => {
+        const settings = await InternalDevToolkit.componentSettings.getSettings();
+        await InternalDevToolkit.componentInspectorBackground.handle({ type: 'COMPONENT_SAVE_SETTINGS', payload: { ...settings, clickAction: 'agent' } }, { url: chrome.runtime.getURL('popup.html') });
+        return settings;
+      });
+      await targetPage.keyboard.down(openKey); await target.click(); await targetPage.keyboard.up(openKey);
+      const draft = targetPage.getByRole('textbox', { name: '任务内容' });
+      await draft.waitFor();
+      const locationSuffix = file.endsWith('.jsx') ? `#L${file.startsWith('React') ? 4 : 3}` : '';
+      assert.equal(await targetPage.locator('[data-idt-component-overlay] .draft-source').textContent(), expectedFile + locationSuffix, `${file} 任务浮框应显示本机完整地址与源码行号`);
+      assert.equal(await targetPage.getByRole('button', { name: '复制完整组件地址' }).isVisible(), true);
+      await draft.fill('调整组件');
+      await targetPage.keyboard.press('Shift+Enter');
+      await targetPage.keyboard.type('second line');
+      assert.equal(await draft.inputValue(), '调整组件\nsecond line');
+      await targetPage.keyboard.press('Escape');
+      await draft.waitFor({ state: 'detached' });
+      await worker.evaluate((settings) => InternalDevToolkit.componentInspectorBackground.handle({ type: 'COMPONENT_SAVE_SETTINGS', payload: settings }, { url: chrome.runtime.getURL('popup.html') }), previousSettings);
+
     }
     await togglePage();
     await until(async () => (await state()).status === 'on', '首次启动失败');

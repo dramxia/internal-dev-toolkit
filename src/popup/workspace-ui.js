@@ -274,7 +274,8 @@
   function commitWorkspace(workspace, options = {}) {
     const update = () => activateWorkspace(workspace, options);
     if (options.transition === false || !ns.ui?.transitionView) return update();
-    ns.ui.transitionView(update, 'workspace');
+    const animate = workspace.feature !== 'componentInspector' && activeWorkspace?.feature !== 'componentInspector';
+    ns.ui.transitionView(update, 'workspace', { animate });
     return true;
   }
 
@@ -432,16 +433,15 @@
     if (!validContexts.includes(ns.currentProject.getCachedProjectId())) {
       await ensureProjectContext(validContexts[0] || ns.projects.DEFAULT_PROJECT_ID);
     }
-    renderDock();
-    createUtilityScreens();
-    bindEvents();
-
     const currentProjectId = ns.currentProject.getCachedProjectId();
     let storedWorkspaceId = '';
     try {
       storedWorkspaceId = await readStoredWorkspace();
     } catch (_) {}
     const workspace = selectInitialWorkspace(definitions, currentProjectId, storedWorkspaceId);
+    renderDock();
+    createUtilityScreens();
+    bindEvents();
     commitWorkspace(workspace, { transition: false });
     if (workspace) {
       try { await storeWorkspace(workspace.workspaceId); } catch (_) {}

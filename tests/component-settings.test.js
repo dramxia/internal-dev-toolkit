@@ -13,6 +13,7 @@ assert.equal(policy.matchesShortcut({ altKey: true, shiftKey: true }, custom), f
 assert.deepEqual(policy.normalizeSettings().openShortcut, policy.DEFAULT_SHORTCUT);
 assert.equal(policy.normalizeSettings().clickAction, 'open');
 assert.equal(policy.normalizeSettings({ clickAction: 'copy' }).clickAction, 'copy');
+assert.equal(policy.normalizeSettings({ clickAction: 'chatgpt' }).clickAction, 'agent');
 assert.equal(policy.normalizeSettings({ clickAction: 'unknown' }).clickAction, 'open');
 for (const code of ['Backspace', 'Space', 'ArrowLeft', 'F13']) {
   assert.throws(() => policy.normalizeShortcut({ meta: true, code }), /字母、数字/, '不支持的按键应明确报错，保留原快捷键');
@@ -22,3 +23,8 @@ assert.equal(policy.normalizeSettings({ origins }).origins.length, 50);
 assert.equal(policy.normalizeSettings({ origins: [...origins, origins[0]] }).origins.length, 50, '重复地址不占用额外名额');
 assert.throws(() => policy.normalizeSettings({ origins: [...origins, 'http://extra.test:5173'] }), /最多保存 50/, '超出地址上限时应报错，避免静默丢弃');
 console.log('component settings tests passed');
+
+assert.equal(policy.normalizeSettings({ clickAction: 'agent' }).clickAction, 'agent');
+assert.equal(policy.normalizeSettings().taskEditor, 'chatgpt');
+assert.equal(policy.normalizeSettings().autoSend, true);
+assert.equal(policy.normalizeSettings({ autoSend: false }).autoSend, false);

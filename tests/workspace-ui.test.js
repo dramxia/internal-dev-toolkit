@@ -74,7 +74,7 @@ assert.match(workspaceSource, /workspaceScroll\.set\(activeWorkspace\.workspaceI
 assert.match(workspaceSource, /panel\.inert = !selected;/, '隐藏面板不得保留交互焦点');
 assert.match(workspaceSource, /ensureFeatureInitialized\(workspace\.feature\)[\s\S]*lifecycle\?\.activate/, '模块应先幂等初始化再按需激活');
 assert.match(workspaceSource, /requestIdleCallback\(run/, '非首屏模块应分批在空闲阶段预热');
-assert.match(workspaceSource, /transitionView\(update, 'workspace'\)/, '底部模块应使用显式轻量视图过渡');
+assert.match(workspaceSource, /transitionView\(update, 'workspace', \{ animate \}\)/, '底部模块按目标页选择是否使用过渡');
 assert.doesNotMatch(uiSource, /document\.startViewTransition|::view-transition/, '主内容动画不得使用会覆盖任务坞的 top-layer View Transition');
 // finish 而非 cancel：两者都会终止上一段动画，但 cancel 会先把元素弹回动画起点再重放，
 // 连续点击时这一下回弹本身就是可见的闪烁。

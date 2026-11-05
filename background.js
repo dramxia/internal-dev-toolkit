@@ -712,6 +712,7 @@ var IDTComponentSources = (() => {
   const TAB_PREFIX = 'componentInspectorTab:';
   const ORIGIN_PREFIX = 'componentInspectorEnabled:';
   const MAX_ORIGINS = 50;
+  const TASK_EDITORS = Object.freeze([{ id: 'chatgpt', name: 'ChatGPT' }]);
   const DEFAULT_SHORTCUT = Object.freeze({ meta: true, ctrl: false, alt: false, shift: false, code: '' });
 
   function originOf(value) {
@@ -753,7 +754,15 @@ var IDTComponentSources = (() => {
   function normalizeSettings(value = {}) {
     const origins = [...new Set((Array.isArray(value.origins) ? value.origins : []).map(originOf).filter(Boolean))];
     if (origins.length > MAX_ORIGINS) throw new Error(`最多保存 ${MAX_ORIGINS} 个开发地址，请先移除旧地址`);
-    return { origins, clickAction: value.clickAction === 'copy' ? 'copy' : 'open', openShortcut: normalizeShortcut(value.openShortcut), menuShortcut: normalizeShortcut(value.menuShortcut) };
+    const clickAction = value.clickAction === 'chatgpt' ? 'agent' : value.clickAction;
+    return {
+      origins,
+      clickAction: ['copy', 'agent'].includes(clickAction) ? clickAction : 'open',
+      taskEditor: TASK_EDITORS.some((editor) => editor.id === value.taskEditor) ? value.taskEditor : 'chatgpt',
+      autoSend: value.autoSend !== false,
+      openShortcut: normalizeShortcut(value.openShortcut),
+      menuShortcut: normalizeShortcut(value.menuShortcut),
+    };
   }
 
   async function getSettings() {
@@ -761,7 +770,7 @@ var IDTComponentSources = (() => {
     try { return normalizeSettings(data[SETTINGS_KEY]); } catch (_) { return normalizeSettings(); }
   }
 
-  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, DEFAULT_SHORTCUT, originOf, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
+  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, TASK_EDITORS, DEFAULT_SHORTCUT, originOf, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
   if (typeof module !== 'undefined' && module.exports) module.exports = ns.componentSettings;
 })();
 
@@ -6206,6 +6215,7 @@ if (typeof module !== 'undefined' && module.exports) {
   const policy = ns.componentSettings;
   const HOST = 'com.internal_dev_toolkit.component_inspector';
   const transitions = new Map();
+  const originToggles = new Map();
   const snapshots = new Map();
   const projectChecks = new Map();
   const CHECK_INTERVAL = 15000;
@@ -6245,7 +6255,7 @@ if (typeof module !== 'undefined' && module.exports) {
             const job = pending.get(message.id);
             if (!job) return;
             pending.delete(message.id); clearTimeout(job.timer);
-            message.ok ? job.resolve(message) : job.reject(Object.assign(new Error(message.error || '本机操作失败'), { code: message.code }));
+            message.ok ? job.resolve(message) : job.reject(Object.assign(new Error(message.error || '本机操作失败'), { code: message.code, nativeResponse: true }));
           });
           connection.onDisconnect.addListener(() => {
             const detail = chrome.runtime.lastError?.message || '';
@@ -6260,7 +6270,7 @@ if (typeof module !== 'undefined' && module.exports) {
           });
         }
         const id = ++serial;
-        const timer = setTimeout(() => { pending.delete(id); reject(new Error('本机操作超时，请重试')); }, action === 'chooseEditor' ? 130000 : 25000);
+        const timer = setTimeout(() => { pending.delete(id); reject(new Error('本机操作超时，请重试')); }, action === 'chooseEditor' ? 130000 : action === 'agentSource' ? 60000 : 25000);
         pending.set(id, { resolve, reject, timer, connection: port });
         port.postMessage({ ...payload, id, action });
       } catch (error) { reject(error); }
@@ -6413,7 +6423,7 @@ if (typeof module !== 'undefined' && module.exports) {
     try {
       await stopRuntime(tabId);
       const host = await readyHost();
-      if (settings.clickAction !== 'copy' && (!host.editor || !host.editorAvailable)) throw new Error('请先选择有效的编辑器');
+      if (settings.clickAction === 'open' && (!host.editor || !host.editorAvailable)) throw new Error('请先选择有效的编辑器');
       assertHostReady(host);
       let project = previous.project, frameworks = previous.frameworks;
       if (reuse) {
@@ -6541,6 +6551,22 @@ if (typeof module !== 'undefined' && module.exports) {
     return current?.value || {};
   }
 
+  function toggleOrigin(tabId, origin, enabled) {
+    return lock(`origin:${origin}`, async () => {
+      const toggle = { enabled };
+      originToggles.set(origin, toggle);
+      const notify = () => chrome.runtime.sendMessage({ type: 'COMPONENT_STATE_CHANGED', origin }).catch(() => {});
+      notify();
+      try {
+        toggle.previousEnabled = await originEnabled(origin);
+        return await setOriginEnabled(tabId, origin, enabled);
+      } finally {
+        originToggles.delete(origin);
+        notify();
+      }
+    });
+  }
+
   async function restoreEnabledTabs() {
     const tabs = await chrome.tabs.query({});
     const settings = await policy.getSettings();
@@ -6586,6 +6612,11 @@ if (typeof module !== 'undefined' && module.exports) {
     const state = await readState(tabId);
     const entry = snapshots.get(tabId)?.get(payload.snapshotId);
     if (state.status !== 'on' || !entry || entry.generation !== state.generation || entry.documentId !== sender.documentId || entry.frameId !== (sender.frameId || 0) || Date.now() - entry.created > 300000) throw new Error('组件信息已过期，请重新选择');
+    const settings = action === 'agentSource' ? await policy.getSettings() : null;
+    const taskOptions = settings ? { text: payload.text, taskEditor: settings.taskEditor, autoSend: settings.autoSend } : {};
+    const keepSnapshot = action === 'sourceLocation' || (action === 'copySource' && payload.keepSnapshot === true);
+    if (action === 'copySource' && keepSnapshot) taskOptions.trailingSpace = false;
+    if (action === 'agentSource' && entry.agentAttempted) throw new Error('已尝试打开这条草稿，请先在编辑器中检查结果');
     await assertTarget(tabId, state.origin, true);
     const source = entry.components?.[payload.index]?.source;
     if (!source?.file) throw new Error('此组件尚未提供源码位置');
@@ -6593,7 +6624,8 @@ if (typeof module !== 'undefined' && module.exports) {
     try {
       assertHostReady(await readyHost());
       let result;
-      try { result = await nativeRequest(action, { origin: state.origin, projectId: state.project.id, source }); }
+      if (action === 'agentSource') entry.agentAttempted = true;
+      try { result = await nativeRequest(action, { origin: state.origin, projectId: state.project.id, source, ...taskOptions }); }
       catch (error) {
         if (!serviceChanged(error)) throw error;
         openingState = await lock(tabId, async () => {
@@ -6611,13 +6643,14 @@ if (typeof module !== 'undefined' && module.exports) {
         await assertTarget(tabId, state.origin, true);
         const latest = await readState(tabId);
         if (!latest.enabled || latest.status !== 'on' || latest.generation !== openingState.generation) throw new Error('当前页面的组件定位已停止');
-        result = await nativeRequest(action, { origin: state.origin, projectId: openingState.project.id, source: refreshedSource });
+        result = await nativeRequest(action, { origin: state.origin, projectId: openingState.project.id, source: refreshedSource, ...taskOptions });
       }
-      snapshots.get(tabId)?.delete(payload.snapshotId);
+      if (!keepSnapshot) snapshots.get(tabId)?.delete(payload.snapshotId);
       const latest = await readState(tabId);
       if (action === 'openSource' && latest.status === 'on' && latest.generation === openingState.generation) await writeState(tabId, { ...latest, lastOpened: result });
       return result;
     } catch (error) {
+      if (action === 'agentSource' && error.nativeResponse && error.code !== 'CHATGPT_OPEN_UNCERTAIN') entry.agentAttempted = false;
       const latest = await readState(tabId);
       if (serviceChanged(error)) {
         await lock(tabId, async () => {
@@ -6629,7 +6662,7 @@ if (typeof module !== 'undefined' && module.exports) {
         });
       } else if (latest.generation === openingState.generation && /编辑器|连接/.test(error.message)) {
         const settings = await policy.getSettings();
-        if (settings.clickAction !== 'copy' || /连接/.test(error.message)) await pause(tabId, error.message);
+        if (settings.clickAction === 'open' || /连接/.test(error.message)) await pause(tabId, error.message);
       }
       throw error;
     }
@@ -6644,24 +6677,38 @@ if (typeof module !== 'undefined' && module.exports) {
     }
     if (msg.type === 'COMPONENT_INSPECT') return inspect(sender, payload);
     if (msg.type === 'COMPONENT_OPEN') return useSnapshot(sender, payload, 'openSource');
+    if (['COMPONENT_AGENT', 'COMPONENT_CHATGPT'].includes(msg.type)) {
+      if ((await policy.getSettings()).clickAction !== 'agent') throw new Error('请先选择「发送任务」');
+      return lock(`agent:${sender.tab?.id}`, () => useSnapshot(sender, payload, 'agentSource'));
+    }
     if (msg.type === 'COMPONENT_COPY') return useSnapshot(sender, payload, 'copySource');
+    if (msg.type === 'COMPONENT_SOURCE_LOCATION') return useSnapshot(sender, payload, 'sourceLocation');
     // 设置和系统窗口只接受扩展页面发起的操作。
     if (!sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('操作来源无效');
     switch (msg.type) {
       case 'COMPONENT_STATUS': {
         const settings = await policy.getSettings();
-        let state = { status: 'off', enabled: false };
-        if (Number.isInteger(payload.tabId)) {
-          const tab = await chrome.tabs.get(payload.tabId);
-          const origin = policy.originOf(tab.pendingUrl || tab.url);
-          state = await readState(payload.tabId);
-          if (state.origin !== origin) state = { status: 'off', origin, enabled: await originEnabled(origin) };
-        }
         let host;
         try { host = { connected: true, ...(await readyHost()) }; }
         catch (error) { host = { connected: false, editor: null, error: error.message }; }
-        return { settings, state, host };
+        let state = { status: 'off', enabled: false };
+        let toggle;
+        if (Number.isInteger(payload.tabId)) {
+          const tab = await chrome.tabs.get(payload.tabId);
+          const origin = policy.originOf(tab.pendingUrl || tab.url);
+          // 辅助程序检查可能较慢，最后再读状态；启停若恰好完成，则重新读取最终状态。
+          do {
+            toggle = originToggles.get(origin);
+            state = await readState(payload.tabId);
+            if (state.origin !== origin) state = { status: 'off', origin, enabled: await originEnabled(origin) };
+          } while (toggle !== originToggles.get(origin));
+        }
+        return { settings, state, host, toggle: toggle ? { ...toggle } : null };
       }
+      case 'COMPONENT_CHATGPT_ACCESS':
+      case 'COMPONENT_AGENT_ACCESS':
+        assertHostReady(await readyHost());
+        return nativeRequest('agentAccess', { taskEditor: (await policy.getSettings()).taskEditor });
       case 'COMPONENT_CHOOSE_EDITOR': {
         const host = await readyHost();
         assertHostReady(host);
@@ -6692,31 +6739,34 @@ if (typeof module !== 'undefined' && module.exports) {
       case 'COMPONENT_CLEAR_EDITOR': {
         assertHostReady(await readyHost());
         const result = await nativeRequest('clearEditor');
-        if ((await policy.getSettings()).clickAction !== 'copy') await pauseAll('请先选择编辑器，再启动当前页面');
+        if ((await policy.getSettings()).clickAction === 'open') await pauseAll('请先选择编辑器，再启动当前页面');
         return result;
       }
       case 'COMPONENT_SAVE_SETTINGS': {
+        const previousSettings = await policy.getSettings();
         const settings = policy.normalizeSettings(payload);
         await chrome.storage.local.set({ [policy.SETTINGS_KEY]: settings });
+        // 编辑器和发送偏好由后台在提交时读取，保存时保留页面中的草稿。
+        if (['clickAction', 'origins', 'openShortcut', 'menuShortcut'].every((key) => JSON.stringify(previousSettings[key]) === JSON.stringify(settings[key]))) return { settings };
         const all = await chrome.storage.session.get(null);
         for (const [key, state] of Object.entries(all)) {
           if (!key.startsWith(policy.TAB_PREFIX) || !['on', 'paused'].includes(state.status)) continue;
           const tabId = Number(key.slice(policy.TAB_PREFIX.length));
           await lock(tabId, async () => {
             const latest = await readState(tabId);
-            if (latest.status === 'paused' && latest.enabled && settings.clickAction === 'copy' && /编辑器/.test(latest.error || '')) {
+            if (latest.status === 'paused' && latest.enabled && settings.clickAction !== 'open' && /编辑器/.test(latest.error || '')) {
               await startTab(tabId, latest.origin, false); return;
             }
             if (latest.status !== 'on') return;
             if (!policy.isAllowed(latest.origin, settings.origins)) await pause(tabId, '该开发地址已从允许列表移除');
-            else if (settings.clickAction !== 'copy' && !(await readyHost()).editorAvailable) await pause(tabId, '请先选择有效的编辑器');
+            else if (settings.clickAction === 'open' && !(await readyHost()).editorAvailable) await pause(tabId, '请先选择有效的编辑器');
             else await installRuntime(tabId, latest, settings).catch(() => {});
           });
         }
         return { settings };
       }
-      case 'COMPONENT_START': return lock(`origin:${payload.origin}`, () => setOriginEnabled(payload.tabId, payload.origin, true));
-      case 'COMPONENT_STOP': return lock(`origin:${payload.origin}`, () => setOriginEnabled(payload.tabId, payload.origin, false));
+      case 'COMPONENT_START': return toggleOrigin(payload.tabId, payload.origin, true);
+      case 'COMPONENT_STOP': return toggleOrigin(payload.tabId, payload.origin, false);
       default: throw new Error('未知组件定位操作');
     }
   }

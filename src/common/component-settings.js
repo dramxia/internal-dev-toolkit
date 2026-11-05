@@ -6,6 +6,7 @@
   const TAB_PREFIX = 'componentInspectorTab:';
   const ORIGIN_PREFIX = 'componentInspectorEnabled:';
   const MAX_ORIGINS = 50;
+  const TASK_EDITORS = Object.freeze([{ id: 'chatgpt', name: 'ChatGPT' }]);
   const DEFAULT_SHORTCUT = Object.freeze({ meta: true, ctrl: false, alt: false, shift: false, code: '' });
 
   function originOf(value) {
@@ -47,7 +48,15 @@
   function normalizeSettings(value = {}) {
     const origins = [...new Set((Array.isArray(value.origins) ? value.origins : []).map(originOf).filter(Boolean))];
     if (origins.length > MAX_ORIGINS) throw new Error(`最多保存 ${MAX_ORIGINS} 个开发地址，请先移除旧地址`);
-    return { origins, clickAction: value.clickAction === 'copy' ? 'copy' : 'open', openShortcut: normalizeShortcut(value.openShortcut), menuShortcut: normalizeShortcut(value.menuShortcut) };
+    const clickAction = value.clickAction === 'chatgpt' ? 'agent' : value.clickAction;
+    return {
+      origins,
+      clickAction: ['copy', 'agent'].includes(clickAction) ? clickAction : 'open',
+      taskEditor: TASK_EDITORS.some((editor) => editor.id === value.taskEditor) ? value.taskEditor : 'chatgpt',
+      autoSend: value.autoSend !== false,
+      openShortcut: normalizeShortcut(value.openShortcut),
+      menuShortcut: normalizeShortcut(value.menuShortcut),
+    };
   }
 
   async function getSettings() {
@@ -55,6 +64,6 @@
     try { return normalizeSettings(data[SETTINGS_KEY]); } catch (_) { return normalizeSettings(); }
   }
 
-  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, DEFAULT_SHORTCUT, originOf, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
+  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, TASK_EDITORS, DEFAULT_SHORTCUT, originOf, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
   if (typeof module !== 'undefined' && module.exports) module.exports = ns.componentSettings;
 })();

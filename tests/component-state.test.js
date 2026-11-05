@@ -9,6 +9,7 @@ const tabs = new Map([[1, { id: 1, active: true, url: 'http://localhost:5173' }]
 const documents = new Map([[1, 'd1'], [2, 'd2']]);
 let editor = null, failProject = false, finishOpen = null, delaySource = false, finishSource = null;
 let holdRuntimeStart = false, finishRuntimeStart = null;
+let holdRuntimeStop = false, finishRuntimeStop = null;
 let fastTimeouts = false, hangDetection = false;
 let serviceOnline = true, projectId = 'p1', serviceTime = Date.now();
 const runtimeResults = [];
@@ -27,13 +28,15 @@ const chrome = {
           let result;
           if (message.action === 'status') result = { editor, editorAvailable: !!editor, capabilities, revision: hostRevision };
           else if (message.action === 'update') { updates++; if (updateError) result = { ok: false, error: updateError }; else { hostRevision = message.bundle.revision; result = { updated: true }; } }
-          else if (['identifyProject', 'checkProject', 'openSource', 'copySource'].includes(message.action) && !serviceOnline) result = { ok: false, error: '未找到监听 5173 端口的本机开发服务', code: 'COMPONENT_SERVER_OFFLINE' };
-          else if (['checkProject', 'openSource', 'copySource'].includes(message.action) && message.projectId !== projectId) result = { ok: false, error: '开发服务已重启，正在重新识别项目', code: 'COMPONENT_PROJECT_STALE' };
+          else if (['identifyProject', 'checkProject', 'openSource', 'copySource', 'sourceLocation', 'agentSource'].includes(message.action) && !serviceOnline) result = { ok: false, error: '未找到监听 5173 端口的本机开发服务', code: 'COMPONENT_SERVER_OFFLINE' };
+          else if (['checkProject', 'openSource', 'copySource', 'sourceLocation', 'agentSource'].includes(message.action) && message.projectId !== projectId) result = { ok: false, error: '开发服务已重启，正在重新识别项目', code: 'COMPONENT_PROJECT_STALE' };
           else if (message.action === 'identifyProject') result = failProject ? { ok: false, error: '项目目录识别失败' } : { project: { id: projectId, root: '/project' } };
           else if (message.action === 'checkProject') result = { project: { id: projectId, root: '/project' } };
           else if (message.action === 'clearEditor') { editor = null; result = { editor: null }; }
           else if (message.action === 'openSource') { finishOpen = () => port.onMessage.emit({ id: message.id, ok: true, file: '/project/src/App.jsx', editor: 'Cursor' }); return; }
+          else if (message.action === 'agentSource') result = { opened: true, sendStatus: 'draft' };
           else if (message.action === 'copySource') result = { file: '/project/src/App.jsx', location: '/project/src/App.jsx#L10', text: '/project/src/App.jsx#L10 ' };
+          else if (message.action === 'sourceLocation') result = { file: '/project/src/App.jsx', location: '/project/src/App.jsx#L10' };
           port.onMessage.emit({ id: message.id, ok: true, ...result });
         });
       }, disconnect() { port.onDisconnect.emit(); } };
@@ -51,6 +54,10 @@ const chrome = {
     if (options.world === 'ISOLATED' && options.args?.[0]?.generation) {
       if (holdRuntimeStart) { holdRuntimeStart = false; await new Promise((resolve) => { finishRuntimeStart = resolve; }); }
       return [{ frameId: 0, result: runtimeResults.length ? runtimeResults.shift() : true }];
+    }
+    if (holdRuntimeStop && options.func?.toString().includes('__IDT_COMPONENT_INSPECTOR__?.destroy()')) {
+      holdRuntimeStop = false;
+      await new Promise((resolve) => { finishRuntimeStop = resolve; });
     }
     return [];
   } },
@@ -106,7 +113,16 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
   tabs.get(1).active = false; tabs.get(2).active = true;
   await handle('COMPONENT_START', { tabId: 2, origin: 'http://localhost:5173' });
   assert.equal((await bg.readState(1)).status, 'on');
-  await handle('COMPONENT_STOP', { tabId: 2, origin: 'http://localhost:5173' });
+  holdRuntimeStop = true;
+  const stopping = handle('COMPONENT_STOP', { tabId: 2, origin: 'http://localhost:5173' });
+  await settle();
+  try {
+    const reopening = await handle('COMPONENT_STATUS', { tabId: 2 });
+    assert.equal(reopening.state.status, 'off');
+    assert.equal(reopening.toggle?.enabled, false, '清理脚本完成前，重开侧栏应读到正在关闭');
+    assert.equal(reopening.toggle?.previousEnabled, true);
+  } finally { finishRuntimeStop(); await stopping; }
+  assert.equal((await handle('COMPONENT_STATUS', { tabId: 2 })).toggle, null);
   assert.equal((await bg.readState(1)).status, 'off', '从任意标签页关闭，应停止同地址全部页面');
   assert.equal((await bg.readState(2)).status, 'off');
   await handle('COMPONENT_START', { tabId: 2, origin: 'http://localhost:5173' });
@@ -214,7 +230,12 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
   const starting = handle('COMPONENT_START', { tabId: 1, origin: 'http://localhost:5173' });
   await settle();
   assert.equal((await bg.readState(1)).status, 'starting', '脚本启动尚未确认时应继续显示正在识别');
-  finishRuntimeStart(); await starting;
+  try {
+    const reopening = await handle('COMPONENT_STATUS', { tabId: 1 });
+    assert.equal(reopening.toggle?.enabled, true, '重开的侧栏应能读取正在开启');
+    assert.equal(reopening.toggle?.previousEnabled, false);
+  } finally { finishRuntimeStart(); await starting; }
+  assert.equal((await handle('COMPONENT_STATUS', { tabId: 1 })).toggle, null);
   assert.equal((await bg.readState(1)).status, 'on', '确认定位脚本启动后才显示已开启');
   const restoredGeneration = (await bg.readState(1)).generation;
   const runtimeFilesBefore = injections.filter((item) => item.files?.includes('component-inspector.js')).length;
@@ -345,6 +366,28 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 15));
   await assert.rejects(() => bg.handle({ type: 'COMPONENT_CHOOSE_EDITOR' }, { tab: tabs.get(2), url: tabs.get(2).url }), /操作来源/);
   await assert.rejects(() => bg.handle({ type: 'COMPONENT_OPEN', payload: { snapshotId: 'forged' } }, { tab: tabs.get(2), url: tabs.get(2).url }), /过期/);
   await assert.rejects(() => bg.handle({ type: 'COMPONENT_COPY', payload: { snapshotId: 'forged' } }, { tab: tabs.get(2), url: tabs.get(2).url }), /过期/);
+  await handle('COMPONENT_SAVE_SETTINGS', { clickAction: 'chatgpt' });
+  await handle('COMPONENT_CLEAR_EDITOR');
+  assert.equal((await bg.readState(10)).status, 'on');
+  const chatSnapshot = await bg.handle({ type: 'COMPONENT_INSPECT', payload: { generation: (await bg.readState(10)).generation, x: 1, y: 1, details: true } }, coldSender);
+  const beforePreferenceChange = injections.length;
+  await handle('COMPONENT_SAVE_SETTINGS', { clickAction: 'agent', taskEditor: 'chatgpt', autoSend: false });
+  assert.equal(injections.length, beforePreferenceChange, '切换自动发送保留页面上的草稿和快照');
+  const chatPayload = { snapshotId: chatSnapshot.snapshotId, index: 0, text: '修改组件', autoSend: true, taskEditor: 'forged' };
+  const location = await bg.handle({ type: 'COMPONENT_SOURCE_LOCATION', payload: chatPayload }, coldSender);
+  assert.equal(location.location, '/project/src/App.jsx#L10');
+  const copyCallsBeforeDraft = nativeCalls.filter(call => call.action === 'copySource').length;
+  for (let i = 0; i < 2; i++) await bg.handle({ type: 'COMPONENT_COPY', payload: { ...chatPayload, keepSnapshot: true } }, coldSender);
+  assert.equal(nativeCalls.filter(call => call.action === 'copySource').length, copyCallsBeforeDraft + 2, '浮框可以重复复制同一地址');
+  assert.equal(nativeCalls.filter(call => call.action === 'copySource').at(-1).trailingSpace, false, '浮框复制与展示的地址一致');
+  const chatResults = await Promise.allSettled([bg.handle({ type: 'COMPONENT_AGENT', payload: chatPayload }, coldSender), bg.handle({ type: 'COMPONENT_AGENT', payload: chatPayload }, coldSender)]);
+  assert.equal(chatResults.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(nativeCalls.filter((call) => call.action === 'agentSource').length, 1);
+  assert.equal(nativeCalls.find((call) => call.action === 'agentSource').text, '修改组件');
+  assert.equal(nativeCalls.find((call) => call.action === 'agentSource').autoSend, false);
+  assert.equal(nativeCalls.find((call) => call.action === 'agentSource').taskEditor, 'chatgpt');
+  await assert.rejects(() => bg.handle({ type: 'COMPONENT_SOURCE_LOCATION', payload: chatPayload }, coldSender), /过期/, '发送完成后仍释放组件快照');
+  await assert.rejects(() => bg.handle({ type: 'COMPONENT_CHATGPT_ACCESS' }, coldSender), /操作来源/);
   chrome.tabs.onRemoved.emit(1); await settle();
   assert.equal((await bg.readState(1)).status, 'off');
   console.log('component origin persistence, navigation and tab state tests passed');

@@ -17,12 +17,13 @@
     return document.querySelector('.panel.active');
   }
 
-  function transitionView(update, kind = 'content') {
+  function transitionView(update, kind = 'content', { animate = true } = {}) {
     if (typeof update !== 'function') return null;
     // finish 而非 cancel：被打断的动画落到自然终态，连点时不会先弹回起点再重放。
     activeContentAnimation?.finish();
     activeContentAnimation = null;
     update();
+    if (!animate) return null;
 
     const reduceMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     const target = transitionTarget(kind);

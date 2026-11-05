@@ -9,6 +9,7 @@
   const TAB_PREFIX = 'componentInspectorTab:';
   const ORIGIN_PREFIX = 'componentInspectorEnabled:';
   const MAX_ORIGINS = 50;
+  const TASK_EDITORS = Object.freeze([{ id: 'chatgpt', name: 'ChatGPT' }]);
   const DEFAULT_SHORTCUT = Object.freeze({ meta: true, ctrl: false, alt: false, shift: false, code: '' });
 
   function originOf(value) {
@@ -50,7 +51,15 @@
   function normalizeSettings(value = {}) {
     const origins = [...new Set((Array.isArray(value.origins) ? value.origins : []).map(originOf).filter(Boolean))];
     if (origins.length > MAX_ORIGINS) throw new Error(`最多保存 ${MAX_ORIGINS} 个开发地址，请先移除旧地址`);
-    return { origins, clickAction: value.clickAction === 'copy' ? 'copy' : 'open', openShortcut: normalizeShortcut(value.openShortcut), menuShortcut: normalizeShortcut(value.menuShortcut) };
+    const clickAction = value.clickAction === 'chatgpt' ? 'agent' : value.clickAction;
+    return {
+      origins,
+      clickAction: ['copy', 'agent'].includes(clickAction) ? clickAction : 'open',
+      taskEditor: TASK_EDITORS.some((editor) => editor.id === value.taskEditor) ? value.taskEditor : 'chatgpt',
+      autoSend: value.autoSend !== false,
+      openShortcut: normalizeShortcut(value.openShortcut),
+      menuShortcut: normalizeShortcut(value.menuShortcut),
+    };
   }
 
   async function getSettings() {
@@ -58,7 +67,7 @@
     try { return normalizeSettings(data[SETTINGS_KEY]); } catch (_) { return normalizeSettings(); }
   }
 
-  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, DEFAULT_SHORTCUT, originOf, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
+  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, TASK_EDITORS, DEFAULT_SHORTCUT, originOf, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
   if (typeof module !== 'undefined' && module.exports) module.exports = ns.componentSettings;
 })();
 
@@ -80,6 +89,9 @@
   let toastTimer = null, animationFrame = null, indicatorFrame = null, restoreScroll = null;
   let indicatorState = null;
   let menuEntries = [];
+  let draftInput = null, draftStatus = null, draftIndex = -1;
+  let draftControls = null;
+  let draftPosition = null, draftDrag = null, draftResizeObserver = null;
   const pressed = new Set();
   const markers = new Map();
   const indicatorStyles = new Map();
@@ -101,6 +113,23 @@
     if (text != null) element.textContent = text;
     return element;
   };
+  function draftIcon(name) {
+    const paths = {
+      turn: ['M15 14l5-5-5-5', 'M4 20v-7a4 4 0 0 1 4-4h12'],
+      close: ['M18 6 6 18', 'm6 6 12 12'],
+      copy: ['M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Z', 'M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'],
+      check: ['M20 6 9 17l-5-5'],
+      send: ['M7 7h10v10', 'M7 17 17 7'],
+      success: ['M9 12l2 2 4-4', 'M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0'],
+    };
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const [key, value] of Object.entries({ width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' })) icon.setAttribute(key, value);
+    for (const d of paths[name]) {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', d); icon.append(path);
+    }
+    return icon;
+  }
 
   function ensureOverlay() {
     if (host?.isConnected) return;
@@ -133,6 +162,43 @@
       .path data::after{content:attr(value);float:right;padding-left:15px;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
       .arrow{position:absolute;background:inherit;width:8px;height:8px;transform:rotate(45deg);pointer-events:none}
       .empty{padding:5px;font-weight:normal}
+      /* 任务浮框与 popup.html 的 panel、sage、text、border、error 和 shadow-md 保持一致。 */
+      .draft,.draft-toast{--draft-paper:#FDFEFC;--draft-soft:#F0F5EE;--draft-ink:#1C2E20;--draft-text:#46584B;--draft-muted:#72826F;--draft-line:rgba(74,124,89,.12);--draft-green:#4A7C59;--draft-green-hover:#3F6B4E;--draft-green-ink:#FAFCF8;--draft-tint:#EAF2E8;--draft-error:#B0552F;--draft-shadow:0 2px 6px rgba(28,46,32,.04),0 18px 40px rgba(74,124,89,.10);color-scheme:light;
+        font:400 13px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+      .menu.draft{width:min(406px,calc(100vw - 24px));padding:17px 20px 15px;max-height:calc(100vh - 24px);overflow:auto;border:1px solid var(--draft-line);border-radius:22px;background:var(--draft-paper);color:var(--draft-ink);box-shadow:var(--draft-shadow);filter:none}
+      .draft>.arrow{display:none}.draft .list{max-height:none;overflow:visible}
+      .draft button,.draft textarea{font:inherit}.draft button{cursor:pointer;-webkit-tap-highlight-color:transparent}.draft button:disabled{cursor:not-allowed}
+      .draft button:focus-visible,.draft textarea:focus-visible{outline:2px solid var(--draft-green-hover);outline-offset:3px}
+      .draft-top{display:flex;align-items:center;gap:8px;min-width:0;cursor:grab;user-select:none;touch-action:none}
+      .draft[data-dragging] .draft-top{cursor:grabbing}
+      .draft-title{flex:1;margin:0;font:500 14px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}
+      .draft-icon{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:9px;background:var(--draft-tint);color:var(--draft-green);flex-shrink:0}
+      .draft-icon-button{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;border:0;width:30px;height:30px;padding:0;border-radius:10px;background:transparent;color:var(--draft-muted)}
+      .draft-icon-button:hover{background:var(--draft-soft);color:var(--draft-green-hover)}
+      .draft-context{margin:14px 0 10px;display:grid;gap:8px;min-width:0}
+      .draft-source-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
+      .draft-component{min-width:0;overflow-wrap:anywhere;padding:3px 8px;border-radius:6px;background:var(--draft-soft);color:var(--draft-ink);font:500 12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+      .draft-address-row{display:grid;grid-template-columns:minmax(0,1fr) 28px;align-items:start;gap:8px;padding:10px 8px 10px 12px;border-radius:11px;background:var(--draft-soft)}
+      .draft-source{padding:0;border:0;border-radius:4px;background:transparent;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;color:var(--draft-text);font:400 11px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+      .draft-copy{width:28px;height:28px;border-radius:8px;margin-top:-4px;position:relative}.draft-copy:hover{background:var(--draft-paper)}
+      .draft-copy[data-copied="true"]{color:var(--draft-green)}.draft-copy>span{display:inline-flex}.draft-copy svg{width:14px;height:14px}
+      .draft-copy-feedback{min-height:18px;flex-shrink:0;font-size:11px;line-height:1.6;color:var(--draft-green);text-align:right}
+      .draft-copy-feedback[data-kind="manual"]{color:var(--draft-muted)}
+      .draft-copy::after{content:attr(data-tooltip);position:absolute;bottom:calc(100% + 8px);right:0;white-space:nowrap;padding:6px 10px;border-radius:14px;background:var(--draft-ink);color:var(--draft-paper);font:500 12px/1.5 -apple-system,sans-serif;pointer-events:none;visibility:hidden}
+      .draft-copy:hover::after,.draft-copy:focus-visible::after{visibility:visible}
+      .draft textarea{display:block;width:100%;min-width:0;min-height:112px;padding:9px 0;resize:none;border:0;border-radius:10px;background:var(--draft-paper);color:var(--draft-ink);line-height:1.5;caret-color:var(--draft-green)}
+      .draft textarea::placeholder{color:var(--draft-muted);opacity:.85}.draft textarea:read-only{opacity:.7}
+      .draft-status-row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+      .draft-status{flex:1;margin:0;color:var(--draft-text);font-size:12px;line-height:1.6;overflow-wrap:anywhere}.draft-status[data-kind="error"]{color:var(--draft-error)}
+      .draft-length{margin-top:10px;color:var(--draft-muted);font-size:11px;font-variant-numeric:tabular-nums}
+      .draft-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--draft-line);margin-top:13px;padding-top:13px}
+      .draft-hint{font-size:11px;color:var(--draft-muted);line-height:1.65}.draft-hint span{display:block}
+      .draft button.draft-send{display:inline-flex;justify-content:center;align-items:center;gap:7px;min-height:34px;padding:7px 14px;border:0;border-radius:11px;background:var(--draft-green);color:var(--draft-green-ink);font-weight:400;white-space:nowrap;transition:background .16s ease,color .16s ease,opacity .16s ease,transform .16s ease}
+      .draft-send:hover:not(:disabled){background:var(--draft-green-hover)}.draft-send:active{transform:translateY(1px)}.draft-send:disabled{opacity:.4}
+      .toast.draft-toast{display:flex;align-items:flex-start;gap:9px;width:max-content;max-width:min(520px,calc(100vw - 32px));padding:11px 16px;background:var(--draft-paper);color:var(--draft-ink);border:1px solid var(--draft-line);border-radius:14px;box-shadow:var(--draft-shadow);font-size:12px}
+      .draft-toast svg{margin-top:2px;color:var(--draft-green);flex:0 0 auto}
+      @media(pointer:coarse){.draft textarea{font-size:16px}.draft .draft-icon-button,.draft button.draft-send{min-width:44px;min-height:44px}.draft-address-row{grid-template-columns:minmax(0,1fr) 44px}}
+      @media(prefers-reduced-motion:reduce){.draft *{transition:none!important}}
     `;
     shadow.append(style);
     document.documentElement.append(host);
@@ -142,7 +208,7 @@
     cancelAnimationFrame(indicatorFrame); indicatorFrame = null;
     if (!(target instanceof Element) || !target.isConnected) { clearIndicator(); return; }
     ensureOverlay();
-    const state = menuOpen ? 'SELECT' : 'HOVER';
+    const state = draftInput ? 'DRAFT' : menuOpen ? 'SELECT' : 'HOVER';
     if (highlighted !== target) {
       highlighted?.removeAttribute('data-idt-component-target');
       target.setAttribute('data-idt-component-target', state);
@@ -156,7 +222,8 @@
       if (!indicatorStyles.has(root)) {
         const style = node('style');
         style.textContent = `${root === document ? '[data-idt-component-state] *' : '*'}{pointer-events:auto!important}
-          [data-idt-component-target]{cursor:context-menu!important;outline:#368b57 auto 1px!important}`;
+          [data-idt-component-target]{cursor:context-menu!important;outline:#368b57 auto 1px!important}
+          [data-idt-component-target="DRAFT"]{outline:2px solid #368b57!important;outline-offset:2px!important}`;
         (root === document ? document.documentElement : root).append(style);
         indicatorStyles.set(root, style);
       }
@@ -196,10 +263,14 @@
     if (!toast) { clearTimeout(toastTimer); toastTimer = null; }
     cancelAnimationFrame(animationFrame); cancelAnimationFrame(indicatorFrame);
     animationFrame = indicatorFrame = null;
+    stopDraftDrag(); draftPosition = null;
+    draftResizeObserver?.disconnect(); draftResizeObserver = null;
     const focus = previousFocus;
     previousFocus = null;
     menuOpen = held = busy = false;
     data = null; menuEntries = []; selected = -1;
+    draftInput = draftStatus = null; draftIndex = -1;
+    clearTimeout(draftControls?.copyTimer); draftControls = null;
     clearIndicator();
     restoreScroll?.(); restoreScroll = null;
     for (const [marker, element] of markers) element.removeAttribute(marker);
@@ -211,10 +282,12 @@
     } else removeOverlay();
     if (restoreFocus && focus?.isConnected) focus.focus?.({ preventScroll: true });
   }
-  function notify(message) {
+  function notify(message, task = false) {
     ensureOverlay();
     shadow.querySelector('.toast')?.remove();
-    const toast = node('div', 'toast', message);
+    const toast = node('div', task ? 'toast draft-toast' : 'toast');
+    if (task) toast.append(draftIcon('success'), node('span', '', message));
+    else toast.textContent = message;
     toast.setAttribute('role', 'status');
     shadow.append(toast);
     clearTimeout(toastTimer);
@@ -249,6 +322,19 @@
     if (!contextActive()) return;
     if (!event.isTrusted) return;
     pressed.add(event.code);
+    if (draftInput) {
+      event.stopImmediatePropagation();
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.key === 'Escape') { consume(event); cleanupInteraction(); }
+      else if (event.key === 'Enter' && !event.shiftKey && shadow.activeElement === draftInput) { consume(event); if (!event.repeat) submitDraft(); }
+      else if (event.key === 'Tab') {
+        consume(event);
+        const controls = [...list.querySelectorAll('button:not([disabled]),textarea')];
+        const index = controls.indexOf(shadow.activeElement);
+        controls[(index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length]?.focus({ preventScroll: true });
+      }
+      return;
+    }
     if (menuOpen) {
       if (event.key === 'Escape') { consume(event); cleanupInteraction(); return; }
       if (!menuEntries.length) { if (event.key === 'Tab') consume(event); return; }
@@ -287,14 +373,53 @@
   function positionMenu() {
     if (!menu || !point) return;
     const { width, height } = menu.getBoundingClientRect();
+    if (draftPosition) {
+      draftPosition.x = Math.max(12, Math.min(innerWidth - width - 12, draftPosition.x));
+      draftPosition.y = Math.max(12, Math.min(innerHeight - height - 12, draftPosition.y));
+      Object.assign(menu.style, { left: `${draftPosition.x}px`, top: `${draftPosition.y}px` });
+      return;
+    }
+    if (draftInput && target?.isConnected) {
+      const rect = target.getBoundingClientRect();
+      point = { x: rect.right, y: rect.top + Math.min(rect.height / 2, 60) };
+    }
     const right = innerWidth - point.x - 5;
     const left = point.x - 5;
     const placement = width <= right || right >= left ? 'right' : 'left';
-    const x = Math.max(0, Math.min(innerWidth - width, placement === 'right' ? point.x + 5 : point.x - width - 5));
-    const y = Math.max(0, Math.min(innerHeight - height, point.y - height / 2));
+    const margin = draftInput ? 12 : 0;
+    const x = Math.max(margin, Math.min(innerWidth - width - margin, placement === 'right' ? point.x + 5 : point.x - width - 5));
+    const y = Math.max(margin, Math.min(innerHeight - height - margin, point.y - height / 2));
     Object.assign(menu.style, { left: `${x}px`, top: `${y}px` });
     menu.dataset.placement = placement;
     Object.assign(arrow.style, { left: placement === 'right' ? '-4px' : '', right: placement === 'left' ? '-4px' : '', top: `${Math.max(4, Math.min(height - 12, point.y - y - 4))}px` });
+  }
+  function stopDraftDrag() {
+    const drag = draftDrag;
+    draftDrag = null;
+    if (menu) delete menu.dataset.dragging;
+    if (drag?.handle.hasPointerCapture(drag.pointerId)) drag.handle.releasePointerCapture(drag.pointerId);
+  }
+  function enableDraftDrag(handle) {
+    handle.title = '拖动调整位置';
+    handle.addEventListener('pointerdown', (event) => {
+      if (!event.isPrimary || event.button !== 0 || event.target.closest('button')) return;
+      consume(event);
+      const rect = menu.getBoundingClientRect();
+      draftPosition = { x: rect.left, y: rect.top };
+      draftDrag = { handle, pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+      handle.setPointerCapture(event.pointerId);
+      menu.dataset.dragging = 'true';
+    });
+    handle.addEventListener('pointermove', (event) => {
+      if (draftDrag?.pointerId !== event.pointerId) return;
+      consume(event);
+      draftPosition = { x: event.clientX - draftDrag.offsetX, y: event.clientY - draftDrag.offsetY };
+      positionMenu();
+    });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) handle.addEventListener(type, (event) => {
+      if (draftDrag?.pointerId !== event.pointerId) return;
+      consume(event); stopDraftDrag();
+    });
   }
   function makeMenu() {
     ensureOverlay();
@@ -341,6 +466,167 @@
     selected = -1; positionMenu();
   }
 
+  function setDraftStatus(message = '', kind = '') {
+    draftStatus.textContent = message;
+    draftStatus.hidden = !message;
+    draftStatus.dataset.kind = kind;
+    draftStatus.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    positionMenu();
+  }
+
+  function setDraftBusy(value) {
+    busy = value;
+    draftInput.readOnly = value;
+    draftControls.send.disabled = value;
+    draftControls.sendLabel.textContent = value ? '发送中' : '发送';
+    menu.setAttribute('aria-busy', String(value));
+  }
+
+  function setDraftSource(location) {
+    const source = draftControls.source;
+    source.replaceChildren();
+    location.split('/').forEach((part, index) => {
+      if (index) source.append(document.createTextNode('/'), node('wbr'));
+      source.append(document.createTextNode(part));
+    });
+    positionMenu();
+  }
+
+  function resetDraftCopy(controls) {
+    clearTimeout(controls.copyTimer);
+    controls.copy.dataset.copied = 'false';
+    controls.copyIcon.hidden = false;
+    controls.copiedIcon.hidden = true;
+    controls.copy.setAttribute('aria-label', '复制完整组件地址');
+    controls.copy.dataset.tooltip = '复制地址';
+    controls.copyFeedback.textContent = '';
+    controls.copyFeedback.dataset.kind = '';
+  }
+
+  async function copyDraftSource() {
+    const controls = draftControls;
+    if (!controls || controls.copyBusy || !data) return;
+    const interaction = epoch;
+    controls.copyBusy = true;
+    resetDraftCopy(controls);
+    try {
+      const result = await send('COMPONENT_COPY', { snapshotId: data.snapshotId, index: draftIndex, keepSnapshot: true });
+      if (interaction !== epoch || draftControls !== controls) return;
+      if (result.location && result.location !== controls.source.textContent) setDraftSource(result.location);
+      controls.copy.dataset.copied = 'true';
+      controls.copyIcon.hidden = true;
+      controls.copiedIcon.hidden = false;
+      controls.copy.setAttribute('aria-label', '组件地址已复制');
+      controls.copy.dataset.tooltip = '已复制';
+      controls.copyFeedback.textContent = '已复制';
+      controls.copyTimer = setTimeout(() => resetDraftCopy(controls), 1800);
+    } catch (_) {
+      if (interaction !== epoch || draftControls !== controls) return;
+      const range = document.createRange();
+      range.selectNodeContents(controls.source);
+      const selection = window.getSelection();
+      selection?.removeAllRanges(); selection?.addRange(range);
+      const modifier = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl + ';
+      controls.copyFeedback.textContent = `已选中，按 ${modifier}C 复制`;
+      controls.copyFeedback.dataset.kind = 'manual';
+      controls.copyTimer = setTimeout(() => resetDraftCopy(controls), 5000);
+    } finally { controls.copyBusy = false; }
+  }
+
+  function makeDraft(index, location) {
+    makeMenu();
+    menu.classList.add('draft');
+    menu.setAttribute('role', 'dialog');
+    menu.setAttribute('aria-label', '发送任务');
+    list.replaceChildren();
+    const component = data.components[index];
+    const top = node('div', 'draft-top');
+    enableDraftDrag(top);
+    const icon = node('span', 'draft-icon'); icon.append(draftIcon('turn'));
+    const close = node('button', 'draft-icon-button draft-close'); close.type = 'button';
+    close.setAttribute('aria-label', '关闭发送任务'); close.append(draftIcon('close'));
+    close.addEventListener('click', () => cleanupInteraction());
+    top.append(icon, node('h3', 'draft-title', '发送任务'), close);
+    const context = node('div', 'draft-context');
+    const heading = node('div', 'draft-source-heading');
+    const copyFeedback = node('span', 'draft-copy-feedback');
+    copyFeedback.setAttribute('role', 'status'); copyFeedback.setAttribute('aria-live', 'polite');
+    heading.append(node('span', 'draft-component', component.name), copyFeedback);
+    const addressRow = node('div', 'draft-address-row');
+    const source = node('code', 'draft-source');
+    const copy = node('button', 'draft-icon-button draft-copy'); copy.type = 'button';
+    const copyIcon = node('span'); copyIcon.append(draftIcon('copy'));
+    const copiedIcon = node('span'); copiedIcon.append(draftIcon('check'));
+    copy.append(copyIcon, copiedIcon); copy.addEventListener('click', copyDraftSource);
+    addressRow.append(source, copy); context.append(heading, addressRow);
+    draftInput = node('textarea');
+    draftInput.setAttribute('aria-label', '任务内容');
+    draftInput.placeholder = '描述你想对这个组件做的修改…';
+    draftInput.maxLength = 10000;
+    draftInput.rows = 4;
+    draftIndex = index;
+    const statusRow = node('div', 'draft-status-row');
+    draftStatus = node('p', 'draft-status'); draftStatus.hidden = true;
+    draftStatus.setAttribute('role', 'status');
+    draftStatus.setAttribute('aria-live', 'polite');
+    const length = node('span', 'draft-length'); length.hidden = true;
+    statusRow.append(draftStatus, length);
+    const footer = node('div', 'draft-footer');
+    const hint = node('div', 'draft-hint');
+    hint.append(node('span', '', 'Enter 发送任务'), node('span', '', 'Shift + Enter 换行'));
+    const sendButton = node('button', 'draft-send'); sendButton.type = 'button';
+    const sendLabel = node('span', '', '发送'); sendButton.append(sendLabel, draftIcon('send'));
+    sendButton.addEventListener('click', submitDraft);
+    footer.append(hint, sendButton);
+    draftControls = { source, copy, copyIcon, copiedIcon, copyFeedback, copyBusy: false, copyTimer: null, send: sendButton, sendLabel };
+    resetDraftCopy(draftControls);
+    draftInput.addEventListener('input', () => {
+      if (!busy) setDraftStatus();
+      length.hidden = draftInput.value.length < 9000;
+      length.textContent = `${draftInput.value.length.toLocaleString('en-US')} / 10,000`;
+      positionMenu();
+    });
+    list.append(top, context, draftInput, statusRow, footer);
+    showIndicator();
+    setDraftSource(location);
+    positionMenu(); draftInput.focus({ preventScroll: true });
+    draftResizeObserver = new ResizeObserver(reposition);
+    draftResizeObserver.observe(menu);
+  }
+
+  async function submitDraft() {
+    if (busy || !draftInput || !data) return;
+    const text = draftInput.value;
+    if (!text.trim()) { setDraftStatus('请先输入内容', 'error'); draftInput.focus({ preventScroll: true }); return; }
+    const interaction = epoch;
+    setDraftBusy(true);
+    setDraftStatus('正在打开编辑器…');
+    try {
+      const result = await send('COMPONENT_AGENT', { snapshotId: data.snapshotId, index: draftIndex, text });
+      if (interaction !== epoch) return;
+      cleanupInteraction(false);
+      const reasons = {
+        disabled: '自动发送已关闭',
+        accessibility: '辅助程序尚未获得辅助功能权限',
+        focus: '编辑器未保持在前台',
+        window: '尚未读到编辑器窗口',
+        page: '尚未识别到编辑器页面',
+        draft: '尚未核对到本次输入内容',
+        button: '尚未找到可用的发送按钮',
+        changed: '窗口或草稿内容已变化',
+        press: '发送按钮点击失败',
+        timeout: '自动发送等待超时',
+        automation: '自动发送脚本运行失败',
+      };
+      notify(result.sendStatus === 'pressed' ? '已打开编辑器并点击发送' : `${reasons[result.reason] || '自动发送未完成'}，草稿已保留，请在桌面发送`, true);
+    } catch (error) {
+      if (interaction === epoch) {
+        setDraftStatus(error.message, 'error');
+        draftInput.focus({ preventScroll: true });
+      }
+    } finally { if (interaction === epoch) setDraftBusy(false); }
+  }
+
   async function openSelected(index, action = 'open') {
     if (busy || !data) return;
     if (!data.components[index]?.source?.file) { notify('此组件暂未提供源码位置，可查看父组件'); return; }
@@ -383,6 +669,13 @@
       else {
         const index = result.components.findIndex((component) => component.source?.file);
         if (index < 0) { cleanupInteraction(false); notify('此元素暂未提供源码位置，可按快捷键加右键查看组件'); }
+        else if (config.clickAction === 'agent') {
+          busy = true;
+          const source = await send('COMPONENT_SOURCE_LOCATION', { snapshotId: data.snapshotId, index });
+          if (interaction !== epoch) return;
+          busy = false;
+          makeDraft(index, source.location);
+        }
         else await openSelected(index, config.clickAction);
       }
     } catch (error) { if (interaction === epoch) { cleanupInteraction(false); notify(error.message); } }
@@ -394,7 +687,7 @@
     if (!event.isTrusted || ownEvent(event)) return;
     if (menuOpen) { consume(event); if (event.type === 'pointerdown') cleanupInteraction(); return; }
     if ((event.button === 0 && hot(event, config.openShortcut)) || (event.button === 2 && hot(event, config.menuShortcut))) {
-      if (event.type === 'pointerdown' && event.button === 2) previousFocus = document.activeElement;
+      if (event.type === 'pointerdown' && (event.button === 2 || config.clickAction === 'agent')) previousFocus = document.activeElement;
       consume(event);
     }
   }
@@ -425,7 +718,7 @@
     for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'auxclick']) window.addEventListener(type, guardPointer, capture);
     window.addEventListener('scroll', reposition, { ...capture, passive: true });
     window.addEventListener('resize', reposition, capture);
-    window.addEventListener('blur', (event) => { if (event.target === window) { pressed.clear(); if (!menuOpen && !busy) cleanupInteraction(false, { keepToast: true }); } }, capture);
+    window.addEventListener('blur', (event) => { if (event.target === window) { stopDraftDrag(); pressed.clear(); if ((!menuOpen || draftInput) && !busy) cleanupInteraction(false, { keepToast: true }); } }, capture);
     document.addEventListener('visibilitychange', () => { if (document.hidden) { pressed.clear(); if (!menuOpen && !busy) cleanupInteraction(false, { keepToast: true }); } }, capture);
     window.addEventListener('pagehide', destroy, capture);
   }

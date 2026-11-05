@@ -11,6 +11,167 @@ const runFile = promisify(execFile);
 const { HOST_NAME, installationPaths, uninstall, runtimeBundle, updateRuntime } = require('./installation.cjs');
 const EDITOR_PICKER_SCRIPT = 'POSIX path of (choose file with prompt "选择用于打开组件源码的编辑器（.app）" of type {"com.apple.application-bundle"} default location (path to applications folder) multiple selections allowed false invisibles false showing package contents false)';
 
+// 此函数作为固定的 JXA 脚本运行，用户文字只通过参数传递。
+function chatgptAutomation(argv) {
+  ObjC.import('AppKit');
+  ObjC.import('ApplicationServices');
+  // 显式声明对象和输出指针类型，避免 JXA 把 CF 引用当成普通 Ref 对象传入。
+  ObjC.bindFunction('AXUIElementCreateApplication', ['id', ['int']]);
+  ObjC.bindFunction('AXUIElementCopyAttributeValue', ['int', ['id', 'id', 'id*']]);
+  ObjC.bindFunction('AXUIElementSetAttributeValue', ['int', ['id', 'id', 'id']]);
+  ObjC.bindFunction('AXUIElementPerformAction', ['int', ['id', 'id']]);
+  ObjC.bindFunction('CFURLGetString', ['id', ['id']]);
+  const input = JSON.parse(argv[0]);
+  if (input.mode === 'access') {
+    return JSON.stringify({ trusted: !!$.AXIsProcessTrustedWithOptions($({ AXTrustedCheckOptionPrompt: true })) });
+  }
+  if (!$.AXIsProcessTrusted()) return JSON.stringify({ sendStatus: 'draft', reason: 'accessibility' });
+  function attribute(element, name) {
+    const value = Ref();
+    if ($.AXUIElementCopyAttributeValue(element, $(name), value) !== 0) return null;
+    // AXURL 返回 CFURL；直接 unwrap 会丢失 absoluteString，变成 [object NSURL]。
+    if (name === 'AXURL' && $.CFGetTypeID(value[0]) === $.CFURLGetTypeID())
+      return ObjC.unwrap($.CFURLGetString(value[0]));
+    return ObjC.unwrap(value[0]);
+  }
+  function descendants(element) {
+    const entries = [element];
+    for (let i = 0; i < entries.length; i++) {
+      if (entries.length > 1500 || Date.now() >= deadline) { controls.treeLimited = true; return []; }
+      const children = attribute(entries[i], 'AXChildren');
+      if (Array.isArray(children)) entries.push.apply(entries, children);
+    }
+    return entries;
+  }
+  const expected = input.prompt.replace(/\r\n?/g, '\n');
+  function pageKind(element) {
+    const url = String(attribute(element, 'AXURL') || '');
+    // 桌面端主窗口加载 index.html，聊天切换由页面内部路由处理。
+    if (/^app:\/\/-\/index\.html(?:[?#].*)?$/.test(url)) return 'document';
+    if (/^(?:app|codex):\/\/[^/]+\/(?:new|threads\/new)?(?:[?#].*)?$/.test(url)) return 'route';
+    return url ? 'other' : 'missing';
+  }
+  function taskPage(element) {
+    return attribute(element, 'AXRole') === 'AXWebArea' && ['document', 'route'].includes(pageKind(element));
+  }
+  function waitForUI() {
+    // NSRunningApplication 的焦点状态依赖主运行循环更新。
+    $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.2));
+  }
+  const started = Date.now();
+  const deadline = started + 12000;
+  const workspace = $.NSWorkspace.sharedWorkspace;
+  let wasActive = false;
+  let enabledPid = null;
+  let targetPid = 0;
+  let focusState = 'waiting';
+  let reason = 'focus';
+  let stage = 'application';
+  const controls = { webAreaCount: 0, pageMatchCount: 0, textAreaCount: 0, draftMatchCount: 0, sendButtonCount: 0, treeLimited: false, pageKinds: [] };
+  function frontmostTarget() {
+    // 直接读取接收键盘事件的前台进程，避免误选同名应用列表里的后台进程。
+    const app = workspace.frontmostApplication;
+    if (!app || app.isNil() || ObjC.unwrap(app.bundleIdentifier) !== 'com.openai.codex') {
+      focusState = wasActive ? 'lost' : 'waiting';
+      return null;
+    }
+    if (targetPid && app.processIdentifier !== targetPid) {
+      focusState = 'changed';
+      return null;
+    }
+    targetPid = app.processIdentifier;
+    focusState = 'matched';
+    return app;
+  }
+  function finish(sendStatus, reason, extra) {
+    return JSON.stringify(Object.assign({ sendStatus, reason, stage, focusState, targetPid, elapsedMs: Date.now() - started, controls }, extra || {}));
+  }
+  try {
+    while (Date.now() < deadline) {
+      stage = 'application';
+      const app = frontmostTarget();
+      if (!app) {
+        if (wasActive) return finish('draft', 'focus');
+        waitForUI(); continue;
+      }
+      wasActive = true;
+      const application = $.AXUIElementCreateApplication(app.processIdentifier);
+      if (enabledPid !== app.processIdentifier) {
+        // Electron 按需提供页面控件。系统授权后还需主动开启控件读取。
+        stage = 'accessibility';
+        $.AXUIElementSetAttributeValue(application, $('AXManualAccessibility'), $(true));
+        enabledPid = app.processIdentifier;
+        waitForUI(); continue;
+      }
+      stage = 'window'; reason = 'window';
+      const window = attribute(application, 'AXFocusedWindow');
+      if (!window) { waitForUI(); continue; }
+      stage = 'page'; reason = 'page';
+      // 优先从当前输入框向上查找，避免侧边栏较长时扫描整窗耗尽时间。
+      const focusedPath = [];
+      let focused = attribute(application, 'AXFocusedUIElement');
+      for (let depth = 0; focused && depth < 64; depth++) {
+        focusedPath.push(focused);
+        if ($.CFEqual(focused, window)) break;
+        focused = attribute(focused, 'AXParent');
+      }
+      const inWindow = focusedPath.length && $.CFEqual(focusedPath[focusedPath.length - 1], window);
+      const focusedPages = inWindow ? focusedPath.filter(taskPage) : [];
+      const webAreas = (focusedPages.length === 1 ? focusedPath : descendants(window)).filter(element => attribute(element, 'AXRole') === 'AXWebArea');
+      const pages = webAreas.filter(taskPage);
+      controls.webAreaCount = webAreas.length;
+      controls.pageMatchCount = pages.length;
+      controls.pageKinds = webAreas.slice(0, 8).map(pageKind);
+      if (pages.length === 1) {
+        stage = 'draft'; reason = 'draft';
+        const page = focusedPages.length === 1 ? focusedPath : descendants(pages[0]);
+        const textAreas = page.filter(element => attribute(element, 'AXRole') === 'AXTextArea');
+        const editors = textAreas.filter(function (element) {
+          return String(attribute(element, 'AXValue') || '').replace(/\r\n?/g, '\n') === expected;
+        });
+        controls.textAreaCount = textAreas.length;
+        controls.draftMatchCount = editors.length;
+        let buttons = [];
+        let group = editors.length === 1 ? attribute(editors[0], 'AXParent') : null;
+        if (group) { stage = 'button'; reason = 'button'; }
+        for (let depth = 0; group && depth < 16; depth++) {
+          const role = attribute(group, 'AXRole');
+          if (role === 'AXWindow') break;
+          buttons = descendants(group).filter(function (element) {
+            if (attribute(element, 'AXRole') !== 'AXButton' || !attribute(element, 'AXEnabled')) return false;
+            return ['AXTitle', 'AXDescription'].some(function (name) {
+              const label = String(attribute(element, name) || '').trim();
+              return /^(Send|Send message|Send prompt|Submit prompt|发送|发送消息|发送提示词)$/.test(label);
+            });
+          });
+          if (buttons.length) break;
+          // 普通 div 可能被辅助功能树省略，输入框和按钮会直接同属新聊天页面。
+          if (role === 'AXWebArea') break;
+          group = attribute(group, 'AXParent');
+        }
+        controls.sendButtonCount = buttons.length;
+        if (editors.length === 1 && buttons.length === 1) {
+          stage = 'verify';
+          // 点击前再次核对焦点与原文，用户切换窗口或修改内容时留在草稿。
+          waitForUI();
+          const currentWindow = attribute(application, 'AXFocusedWindow');
+          if (Date.now() >= deadline || !frontmostTarget() || !currentWindow || !$.CFEqual(window, currentWindow) || !taskPage(pages[0]) ||
+            String(attribute(editors[0], 'AXValue') || '').replace(/\r\n?/g, '\n') !== expected)
+            return finish('draft', 'changed');
+          stage = 'press';
+          const result = $.AXUIElementPerformAction(buttons[0], $('AXPress'));
+          return finish(result === 0 ? 'pressed' : 'draft', result === 0 ? '' : 'press');
+        }
+      }
+      waitForUI();
+    }
+    return finish('draft', reason);
+  } catch (error) {
+    return finish('draft', 'automation', { errorName: String(error.name || 'Error') });
+  }
+}
+const CHATGPT_AUTOMATION_SCRIPT = `function run(argv) { return (${chatgptAutomation.toString()})(argv); }`;
+
 function copyTextToClipboard(text) {
   return new Promise((resolve, reject) => {
     const child = execFile('/usr/bin/pbcopy', [], { timeout: 8000, env: { ...process.env, LC_CTYPE: 'UTF-8' } }, (error) => {
@@ -268,16 +429,82 @@ function createHost({ installation = installationPaths(), dataDir = installation
     return { project };
   }
 
-  async function copySource({ origin, projectId, source }) {
+  async function sourceLocation({ origin, projectId, source }) {
     const { project } = await validateProject(origin, projectId);
     const file = await resolveProjectFile(project.root, source?.file);
     const line = Number.isSafeInteger(source?.line) && source.line > 0 ? source.line : null;
     const endLine = line && Number.isSafeInteger(source?.endLine) && source.endLine > line ? source.endLine : null;
     const location = `${file}${line ? `#L${line}${endLine ? `-L${endLine}` : ''}` : ''}`;
-    // 沿用 Copy Code Path 的末尾空格，路径和行号范围采用用户指定的格式。
-    const text = `${location} `;
+    return { project, file, line, endLine, location, precision: line ? 'line' : 'file' };
+  }
+
+  async function copySource(message) {
+    const { project, ...result } = await sourceLocation(message);
+    const { location } = result;
+    // 快捷复制沿用末尾空格；任务浮框复制其展示的完整地址。
+    const text = message.trailingSpace === false ? location : `${location} `;
     await copyText(text);
-    return { file, line, endLine, location, text, precision: line ? 'line' : 'file' };
+    return { ...result, text };
+  }
+
+  async function chatgptSource(message) {
+    const text = message.text;
+    if (typeof text !== 'string' || !text.trim() || text.length > 10000 || text.includes('\0'))
+      throw new Error('请输入 1 至 10000 字的内容');
+    const { project, ...source } = await sourceLocation(message);
+    let workspace = project.root;
+    // 普通文件夹可以直接使用；Git 子项目和 worktree 使用各自的仓库根目录。
+    let directory = project.root;
+    while (true) {
+      if (await fs.lstat(path.join(directory, '.git')).catch(() => null)) {
+        try { workspace = await fs.realpath(await execute('/usr/bin/git', ['-C', project.root, 'rev-parse', '--show-toplevel'], 4000)); }
+        catch (_) { throw new Error('读取 Git 仓库目录失败，请检查本机 Git 和项目目录'); }
+        if (!within(workspace, source.file)) throw new Error('组件源码与 Git 仓库目录不匹配');
+        break;
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory) break;
+      directory = parent;
+    }
+    const prompt = `${text}\n\n组件源码\n${source.location}`;
+    const url = new URL('codex://threads/new');
+    url.searchParams.set('mode', 'codex');
+    url.searchParams.set('path', workspace);
+    url.searchParams.set('prompt', prompt);
+    if (Buffer.byteLength(url.href) > 120000) throw new Error('内容和源码路径过长，请缩短内容后重试');
+    try { await execute('/usr/bin/open', ['-b', 'com.openai.codex', url.href]); }
+    catch (error) {
+      if (error.killed) throw Object.assign(new Error('打开 ChatGPT 超时，请先在桌面端检查草稿'), { code: 'CHATGPT_OPEN_UNCERTAIN' });
+      throw new Error('ChatGPT 桌面端打开失败，请确认已安装支持 Codex 的 ChatGPT 桌面端');
+    }
+    // 链接一旦交给桌面端，后续失败均返回草稿状态，避免重试再次打开聊天。
+    let sending = { sendStatus: 'draft', reason: 'automation' };
+    if (message.autoSend === false) sending = { sendStatus: 'draft', reason: 'disabled' };
+    else try {
+      const result = JSON.parse(await execute('/usr/bin/osascript', ['-l', 'JavaScript', '-e', CHATGPT_AUTOMATION_SCRIPT, JSON.stringify({ prompt })], 15000));
+      if (['draft', 'pressed'].includes(result.sendStatus)) {
+        sending.sendStatus = result.sendStatus;
+        if (['', 'disabled', 'accessibility', 'focus', 'window', 'page', 'draft', 'button', 'changed', 'press', 'automation'].includes(result.reason)) sending.reason = result.reason;
+        if (['application', 'accessibility', 'window', 'page', 'draft', 'button', 'verify', 'press'].includes(result.stage)) sending.stage = result.stage;
+        if (['Error', 'TypeError', 'ReferenceError', 'SyntaxError', 'RangeError'].includes(result.errorName)) sending.errorName = result.errorName;
+        if (['waiting', 'matched', 'lost', 'changed'].includes(result.focusState)) sending.focusState = result.focusState;
+        if (Number.isSafeInteger(result.targetPid) && result.targetPid >= 0) sending.targetPid = result.targetPid;
+        if (Number.isSafeInteger(result.elapsedMs) && result.elapsedMs >= 0) sending.elapsedMs = result.elapsedMs;
+        if (result.controls && typeof result.controls === 'object') {
+          sending.controls = {};
+          for (const key of ['webAreaCount', 'pageMatchCount', 'textAreaCount', 'draftMatchCount', 'sendButtonCount']) {
+            if (Number.isSafeInteger(result.controls[key]) && result.controls[key] >= 0) sending.controls[key] = result.controls[key];
+          }
+          if (typeof result.controls.treeLimited === 'boolean') sending.controls.treeLimited = result.controls.treeLimited;
+          if (Array.isArray(result.controls.pageKinds)) sending.controls.pageKinds = result.controls.pageKinds.filter(kind => ['document', 'route', 'other', 'missing'].includes(kind)).slice(0, 8);
+        }
+      }
+    } catch (error) {
+      sending.reason = error.killed ? 'timeout' : 'automation';
+    }
+    // 只保留最近一次的状态，供排查使用；原文、源码地址和命令输出均不写入。
+    await fs.writeFile(path.join(dataDir, 'last-agent-send.json'), JSON.stringify({ at: new Date().toISOString(), revision: await runtimeRevision(), editor: 'chatgpt', autoSend: message.autoSend !== false, ...sending }), { mode: 0o600 }).catch(() => {});
+    return { ...source, workspace, opened: true, ...sending };
   }
 
   async function openSource({ origin, projectId, source }) {
@@ -338,11 +565,23 @@ function createHost({ installation = installationPaths(), dataDir = installation
       case 'identifyProject': return identifyProject(message);
       case 'checkProject': return checkProject(message);
       case 'openSource': return openSource(message);
+      case 'sourceLocation': {
+        const { project, ...result } = await sourceLocation(message);
+        return result;
+      }
       case 'copySource': return copySource(message);
+      case 'agentSource':
+        if (message.taskEditor !== 'chatgpt') throw new Error('请选择受支持的编辑器');
+        return chatgptSource(message);
+      case 'agentAccess':
+        if (message.taskEditor !== 'chatgpt') throw new Error('请选择受支持的编辑器');
+        return JSON.parse(await execute('/usr/bin/osascript', ['-l', 'JavaScript', '-e', CHATGPT_AUTOMATION_SCRIPT, JSON.stringify({ mode: 'access' })]));
+      case 'chatgptSource': return chatgptSource(message);
+      case 'chatgptAccess': return JSON.parse(await execute('/usr/bin/osascript', ['-l', 'JavaScript', '-e', CHATGPT_AUTOMATION_SCRIPT, JSON.stringify({ mode: 'access' })]));
       default: throw new Error('未知的本机操作');
     }
   }
   return { handle, status, identifyProject, checkProject, openSource, copySource, readConfig, saveConfig };
 }
 
-module.exports = { HOST_NAME, EDITOR_PICKER_SCRIPT, createHost, cleanSource, resolveProjectFile, rootFromCommand, within };
+module.exports = { HOST_NAME, EDITOR_PICKER_SCRIPT, CHATGPT_AUTOMATION_SCRIPT, createHost, cleanSource, resolveProjectFile, rootFromCommand, within };

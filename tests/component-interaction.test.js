@@ -20,7 +20,7 @@ const repo = path.join(__dirname, '..');
     await page.goto('http://localhost:5173/');
     await page.addScriptTag({ path: path.join(repo, 'src/inspector/page-probe.js') });
     await page.evaluate(() => {
-      window.fixture = { opened: [], copied: [], queries: [], businessClicks: 0, holdInspect: false, failOpen: false, failCopy: false };
+      window.fixture = { opened: [], copied: [], chats: [], queries: [], businessClicks: 0, holdInspect: false, failOpen: false, failCopy: false };
       function Parent() {}
       function SaveButton() {}
       SaveButton.defaultProps = { appearance: 'primary' };
@@ -43,9 +43,20 @@ const repo = path.join(__dirname, '..');
           if (fixture.failOpen) return { ok: false, error: '编辑器暂时无法打开文件' };
           fixture.opened.push(payload); return { ok: true };
         }
+        if (type === 'COMPONENT_AGENT') {
+          fixture.chats.push(payload);
+          if (fixture.holdChat) await new Promise((resolve) => { fixture.releaseChat = resolve; });
+          if (fixture.failChat) return { ok: false, error: 'ChatGPT 桌面端打开失败' };
+          return { ok: true, opened: true, sendStatus: 'draft', reason: fixture.chatReason };
+        }
+        if (type === 'COMPONENT_SOURCE_LOCATION') {
+          if (fixture.holdLocation) await new Promise((resolve) => { fixture.releaseLocation = resolve; });
+          return { ok: true, location: fixture.sourceLocation || '/workspace/src/SaveButton.tsx#L12' };
+        }
         if (type === 'COMPONENT_COPY') {
+          if (fixture.holdCopy) await new Promise((resolve) => { fixture.releaseCopy = resolve; });
           if (fixture.failCopy) return { ok: false, error: '复制失败，请重新点击组件重试' };
-          fixture.copied.push(payload); return { ok: true, location: '/workspace/src/SaveButton.tsx#L12' };
+          fixture.copied.push(payload); return { ok: true, location: fixture.sourceLocation || '/workspace/src/SaveButton.tsx#L12' };
         }
       } } };
       document.getElementById('previous').focus();
@@ -290,6 +301,201 @@ const repo = path.join(__dirname, '..');
     await page.evaluate(() => __IDT_COMPONENT_INSPECTOR__.destroy()); await assertClean();
     assert.equal(await nested.getAttribute('data-idt-component-target'), null);
     assert.equal(await page.locator('#shadow-host style').count(), 0);
+    await page.addScriptTag({ path: path.join(repo, 'src/inspector/content.js') });
+    await start(false, 'agent');
+    const draft = page.getByRole('textbox', { name: '任务内容' });
+    const openDraft = async () => {
+      const rect = await target.boundingBox();
+      await page.keyboard.down('Meta'); await page.mouse.click(rect.x + 8, rect.y + 8); await page.keyboard.up('Meta');
+      await draft.waitFor();
+    };
+    await openDraft();
+    assert.equal(await draft.evaluate((element) => element.getRootNode().activeElement === element), true);
+    const source = menu.locator('.draft-source');
+    const copyButton = menu.getByRole('button', { name: '复制完整组件地址' });
+    const copyFeedback = menu.locator('.draft-copy-feedback');
+    const sendButton = menu.locator('.draft-send');
+    const assertDraftHighlight = async (element = target) => {
+      assert.equal(await element.getAttribute('data-idt-component-target'), 'DRAFT');
+      assert.deepEqual(await element.evaluate((el) => {
+        const style = getComputedStyle(el);
+        return [style.outlineColor, style.outlineStyle, style.outlineWidth, style.outlineOffset];
+      }), ['rgb(54, 139, 87)', 'solid', '2px', '2px'], '输入和操作浮框时，组件保持清晰的绿色轮廓');
+    };
+    const assertDraftBounds = async () => {
+      const rect = await menu.boundingBox();
+      const viewport = page.viewportSize();
+      assert.ok(rect.x >= 11 && rect.y >= 11 && rect.x + rect.width <= viewport.width - 11 && rect.y + rect.height <= viewport.height - 11,
+        `浮框应完整留在页面内：${JSON.stringify({ rect, viewport })}`);
+      return rect;
+    };
+    const dragDraftTo = async (x, y, release = true) => {
+      const rect = await menu.boundingBox();
+      const header = await menu.locator('.draft-top').boundingBox();
+      const start = { x: header.x + 60, y: header.y + header.height / 2 };
+      await page.mouse.move(start.x, start.y); await page.mouse.down();
+      await page.mouse.move(start.x + x - rect.x, start.y + y - rect.y, { steps: 5 });
+      if (release) {
+        await page.mouse.up();
+        assert.equal(await menu.getAttribute('data-dragging'), null);
+      }
+      await assertDraftHighlight();
+      return assertDraftBounds();
+    };
+    await assertDraftHighlight();
+    await page.mouse.move(800, 120);
+    await assertDraftHighlight();
+    assert.equal(await page.locator('#outside').getAttribute('data-idt-component-target'), null, '浮框打开后保持选中原组件');
+
+    // 标题栏自由拖动，输入和复制后仍保留手动摆放的位置。
+    const moved = await dragDraftTo(450, 70);
+    assert.ok(Math.abs(moved.x - 450) < 1 && Math.abs(moved.y - 70) < 1);
+    assert.equal(await source.textContent(), '/workspace/src/SaveButton.tsx#L12');
+    await draft.fill('复制时保留任务');
+    const beforeCopy = await menu.boundingBox();
+    assert.deepEqual(beforeCopy, moved, '输入文字应保留拖动后的位置');
+    await copyButton.click();
+    await page.waitForFunction(() => document.querySelector('[data-idt-component-overlay]').shadowRoot.querySelector('.draft-copy-feedback').textContent === '已复制');
+    assert.equal(await draft.inputValue(), '复制时保留任务');
+    assert.equal(await page.evaluate(() => fixture.copied.at(-1).keepSnapshot), true);
+    assert.equal(await page.evaluate(() => fixture.copied.at(-1).index), 1);
+    assert.deepEqual(await menu.boundingBox(), beforeCopy, '复制反馈保持浮框尺寸与位置稳定');
+    await assertDraftHighlight();
+    await page.waitForFunction(() => !document.querySelector('[data-idt-component-overlay]').shadowRoot.querySelector('.draft-copy-feedback').textContent);
+
+    // 指针移出窗口后继续拖动，四个角均限制在页面内，松开后停止移动。
+    for (const [x, y] of [[-500, -500], [2000, -500], [-500, 2000], [2000, 2000]]) {
+      const rect = await dragDraftTo(x, y);
+      assert.ok(Math.abs(rect.x - (x < 0 ? 12 : 1000 - rect.width - 12)) < 1);
+      assert.ok(Math.abs(rect.y - (y < 0 ? 12 : 720 - rect.height - 12)) < 1);
+      await page.mouse.move(500, 20);
+      assert.deepEqual(await menu.boundingBox(), rect, '松开鼠标后浮框停止移动');
+    }
+    // 浮框变高时收回底部；重试或清除提示保留当前位置。
+    await draft.fill(''); await page.keyboard.press('Enter');
+    const errorBounds = await assertDraftBounds();
+    await draft.fill('复制时保留任务');
+    const afterError = await menu.boundingBox();
+    assert.equal(afterError.x, errorBounds.x);
+    assert.equal(afterError.y, errorBounds.y);
+    await page.setViewportSize({ width: 320, height: 240 });
+    await page.waitForFunction(() => {
+      const rect = document.querySelector('[data-idt-component-overlay]').shadowRoot.querySelector('.draft').getBoundingClientRect();
+      return rect.right <= innerWidth - 11 && rect.bottom <= innerHeight - 11;
+    });
+    await assertDraftBounds(); await assertDraftHighlight();
+    await page.setViewportSize({ width: 1000, height: 720 });
+    await page.keyboard.press('Escape'); await assertClean();
+
+    // 拖动中关闭浮框，释放指针捕获；下次打开重新放在组件旁。
+    await openDraft();
+    const reopened = await menu.boundingBox();
+    assert.ok(reopened.x < 200, '关闭后重新打开应回到组件附近');
+    await dragDraftTo(450, 70, false);
+    await page.keyboard.press('Escape'); await page.mouse.up(); await assertClean();
+    await openDraft();
+    await draft.fill('拖选这里的文字');
+    const inputRect = await draft.boundingBox();
+    const beforeSelection = await menu.boundingBox();
+    await page.mouse.move(inputRect.x + 8, inputRect.y + 15); await page.mouse.down();
+    await page.mouse.move(inputRect.x + 100, inputRect.y + 15); await page.mouse.up();
+    assert.deepEqual(await menu.boundingBox(), beforeSelection, '输入框内拖选文字保持浮框位置');
+    await draft.focus();
+    await page.keyboard.press('Shift+Tab');
+    assert.equal(await copyButton.evaluate(el => el.getRootNode().activeElement === el), true, '键盘可以访问复制按钮');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => fixture.chats.length), 0, '复制按钮上的回车只复制地址');
+    await draft.fill('');
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => fixture.chats.length), 0);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.imeSetComposition', { text: '测试', selectionStart: 2, selectionEnd: 2 });
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => fixture.chats.length), 0, '中文选词回车保留输入');
+    await cdp.send('Input.insertText', { text: '测试' });
+    await draft.fill('调整按钮'); await page.keyboard.press('Shift+Enter'); await page.keyboard.type('second line');
+    assert.equal(await draft.inputValue(), '调整按钮\nsecond line');
+    await page.screenshot({ path: path.join(repo, 'test-results/component-chatgpt-draft.png') });
+    await page.evaluate(() => { fixture.holdChat = true; });
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !!fixture.releaseChat);
+    assert.equal(await sendButton.isDisabled(), true);
+    assert.equal(await draft.getAttribute('readonly'), '');
+    await assertDraftHighlight();
+    await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(() => fixture.chats.length), 1);
+    assert.equal(await page.evaluate(() => fixture.chats[0].text), '调整按钮\nsecond line');
+    assert.equal(await page.evaluate(() => fixture.chats[0].index), 1);
+    await page.evaluate(() => { fixture.holdChat = false; fixture.releaseChat(); });
+    await draft.waitFor({ state: 'detached' });
+    assert.match(await toast.textContent(), /自动发送未完成.*草稿已保留/);
+    await page.keyboard.press('Escape');
+    for (const [reason, message] of [['button', '尚未找到可用的发送按钮'], ['accessibility', '辅助程序尚未获得辅助功能权限'], ['disabled', '自动发送已关闭'], ['automation', '自动发送脚本运行失败']]) {
+      await page.evaluate((reason) => { fixture.chatReason = reason; }, reason);
+      await openDraft(); await draft.fill('验证失败提示'); await page.keyboard.press('Enter');
+      await draft.waitFor({ state: 'detached' });
+      assert.equal(await toast.textContent(), `${message}，草稿已保留，请在桌面发送`);
+      await page.keyboard.press('Escape');
+    }
+    await openDraft(); await draft.fill('保留我的文字');
+    await page.evaluate(() => { fixture.failChat = true; });
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('[data-idt-component-overlay]').shadowRoot.querySelector('.draft-status').textContent.includes('打开失败'));
+    assert.equal(await draft.inputValue(), '保留我的文字');
+    assert.equal(await draft.getAttribute('readonly'), null);
+    assert.equal(await sendButton.isEnabled(), true);
+    await assertDraftHighlight();
+    await page.evaluate(() => { fixture.failChat = false; });
+    await sendButton.click(); await draft.waitFor({ state: 'detached' });
+    await page.keyboard.press('Escape');
+    await openDraft(); await draft.fill('复制失败仍保留');
+    await page.evaluate(() => { fixture.failCopy = true; });
+    await copyButton.click();
+    await page.waitForFunction(() => document.querySelector('[data-idt-component-overlay]').shadowRoot.querySelector('.draft-copy-feedback').textContent.includes('已选中'));
+    assert.equal(await draft.inputValue(), '复制失败仍保留');
+    assert.equal(await page.evaluate(() => window.getSelection().toString()), await source.textContent());
+    await page.evaluate(() => { fixture.failCopy = false; });
+    await page.mouse.click(800, 600); await assertClean();
+    await openDraft(); await page.keyboard.press('Escape'); await assertClean();
+    await page.evaluate(() => { fixture.holdCopy = true; });
+    await openDraft(); await copyButton.click();
+    await page.waitForFunction(() => !!fixture.releaseCopy);
+    await menu.getByRole('button', { name: '关闭发送任务' }).click(); await assertClean();
+    await openDraft();
+    await page.evaluate(() => { fixture.holdCopy = false; fixture.releaseCopy(); });
+    assert.equal(await copyFeedback.textContent(), '', '上一次浮框的复制回调应丢弃');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { fixture.sourceLocation = '/Users/demo/projects/company-platform/apps/management-console/src/features/organization/components/member-profile/UserCard.vue#L42-L60'; });
+    for (const scheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme: scheme });
+      await page.setViewportSize({ width: 320, height: 480 });
+      await openDraft();
+      const bounds = await menu.boundingBox();
+      assert.ok(bounds.x >= 8 && bounds.x + bounds.width <= 312 && bounds.y >= 8 && bounds.y + bounds.height <= 472);
+      assert.equal(await source.textContent(), await page.evaluate(() => fixture.sourceLocation));
+      assert.equal(await source.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, '长地址完整换行');
+      assert.equal(await menu.locator('.arrow').isVisible(), false, '轻量便签保持完整圆角轮廓');
+      await page.screenshot({ path: path.join(repo, `test-results/component-task-${scheme}-narrow.png`) });
+      await menu.getByRole('button', { name: '关闭发送任务' }).click(); await assertClean();
+    }
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.setViewportSize({ width: 1000, height: 720 });
+    await page.evaluate(() => { fixture.holdLocation = true; });
+    await page.keyboard.down('Meta'); await mouseClick(target); await page.keyboard.up('Meta');
+    await page.waitForFunction(() => !!fixture.releaseLocation);
+    await page.keyboard.press('Escape'); await assertClean();
+    await page.evaluate(() => { fixture.holdLocation = false; fixture.releaseLocation(); });
+    await page.waitForTimeout(30); await assertClean();
+    await openDraft();
+    await page.evaluate(() => __IDT_COMPONENT_INSPECTOR__.resetInteraction()); await assertClean();
+    await page.keyboard.down('Meta'); await mouseClick(nested); await page.keyboard.up('Meta');
+    await draft.waitFor(); await assertDraftHighlight(nested);
+    await page.keyboard.press('Escape'); await assertClean();
+    assert.equal(await page.locator('#shadow-host style').count(), 0, '关闭浮框后清理 Shadow DOM 内的轮廓样式');
+    await target.hover(); await page.keyboard.down('Meta'); await mouseClick(page.locator('#label')); await page.keyboard.up('Meta');
+    await draft.waitFor(); await draft.fill('普通文本元素也保持高亮');
+    await assertDraftHighlight(page.locator('#label'));
+    await page.keyboard.press('Escape'); await assertClean();
     assert.deepEqual(errors, []);
     console.log('component interaction tests passed (green reference styles, props, source indices, mouse/keyboard, viewport edges, restoration and Shadow DOM)');
   } finally { await browser.close(); }

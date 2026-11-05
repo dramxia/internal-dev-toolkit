@@ -2770,6 +2770,8 @@
     /* 组件定位：启停和使用说明在前，低频设置按需展开。 */
     #panel-component { font-size: 14px; }
     #panel-component [hidden] { display: none !important; }
+    #panel-component.component-loading :is(.component-page, .component-usage, .component-settings) { display: none; }
+    #panel-component.component-loading #componentToggle { visibility: hidden; }
     .component-status { padding: 18px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--panel); }
     .component-status[data-state="on"] { background: var(--sage-100); border-color: var(--sage-100); }
     .component-status[data-state="setup"],
@@ -2789,7 +2791,7 @@
     .component-switch[aria-checked="true"] { background: var(--sage-500); }
     .component-switch[aria-checked="true"]::after { left: 26px; }
     .component-switch:disabled { opacity: .45; cursor: not-allowed; }
-    .component-status-note { margin-top: 11px; }
+    .component-status-note { min-height: 2lh; margin-top: 11px; }
     .component-notice { margin-top: 12px; color: var(--error); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
     .component-refresh-error { margin-top: 12px; }
     .component-page { margin-top: 16px; }
@@ -2811,7 +2813,7 @@
     .component-row > :first-child { min-width: 0; }
     .component-click-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
     .component-click-actions { display: flex; gap: 4px; padding: 4px; border-radius: 9px; background: var(--sage-100); }
-    .component-click-action { flex: 1; min-width: 0; min-height: 40px; padding: 8px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; transition: background .14s, color .14s; }
+    .component-click-action { flex: 1; min-width: 0; min-height: 40px; padding: 8px 4px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
     .component-click-action[aria-pressed="true"] { background: var(--sage-600); color: var(--text-inv); font-weight: 500; }
     .component-click-action:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--sage-100); }
     .component-click-action:focus-visible { outline: 2px solid var(--sage-600); outline-offset: 3px; }
@@ -2819,7 +2821,6 @@
     .component-click-help { min-height: 44px; margin-top: 12px; }
     .component-parent-action { min-height: 0; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
     @media (pointer: coarse) { .component-click-action { min-height: 44px; } }
-    @media (prefers-reduced-motion: reduce) { .component-click-action { transition: none; } }
     .component-key-line { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; color: var(--text-2); }
     .component-key-line kbd { padding: 3px 6px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); color: var(--text-1); font-family: inherit; font-size: 13px; line-height: 1.4; font-weight: 500; overflow-wrap: anywhere; }
     .component-mouse-action { white-space: nowrap; }
@@ -2830,12 +2831,16 @@
     .component-setting-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
     .component-setting-title .icon-svg { width: 18px; height: 18px; color: var(--text-2); }
     .component-setting-value { display: flex; align-items: center; gap: 8px; flex-shrink: 0; color: var(--text-2); font-size: 13px; }
+    .component-auto-send { padding: 14px 0; }
+    .component-auto-send .component-muted { margin: 8px 0 0; padding-left: 28px; }
+    .component-auto-send > button { margin: 8px 0 0 28px; }
     .component-setting-value [data-pending="true"] { color: var(--warn); }
     .component-setting-body { padding: 0 0 16px 28px; }
     .component-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     #panel-component .btn { min-height: 38px; padding: 7px 12px; border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: none; font-size: 13px; letter-spacing: 0; flex: 0 0 auto; }
     #panel-component .btn-primary { border-color: var(--sage-500); }
     #panel-component .btn-primary:hover:not(:disabled) { box-shadow: none; }
+    #panel-component .component-pending { opacity: 1; cursor: progress; }
     #panel-component .component-text-btn { border-color: transparent; background: transparent; padding-inline: 8px; }
     #panel-component .btn:focus-visible,
     .component-switch:focus-visible,
@@ -3512,7 +3517,7 @@
 
     </div><!-- /panel-app -->
 
-    <div class="panel" id="panel-component" aria-hidden="true" inert>
+    <div class="panel component-loading" id="panel-component" aria-hidden="true" inert>
       <section class="component-status" id="componentStatus" data-state="off" aria-label="当前页面启用状态">
         <div class="component-status-top">
           <div><p class="component-muted component-status-label">当前标签页</p><p class="component-page-state" id="componentPageState" role="status">正在检查</p></div>
@@ -3540,10 +3545,12 @@
         <div class="component-click-actions" id="componentClickAction" role="group" aria-label="选择左键操作" aria-describedby="componentClickActionHelp">
           <button class="component-click-action" id="componentClickActionOpen" type="button" data-click-action="open" aria-pressed="true">打开源码</button>
           <button class="component-click-action" id="componentClickActionCopy" type="button" data-click-action="copy" aria-pressed="false">复制源码位置</button>
+          <button class="component-click-action" id="componentClickActionAgent" type="button" data-click-action="agent" aria-pressed="false">发送任务</button>
         </div>
         <div class="component-click-help component-muted" id="componentClickActionHelp">
           <p id="componentOpenSourceHint">在编辑器中打开组件对应的源码。</p>
           <p id="componentCopyLocationHint" hidden>复制本机绝对路径和行号，例如 /项目/src/App.tsx#L10。</p>
+          <p id="componentAgentHint" hidden>选中组件后输入内容，回车在编辑器中打开新聊天。Shift + Enter 换行。</p>
         </div>
         <div class="component-row component-parent-action"><span>查看父组件</span><span class="component-key-line"><kbd id="componentMenuShortcutLabel">⌘ Command</kbd><span class="component-mouse-action">＋ 右键</span></span></div>
       </section>
@@ -3555,9 +3562,15 @@
             <div class="component-setting-body">
               <p class="component-path" id="componentEditorPath" hidden></p>
               <p class="component-muted" id="componentEditorHint">从“应用程序”中选择编辑器 .app 文件。</p>
-              <div class="component-actions"><button class="btn btn-ghost" id="componentChooseEditor" type="button" disabled>选择编辑器</button><button class="btn btn-ghost component-text-btn" id="componentClearEditor" type="button" hidden disabled>清空</button></div>
+              <select class="field-input" id="componentTaskEditor" aria-label="编辑器" hidden></select>
+              <div class="component-actions" id="componentFileEditorActions"><button class="btn btn-ghost" id="componentChooseEditor" type="button" disabled>选择编辑器</button><button class="btn btn-ghost component-text-btn" id="componentClearEditor" type="button" hidden disabled>清空</button></div>
             </div>
           </details>
+          <section class="component-setting component-auto-send" id="componentAutoSendSection" hidden>
+            <div class="component-row"><span class="component-setting-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4 20-7ZM22 2 11 13"/></svg>自动发送</span><button class="component-switch" id="componentAutoSend" type="button" role="switch" aria-label="自动发送" aria-checked="true" aria-describedby="componentAutoSendHint"></button></div>
+            <p class="component-muted" id="componentAutoSendHint">打开新聊天后自动发送内容。</p>
+            <button class="btn btn-ghost component-text-btn" id="componentAgentAccess" type="button">设置发送权限</button>
+          </section>
           <details class="component-setting" id="componentShortcutSection">
             <summary><span class="component-setting-title"><svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M8 16h8"/></svg>快捷键</span><span class="component-setting-value">修改<svg class="component-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></span></summary>
             <div class="component-setting-body">
