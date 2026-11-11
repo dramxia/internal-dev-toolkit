@@ -81,7 +81,7 @@
   const tabUrl = (tab) => tab?.pendingUrl || tab?.url;
   const toggleLabel = (enabled) => enabled ? '正在开启' : '正在关闭';
   function pageState() {
-    return response?.state.origin === policy.originOf(tabUrl(currentTab)) ? response.state : { status: 'off' };
+    return response?.state.origin === policy.pageKey(tabUrl(currentTab)) ? response.state : { status: 'off' };
   }
   function openSettings(id) {
     $(id).open = true;
@@ -104,8 +104,10 @@
     }
     const { host, settings, toggle } = response;
     const state = pageState();
-    const origin = policy.originOf(tabUrl(currentTab));
-    const allowed = policy.isAllowed(origin, settings.origins);
+    const origin = policy.pageKey(tabUrl(currentTab));
+    const localFile = origin.startsWith('file:');
+    const allowed = localFile ? response.fileAccess : policy.isAllowed(origin, settings.origins);
+    const scopeHint = localFile ? '同一个 HTML 文件共用开关，刷新或重新打开后继续生效。' : '同一开发地址的所有路由和标签页共用开关。';
     const status = state.status;
     const needsHostUpdate = host.connected && host.needsInstall;
     const updateFailed = !!host.updateError;
@@ -130,7 +132,7 @@
     else if (hostReady && settingsList.lastElementChild !== hostSection) settingsList.append(hostSection);
 
     let label = statusLabel(state), tone = status, hint = '';
-    if (status === 'starting') hint = '正在识别框架和项目目录…';
+    if (status === 'starting') hint = '正在识别页面类型和项目目录…';
     else if (status === 'restoring') hint = '正在恢复当前页面的定位，沿用已识别的项目。';
     else if (!ready) {
       label = needsHostUpdate || updateFailed ? '待更新' : '待设置'; tone = 'setup';
@@ -140,21 +142,22 @@
         : host.editor ? '编辑器已移动或删除，请重新选择。' : '选择编辑器后，即可开启。';
     } else if (!allowed) {
       label = '暂不可用'; tone = 'off';
-      hint = origin ? '请添加当前开发地址，或切换到本地开发页面。' : '请切换到本地 React／Vue 开发页面。';
+      hint = localFile ? '请在 Chrome 扩展详情中开启「允许访问文件网址」。'
+        : origin ? '请添加当前开发地址，或切换到本地开发页面。' : '请打开本地 React、Vue 或 HTML 页面。';
     } else if (status === 'paused') hint = '开关已保存。处理提示后，点击「检查连接」重试。';
     else if (status === 'recovering') hint = '开关已保存，开发服务恢复后会自动重新识别项目。';
     else if (status === 'waiting') hint = '开关已保存，页面组件加载完成后会自动启用。';
-    else hint = running ? '同一开发地址共用开关，切路由、刷新和重新打开后继续生效。' : '开启后，同一开发地址的所有路由和标签页共用。';
+    else hint = localFile ? scopeHint : running ? '同一开发地址共用开关，切路由、刷新和重新打开后继续生效。' : '开启后，同一开发地址的所有路由和标签页共用。';
     $('componentStatus').dataset.state = toggle ? (running ? 'on' : 'off') : tone;
     $('componentPageState').textContent = progress || label;
-    $('componentStatusHint').textContent = progress ? '同一开发地址的所有路由和标签页共用开关。' : hint;
+    $('componentStatusHint').textContent = progress ? scopeHint : hint;
     $('componentNotice').textContent = state.error || '';
     $('componentNotice').hidden = !state.error;
     $('componentToggle').setAttribute('aria-checked', String(running));
-    $('componentToggle').setAttribute('aria-label', running ? '停止当前开发地址的组件定位' : '启用当前开发地址的组件定位');
+    $('componentToggle').setAttribute('aria-label', running ? '停止当前页面的组件定位' : '启用当前页面的组件定位');
     setAvailability($('componentToggle'), !allowed || (!running && !ready), busy || changingTab || !!toggle);
 
-    $('componentPageOrigin').textContent = origin ? new URL(origin).host : currentTab?.title || '尚未找到当前页面';
+    $('componentPageOrigin').textContent = origin && !localFile ? new URL(origin).host : currentTab?.title || (localFile ? '本地 HTML 文件' : '尚未找到当前页面');
     $('componentPageUrl').textContent = tabUrl(currentTab) || '尚未找到当前页面';
     const frameworks = state.frameworks?.join(' / ');
     $('componentFrameworkSummary').textContent = frameworks || '页面信息';
@@ -254,7 +257,7 @@
       if (superseded()) return;
       const tab = tabs[0] || null;
       observedTabId = tab?.id;
-      observedOrigin = policy.originOf(tabUrl(tab));
+      observedOrigin = policy.pageKey(tabUrl(tab));
       const result = await request('COMPONENT_STATUS', { tabId: tab?.id });
       if (superseded()) return;
       if (result.host.connected && pendingSetupAction === 'install' && (!response?.host.connected || (result.host.instanceId && result.host.instanceId !== response?.host.instanceId))) {
@@ -346,7 +349,7 @@
       if (changingTab || response?.toggle) return;
       const tab = currentTab, state = pageState();
       const running = state.enabled ?? state.status === 'on';
-      action(() => request(running ? 'COMPONENT_STOP' : 'COMPONENT_START', { tabId: tab?.id, origin: policy.originOf(tabUrl(tab)) }), toggleLabel(!running));
+      action(() => request(running ? 'COMPONENT_STOP' : 'COMPONENT_START', { tabId: tab?.id, origin: policy.pageKey(tabUrl(tab)) }), toggleLabel(!running));
     });
     $('componentRetry').addEventListener('click', () => action(async () => {}));
     $('componentChooseEditor').addEventListener('click', () => action(() => request('COMPONENT_CHOOSE_EDITOR')));

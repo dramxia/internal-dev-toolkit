@@ -171,6 +171,7 @@ async function resolveFrame(frame, origin, scripts) {
 
 export async function resolveComponentSource(source, origin, scripts = []) {
   if (!source) return null;
+  if (source.kind === 'html') return { file: source.file, htmlUrl: source.htmlUrl, line: null, column: null, precision: 'file' };
   if (source.kind !== 'stack') {
     if (!source.file) return null;
     const endLine = Number.isSafeInteger(source.endLine) && source.endLine > source.line ? source.endLine : null;

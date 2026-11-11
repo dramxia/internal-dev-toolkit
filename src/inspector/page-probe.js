@@ -6,7 +6,9 @@
 function inspectComponentPage(options) {
   'use strict';
   options = options || {};
-  if (options.origin && location.origin !== options.origin) return { error: '页面地址已变化' };
+  const pageKey = location.protocol === 'file:' ? `file://${location.pathname}` : location.origin;
+  if (options.origin && pageKey !== options.origin) return { error: '页面地址已变化' };
+  const html = document.contentType === 'text/html';
   const limit = 32;
 
   function parentElement(element) {
@@ -146,8 +148,31 @@ function inspectComponentPage(options) {
     return [];
   }
 
+  function htmlElementPath(element) {
+    const path = [];
+    for (let node = element; node && path.length < 60; node = node.parentElement) {
+      const siblings = node.parentElement?.children;
+      const peers = siblings && siblings.length <= 128
+        ? Array.from(siblings).filter((item) => !item.hasAttribute('data-idt-component-overlay'))
+        : null;
+      const vueKey = node.__vnode?.key;
+      path.push({
+        tag: node.localName,
+        attrs: Array.from(node.attributes, ({ name, value }) => [name, value.slice(0, 1500)])
+          .filter(([name]) => !name.startsWith('data-idt-')).slice(0, 60),
+        text: Array.from(node.childNodes).filter((child) => child.nodeType === Node.TEXT_NODE)
+          .map((child) => child.data.slice(0, 200)).join(' ').slice(0, 200),
+        index: peers?.indexOf(node),
+        siblings: peers?.map((item) => item.localName),
+        ...(Number.isSafeInteger(vueKey) ? { vueKey } : {}),
+      });
+    }
+    return path;
+  }
+
   const scripts = () => [...new Set([...Array.from(document.scripts, (script) => script.src), ...performance.getEntriesByType('resource').filter((entry) => entry.initiatorType === 'script').map((entry) => entry.name)])].filter(Boolean).slice(-40);
   if (options.mode === 'detect') {
+    if (location.protocol === 'file:') return { html };
     const frameworks = new Set();
     const hints = new Set();
     const sources = new Map();
@@ -162,7 +187,7 @@ function inspectComponentPage(options) {
       }
       if (hints.size >= 16 || sources.size >= 12) break;
     }
-    return { frameworks: [...frameworks], hints: [...hints].slice(0, 32), sources: [...sources.values()], scripts: scripts() };
+    return { frameworks: [...frameworks], hints: [...hints].slice(0, 32), sources: [...sources.values()], scripts: scripts(), html: html && document.readyState !== 'loading' };
   }
 
   let element;
@@ -188,6 +213,16 @@ function inspectComponentPage(options) {
     element = inner;
   }
   if (!element) return { components: [] };
+  const rect = element.getBoundingClientRect();
+  const bounds = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  if (options.html) {
+    if (!html) return { components: [] };
+    const name = element.id ? `${element.localName}#${element.id.slice(0, 80)}` : element.localName;
+    return {
+      components: [{ name, framework: 'HTML' }], rect: bounds,
+      ...(options.props ? { htmlElement: htmlElementPath(element), htmlEncoding: document.characterSet } : {}),
+    };
+  }
   const components = find(element, options.props !== false);
   // 已存在的 Vue Inspector 标记可直接提供模板行列，无需改造业务项目。
   const marker = element.closest?.('[data-v-inspector]')?.getAttribute('data-v-inspector');
@@ -195,8 +230,7 @@ function inspectComponentPage(options) {
   if (match && components[0]?.framework.startsWith('Vue')) {
     components[0].source = { file: match[1], line: Number(match[2]), column: Number(match[3]), kind: 'source' };
   }
-  const rect = element.getBoundingClientRect();
-  return { components, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, scripts: scripts() };
+  return { components, rect: bounds, scripts: scripts() };
 }
 
 if (typeof module !== 'undefined' && module.exports) module.exports = { inspectComponentPage };

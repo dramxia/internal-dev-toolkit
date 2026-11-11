@@ -22,6 +22,27 @@ const assert = require('node:assert/strict');
     assert.deepEqual(await resolveComponentSource({ kind: 'source', file: '/src/App.vue' }, 'http://localhost:5173'), { file: '/src/App.vue', line: null, column: null, precision: 'file' });
     assert.equal((await resolveComponentSource({ file: '/src/App.tsx', line: 10, endLine: 29 }, 'http://localhost:5173')).endLine, 29);
     assert.equal((await resolveComponentSource({ file: '/src/App.tsx', line: 10, endLine: 9 }, 'http://localhost:5173')).endLine, undefined);
+    const { indexHtml, locateHtmlElement } = await import('../src/inspector/html-source.mjs');
+    const html = [
+      '<div id="messages"><div class="bubble">初始消息</div></div>',
+      '<script>',
+      'const bubble = document.createElement("div");',
+      'bubble.className = "bubble";',
+      String.raw`container.innerHTML = "<div class=\"shell\">\n<span class=\"label\">详情</span></div>";`,
+      '</script>',
+    ];
+    const index = indexHtml(html.join('\r\n'));
+    const messagePath = (index, text) => [
+      { tag: 'div', attrs: [['class', 'bubble']], text, index, siblings: ['div', 'div'] },
+      { tag: 'div', attrs: [['id', 'messages']], index: 0, siblings: ['div', 'script'] },
+      { tag: 'body', attrs: [] },
+      { tag: 'html', attrs: [] },
+    ];
+    assert.deepEqual(locateHtmlElement(index, messagePath(0, '初始消息')), { line: 1, column: 20 });
+    assert.deepEqual(locateHtmlElement(index, messagePath(1, '新消息')), { line: 3, column: 16 });
+    assert.deepEqual(locateHtmlElement(index, [{ tag: 'span', attrs: [['class', 'label']], text: '详情' }]), { line: 5, column: html[4].indexOf('<span') + 1 });
+    const duplicate = indexHtml('<script>const one = document.createElement("div"); one.className = "same";\nconst two = document.createElement("div"); two.className = "same";</script>');
+    assert.equal(locateHtmlElement(duplicate, [{ tag: 'div', attrs: [['class', 'same']] }]), null, '相同的创建代码都能匹配时保留文件位置');
     console.log('component source map tests passed');
   } finally { global.fetch = originalFetch; }
 })().catch((error) => { console.error(error); process.exitCode = 1; });

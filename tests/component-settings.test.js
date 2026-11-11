@@ -4,6 +4,13 @@ for (const url of ['http://localhost:5173', 'https://127.0.0.1:3000/path', 'http
 for (const url of ['https://example.com', 'https://localhost.example.com', 'http://127.0.0.1.example.com', 'file:///tmp/a', 'http://user:pass@localhost']) assert.equal(policy.isAllowed(url), false);
 assert.equal(policy.isAllowed('http://dev.test:5173/a', ['http://dev.test:5173']), true);
 assert.equal(policy.isAllowed('http://dev.test:5174', ['http://dev.test:5173']), false);
+const filePage = 'file:///tmp/HTML%20包(1)(2)/index.html';
+assert.equal(policy.pageKey(filePage + '?preview=1#section'), new URL(filePage).href);
+assert.equal(policy.pageKey('file:///tmp/assets/image.png'), '');
+const fileKey = policy.pageKey(filePage);
+assert.equal(policy.matchesPage(fileKey, filePage + '#section'), true);
+assert.equal(policy.matchesPage(fileKey, 'file:///tmp/HTML%20包(1)(2)/assets/child.html'), true);
+assert.equal(policy.matchesPage(fileKey, 'file:///tmp/HTML%20包(1)(2)-other/index.html'), false);
 assert.equal(policy.matchesShortcut({ metaKey: true }, policy.DEFAULT_SHORTCUT), true);
 assert.equal(policy.matchesShortcut({ metaKey: true, shiftKey: true }, policy.DEFAULT_SHORTCUT), false);
 assert.throws(() => policy.normalizeShortcut({ code: 'KeyA' }), /至少包含/);

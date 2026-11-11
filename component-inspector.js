@@ -19,6 +19,20 @@
     } catch (_) { return ''; }
   }
 
+  function pageKey(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol === 'file:' && !url.host && /\.html?$/i.test(url.pathname)) return `file://${url.pathname}`;
+    } catch (_) { return ''; }
+    return originOf(value);
+  }
+
+  function matchesPage(key, value) {
+    const current = pageKey(value);
+    if (!key || !current) return false;
+    return key.startsWith('file:') ? current.startsWith(key.slice(0, key.lastIndexOf('/') + 1)) : current === key;
+  }
+
   function isAllowed(value, extraOrigins = []) {
     const origin = originOf(value);
     if (!origin) return false;
@@ -67,7 +81,7 @@
     try { return normalizeSettings(data[SETTINGS_KEY]); } catch (_) { return normalizeSettings(); }
   }
 
-  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, TASK_EDITORS, DEFAULT_SHORTCUT, originOf, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
+  ns.componentSettings = { SETTINGS_KEY, TAB_PREFIX, ORIGIN_PREFIX, MAX_ORIGINS, TASK_EDITORS, DEFAULT_SHORTCUT, originOf, pageKey, matchesPage, isAllowed, normalizeShortcut, shortcutLabel, matchesShortcut, normalizeSettings, getSettings };
   if (typeof module !== 'undefined' && module.exports) module.exports = ns.componentSettings;
 })();
 
@@ -705,7 +719,7 @@
     delete globalThis.__IDT_COMPONENT_INSPECTOR__;
   }
   function start(value) {
-    if (location.origin !== value.origin) { destroy(); return; }
+    if (!policy.matchesPage(value.origin, location.href)) { destroy(); return; }
     controller?.abort(); cleanupInteraction(false);
     config = value; controller = new AbortController();
     const capture = { capture: true, signal: controller.signal };

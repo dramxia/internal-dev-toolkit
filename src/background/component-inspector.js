@@ -8,6 +8,8 @@
   const originToggles = new Map();
   const snapshots = new Map();
   const projectChecks = new Map();
+  const htmlIndexes = new Map();
+  const MAX_HTML_BYTES = 8 * 1024 * 1024;
   const CHECK_INTERVAL = 15000;
   const retryDelay = (failures) => Math.min(1000 * 2 ** Math.min(Math.max(0, failures - 1), 4), CHECK_INTERVAL);
   let port = null;
@@ -18,7 +20,9 @@
   let updatedRevision = '';
   const pending = new Map();
   const tabKey = (id) => policy.TAB_PREFIX + id;
+  const projectCheckKey = (origin, html) => html ? 'html:' + origin : origin;
   const token = () => crypto.randomUUID();
+  const fileAccessAllowed = () => new Promise((resolve) => chrome.extension.isAllowedFileSchemeAccess(resolve));
   async function withTimeout(task, duration, message) {
     let timer;
     try {
@@ -33,6 +37,9 @@
   }
   async function originEnabled(origin) {
     return !!(await chrome.storage.local.get(policy.ORIGIN_PREFIX + origin))[policy.ORIGIN_PREFIX + origin];
+  }
+  function pageAllowed(origin, settings) {
+    return origin.startsWith('file:') ? fileAccessAllowed() : policy.isAllowed(origin, settings.origins);
   }
 
   function nativeRequest(action, payload = {}) {
@@ -109,7 +116,8 @@
   }
 
   async function checkProject(state, { force = false, minInterval = 0 } = {}) {
-    const previous = projectChecks.get(state.origin);
+    const key = projectCheckKey(state.origin, state.project?.html);
+    const previous = projectChecks.get(key);
     if (previous?.project && previous.projectId !== state.project.id) {
       if (previous.pending) return previous.promise;
       if (!previous.failures) return checkProject({ ...state, project: previous.project }, { force, minInterval });
@@ -130,12 +138,12 @@
       check.nextAt = Date.now() + retryDelay(check.failures);
       throw error;
     }).finally(() => { check.pending = false; check.checkedAt = Date.now(); });
-    projectChecks.set(state.origin, check);
+    projectChecks.set(key, check);
     return check.promise;
   }
 
   function watchState(state) {
-    const nextAt = state.retryAt || projectChecks.get(state.origin)?.nextAt;
+    const nextAt = state.retryAt || projectChecks.get(projectCheckKey(state.origin, state.project?.html))?.nextAt;
     const retryAfter = state.status === 'on' ? CHECK_INTERVAL : state.status === 'recovering' && nextAt ? Math.max(1000, nextAt - Date.now()) : 1000;
     return { watch: ['on', 'waiting', 'restoring', 'recovering'].includes(state.status), observe: state.status === 'waiting', retryAfter };
   }
@@ -183,9 +191,9 @@
   async function assertTarget(tabId, origin, active = false) {
     const tab = await chrome.tabs.get(tabId);
     if (active && !tab.active) throw new Error('当前标签页已切换，请在目标页面重新操作');
-    if (policy.originOf(tab.pendingUrl || tab.url) !== origin) throw new Error('当前页面地址已变化，请重试');
+    if (policy.pageKey(tab.pendingUrl || tab.url) !== origin) throw new Error('当前页面地址已变化，请重试');
     const settings = await policy.getSettings();
-    if (!policy.isAllowed(origin, settings.origins)) throw new Error('请切换到允许的本地开发页面');
+    if (!await pageAllowed(origin, settings)) throw new Error(origin.startsWith('file:') ? '请在 Chrome 扩展详情中开启「允许访问文件网址」' : '请切换到允许的本地开发页面');
     return { tab, settings };
   }
 
@@ -193,8 +201,7 @@
     const target = frameId == null ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] };
     await executeScript({ target, world: 'ISOLATED', files: ['component-inspector.js'] });
     const results = await executeScript({ target, world: 'ISOLATED', func: (config) => {
-      if (location.origin === config.origin) globalThis.__IDT_COMPONENT_INSPECTOR__?.start(config);
-      else globalThis.__IDT_COMPONENT_INSPECTOR__?.destroy();
+      globalThis.__IDT_COMPONENT_INSPECTOR__?.start(config);
       return globalThis.__IDT_COMPONENT_INSPECTOR__?.isRunning(config) === true;
     }, args: [{ origin: state.origin, generation: state.generation, clickAction: settings.clickAction, openShortcut: settings.openShortcut, menuShortcut: settings.menuShortcut }] });
     if (!results.some((result) => result.frameId === (frameId ?? 0) && result.result === true)) throw new Error('定位脚本尚未启动，请等待页面加载完成后重试');
@@ -202,7 +209,7 @@
 
   async function startTab(tabId, origin, explicit, previous = {}) {
     if (uninstalling) throw new Error('辅助程序正在卸载，请稍候');
-    const { settings } = await assertTarget(tabId, origin, explicit);
+    const { tab, settings } = await assertTarget(tabId, origin, explicit);
     if (!await originEnabled(origin)) return readState(tabId);
     const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
     const generation = token();
@@ -226,10 +233,10 @@
       } else {
         const results = await executeScript({ target: { tabId, allFrames: true }, world: 'MAIN', func: inspectComponentPage, args: [{ mode: 'detect', origin }] });
         const detections = results.map((result) => result.result).filter((result) => result && !result.error);
+        const htmlUrl = results.find((result) => result.frameId === 0)?.result?.html ? tab.pendingUrl || tab.url : '';
         frameworks = [...new Set(detections.flatMap((result) => result.frameworks || []))];
-        if (!frameworks.length) {
-          return writeState(tabId, { status: 'waiting', origin, generation, documentId: frame?.documentId, error: '' });
-        }
+        const waitForPage = () => writeState(tabId, { status: 'waiting', origin, generation, documentId: frame?.documentId, error: '' });
+        if (!frameworks.length && !htmlUrl) return waitForPage();
         const hints = new Set(detections.flatMap((result) => result.hints || []));
         // React 19 通过调试栈提供路径；启动时也要还原源码，才能识别工作区中的子项目。
         const sources = new Map();
@@ -240,8 +247,16 @@
         }
         const resolved = await withTimeout(Promise.allSettled([...sources.values()].map(({ source, scripts }) => IDTComponentSources.resolveComponentSource(source, origin, scripts))), 8000, '组件源码读取超时，请点击「检查连接」重试');
         for (const result of resolved) if (result.status === 'fulfilled' && result.value?.file) hints.add(result.value.file);
-        ({ project } = await nativeRequest('identifyProject', { origin, hints: [...hints].slice(0, 32) }));
-        projectChecks.set(origin, { projectId: project.id, project, promise: Promise.resolve({ project }), checkedAt: Date.now(), nextAt: Date.now() + CHECK_INTERVAL, failures: 0 });
+        try {
+          ({ project } = await nativeRequest('identifyProject', {
+            origin, hints: [...hints].slice(0, 32), ...(htmlUrl ? { htmlUrl, htmlOnly: !frameworks.length } : {}),
+          }));
+          if (project.html) frameworks = ['HTML'];
+        } catch (error) {
+          if (!frameworks.length && error.code === 'COMPONENT_HTML_NOT_FOUND' && !origin.startsWith('file:')) return waitForPage();
+          throw error;
+        }
+        projectChecks.set(projectCheckKey(origin, project.html), { projectId: project.id, project, promise: Promise.resolve({ project }), checkedAt: Date.now(), nextAt: Date.now() + CHECK_INTERVAL, failures: 0 });
       }
       if (uninstalling) throw new Error('辅助程序正在卸载，请稍候');
       const state = { ...initial, status: 'on', project, frameworks, retryAt: 0, retryCount: 0 };
@@ -267,11 +282,11 @@
 
   async function restoreTab(tabId, sender, payload = {}) {
     const tab = await chrome.tabs.get(tabId);
-    const origin = policy.originOf(tab.pendingUrl || tab.url);
+    const origin = policy.pageKey(tab.pendingUrl || tab.url);
     let state = await readState(tabId);
-    if (!origin || !await originEnabled(origin) || !policy.isAllowed(origin, (await policy.getSettings()).origins)) return {};
+    if (!origin || !await originEnabled(origin) || !await pageAllowed(origin, await policy.getSettings())) return {};
     const frame = await chrome.webNavigation.getFrame({ tabId, frameId: 0 });
-    if (sender && (policy.originOf(sender.url) !== origin || (sender.frameId === 0 && sender.documentId && sender.documentId !== frame?.documentId))) return {};
+    if (sender && (!policy.matchesPage(origin, sender.url) || (sender.frameId === 0 && sender.documentId && sender.documentId !== frame?.documentId))) return {};
     const activeCheck = payload.visible === true && ['visible', 'focus', 'pageshow', 'wake'].includes(payload.reason);
     if (sender?.frameId > 0 && state.status === 'recovering') return {};
     if (['on', 'recovering'].includes(state.status) && state.project?.id && state.origin === origin && state.documentId === frame?.documentId) {
@@ -318,13 +333,17 @@
   }
 
   async function matchingTabs(origin) {
-    return (await chrome.tabs.query({})).filter((tab) => policy.originOf(tab.pendingUrl || tab.url) === origin);
+    return (await chrome.tabs.query({})).filter((tab) => policy.pageKey(tab.pendingUrl || tab.url) === origin);
   }
 
   async function setOriginEnabled(tabId, origin, enabled) {
     await assertTarget(tabId, origin, true);
     await chrome.storage.local.set({ [policy.ORIGIN_PREFIX + origin]: enabled });
-    if (!enabled) { projectChecks.delete(origin); IDTComponentSources.clearSourceCache(origin); }
+    if (!enabled) {
+      projectChecks.delete(origin);
+      projectChecks.delete(projectCheckKey(origin, true));
+      IDTComponentSources.clearSourceCache(origin);
+    }
     const tabs = await matchingTabs(origin);
     const results = await Promise.allSettled(tabs.map((tab) => lock(tab.id, async () => {
       if (!enabled) {
@@ -361,26 +380,76 @@
     const tabs = await chrome.tabs.query({});
     const settings = await policy.getSettings();
     await Promise.allSettled(tabs.map((tab) => lock(tab.id, async () => {
-      const origin = policy.originOf(tab.pendingUrl || tab.url);
+      const origin = policy.pageKey(tab.pendingUrl || tab.url);
       if (!origin || !await originEnabled(origin)) return;
-      if (!policy.isAllowed(origin, settings.origins)) return;
+      if (!await pageAllowed(origin, settings)) return;
       await executeScript({ target: { tabId: tab.id, allFrames: true }, world: 'ISOLATED', files: ['component-document-ready.js'] });
       await restoreTab(tab.id);
     })));
   }
 
+  async function resolvePageSource(source, state, scripts) {
+    if (source?.kind !== 'html' || !source.htmlElement?.length) return IDTComponentSources.resolveComponentSource(source, state.origin, scripts);
+    const request = { origin: state.origin, projectId: state.project.id, htmlUrl: source.htmlUrl };
+    const previous = htmlIndexes.get(source.htmlUrl);
+    let part;
+    try { part = await nativeRequest('readHtmlSource', { ...request, revision: previous?.revision }); }
+    catch (error) {
+      // 打开源码时沿用现有的服务重连流程，再用新项目重新读取 HTML。
+      if (serviceChanged(error)) return IDTComponentSources.resolveComponentSource(source, state.origin);
+      throw error;
+    }
+    const { file, revision, size } = part;
+    htmlIndexes.delete(source.htmlUrl);
+    let index = previous?.file === file && previous.revision === revision && previous.encoding === source.encoding ? previous.index : null;
+    if (!index && size <= MAX_HTML_BYTES) {
+      if (part.chunk == null) part = await nativeRequest('readHtmlSource', request);
+      if (part.revision !== revision) throw new Error('HTML 文件已修改，请刷新页面后重新选择元素');
+      const decoder = new TextDecoder(source.encoding || 'utf-8');
+      let html = '', offset = 0;
+      while (offset < size) {
+        const bytes = Uint8Array.from(atob(part.chunk), (character) => character.charCodeAt(0));
+        if (!bytes.length || offset + bytes.length > size) throw new Error('HTML 源码读取不完整');
+        offset += bytes.length;
+        html += decoder.decode(bytes, { stream: offset < size });
+        if (offset < size) part = await nativeRequest('readHtmlSource', { ...request, offset, revision });
+      }
+      index = IDTHtmlSource.indexHtml(html);
+    }
+    if (index) {
+      let cachedBytes = [...htmlIndexes.values()].reduce((sum, entry) => sum + entry.size, 0);
+      while (htmlIndexes.size >= 4 || cachedBytes + size > MAX_HTML_BYTES) {
+        const oldest = htmlIndexes.keys().next().value;
+        cachedBytes -= htmlIndexes.get(oldest).size;
+        htmlIndexes.delete(oldest);
+      }
+      htmlIndexes.set(source.htmlUrl, { file, revision, size, index, encoding: source.encoding });
+    }
+    const position = index && IDTHtmlSource.locateHtmlElement(index, source.htmlElement);
+    return { file, htmlUrl: source.htmlUrl, revision, line: position?.line || null, column: position?.column || null, precision: position ? 'line' : 'file' };
+  }
+
   async function inspect(sender, payload) {
     const tabId = sender.tab?.id;
     const state = await readState(tabId);
-    if (state.status !== 'on' || state.generation !== payload.generation || policy.originOf(sender.url) !== state.origin) throw new Error('当前页面的组件定位已停止');
+    if (state.status !== 'on' || state.generation !== payload.generation || !policy.matchesPage(state.origin, sender.url)) throw new Error('当前页面的组件定位已停止');
     await assertTarget(tabId, state.origin, true);
     const target = sender.documentId ? { tabId, documentIds: [sender.documentId] } : { tabId, frameIds: [sender.frameId || 0] };
-    const results = await executeScript({ target, world: 'MAIN', func: inspectComponentPage, args: [{ mode: 'element', x: Number(payload.x), y: Number(payload.y), marker: payload.details ? payload.marker : '', props: payload.details === true, origin: state.origin }] });
+    const html = state.frameworks?.includes('HTML');
+    const results = await executeScript({ target, world: 'MAIN', func: inspectComponentPage, args: [{ mode: 'element', x: Number(payload.x), y: Number(payload.y), marker: payload.details ? payload.marker : '', props: payload.details === true, origin: policy.pageKey(sender.url), html }] });
     const result = results[0]?.result;
     if (!result || result.error) throw new Error(result?.error || '页面元素已变化');
     const latest = await readState(tabId);
     if (latest.status !== 'on' || latest.generation !== state.generation) throw new Error('页面状态已变化');
     if (!payload.details) return { components: result.components.map(({ name, framework }) => ({ name, framework })), rect: result.rect };
+    if (html) {
+      const url = new URL(sender.url);
+      url.search = ''; url.hash = '';
+      const file = url.pathname.endsWith('/') ? url.pathname + 'index.html' : url.pathname;
+      for (const component of result.components) {
+        component.source = { kind: 'html', file, htmlUrl: url.href, htmlElement: result.htmlElement, encoding: result.htmlEncoding };
+      }
+    }
     const id = token();
     let entries = snapshots.get(tabId);
     if (!entries) { entries = new Map(); snapshots.set(tabId, entries); }
@@ -388,7 +457,7 @@
     entries.set(id, entry);
     if (entries.size > 8) entries.delete(entries.keys().next().value);
     const components = await Promise.all(result.components.map(async (component) => {
-      const source = await IDTComponentSources.resolveComponentSource(component.source, state.origin, result.scripts);
+      const source = await resolvePageSource(component.source, state, result.scripts);
       return { ...component, source };
     }));
     const resolvedState = await readState(tabId);
@@ -428,7 +497,7 @@
         const frame = await chrome.webNavigation.getFrame({ tabId, frameId: sender.frameId || 0 });
         if (entry.documentId && entry.documentId !== frame?.documentId) throw new Error('页面已经切换，请重新选择组件');
         const rawSource = entry.rawComponents?.[payload.index]?.source;
-        const refreshedSource = rawSource ? await IDTComponentSources.resolveComponentSource(rawSource, state.origin, entry.scripts) : source;
+        const refreshedSource = rawSource ? await resolvePageSource(rawSource, openingState, entry.scripts) : source;
         if (!refreshedSource?.file) throw new Error('此组件尚未提供源码位置');
         await assertTarget(tabId, state.origin, true);
         const latest = await readState(tabId);
@@ -482,10 +551,11 @@
         try { host = { connected: true, ...(await readyHost()) }; }
         catch (error) { host = { connected: false, editor: null, error: error.message }; }
         let state = { status: 'off', enabled: false };
-        let toggle;
+        let toggle, fileAccess;
         if (Number.isInteger(payload.tabId)) {
           const tab = await chrome.tabs.get(payload.tabId);
-          const origin = policy.originOf(tab.pendingUrl || tab.url);
+          const origin = policy.pageKey(tab.pendingUrl || tab.url);
+          if (origin.startsWith('file:')) fileAccess = await fileAccessAllowed();
           // 辅助程序检查可能较慢，最后再读状态；启停若恰好完成，则重新读取最终状态。
           do {
             toggle = originToggles.get(origin);
@@ -493,7 +563,7 @@
             if (state.origin !== origin) state = { status: 'off', origin, enabled: await originEnabled(origin) };
           } while (toggle !== originToggles.get(origin));
         }
-        return { settings, state, host, toggle: toggle ? { ...toggle } : null };
+        return { settings, state, host, toggle: toggle ? { ...toggle } : null, fileAccess };
       }
       case 'COMPONENT_CHATGPT_ACCESS':
       case 'COMPONENT_AGENT_ACCESS':
@@ -548,7 +618,7 @@
               await startTab(tabId, latest.origin, false); return;
             }
             if (latest.status !== 'on') return;
-            if (!policy.isAllowed(latest.origin, settings.origins)) await pause(tabId, '该开发地址已从允许列表移除');
+            if (!await pageAllowed(latest.origin, settings)) await pause(tabId, latest.origin.startsWith('file:') ? '当前页面的访问权限已关闭' : '该开发地址已从允许列表移除');
             else if (settings.clickAction === 'open' && !(await readyHost()).editorAvailable) await pause(tabId, '请先选择有效的编辑器');
             else await installRuntime(tabId, latest, settings).catch(() => {});
           });
@@ -575,8 +645,8 @@
       if (frame?.documentId !== details.documentId) return;
       const state = await readState(tabId);
       if (state.status === 'on' && state.documentId === details.documentId) return;
-      const origin = policy.originOf(details.url);
-      const enabled = origin && await originEnabled(origin) && policy.isAllowed(origin, (await policy.getSettings()).origins);
+      const origin = policy.pageKey(details.url);
+      const enabled = origin && await originEnabled(origin) && await pageAllowed(origin, await policy.getSettings());
       const reuse = enabled && details.transitionType === 'reload' && canReuseProject(state, origin);
       await writeState(tabId, { ...(reuse ? state : {}), status: enabled ? reuse ? 'restoring' : 'waiting' : 'off', origin, generation: token(), documentId: details.documentId, error: '' });
       snapshots.delete(tabId);

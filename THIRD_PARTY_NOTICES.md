@@ -33,6 +33,9 @@ SOFTWARE.
 `@jridgewell/resolve-uri`、`@jridgewell/sourcemap-codec`，均采用 MIT 许可。
 构建时将相应许可文件复制到 `dist/licenses/`。
 
+静态 HTML 行号解析使用 `parse5` 和 `acorn`（MIT 许可）以及 `entities`（BSD 2-Clause 许可）。
+构建时将相应许可文件复制到 `dist/licenses/`。
+
 ## 用户卡片图标
 
 公共用户卡片使用与预览一致的 Lucide 图标。来源：https://github.com/lucide-icons/lucide

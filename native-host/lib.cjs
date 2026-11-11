@@ -4,7 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const dns = require('node:dns/promises');
 const crypto = require('node:crypto');
-const { pathToFileURL } = require('node:url');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const runFile = promisify(execFile);
@@ -214,15 +214,70 @@ async function resolveProjectFile(root, source) {
   throw new Error('当前项目中未找到对应源码文件');
 }
 
+const isHtmlFile = (file) => /\.html?$/i.test(file);
+const htmlNotFound = () => Object.assign(new Error('当前页面对应的 HTML 文件未找到'), { code: 'COMPONENT_HTML_NOT_FOUND' });
+
+async function resolveHtmlFile(root, origin, pageUrl) {
+  const url = new URL(pageUrl);
+  let candidates;
+  if (origin.startsWith('file:') && url.protocol === 'file:') {
+    candidates = [fileURLToPath(url)];
+  } else if (url.origin === origin) {
+    const pathname = decodeURIComponent(url.pathname);
+    if (pathname.includes('\0')) throw htmlNotFound();
+    const file = path.resolve(root, '.' + pathname);
+    if (!within(root, file)) throw htmlNotFound();
+    candidates = !pathname.endsWith('/') && isHtmlFile(file) ? [file] : ['index.html', 'index.htm'].map((name) => path.join(file, name));
+  } else throw htmlNotFound();
+  for (const candidate of candidates) {
+    const file = isHtmlFile(candidate) && await existingFile(candidate);
+    if (file && isHtmlFile(file) && within(root, file)) return file;
+  }
+  throw htmlNotFound();
+}
+
+function projectRecord(project) {
+  return { ...project, id: crypto.createHash('sha256').update(JSON.stringify(project)).digest('hex').slice(0, 24) };
+}
+
+async function fileProject(origin) {
+  const pathname = fileURLToPath(origin);
+  if (!isHtmlFile(pathname)) throw htmlNotFound();
+  const file = await existingFile(pathname);
+  if (!file || !isHtmlFile(file)) throw htmlNotFound();
+  let root = path.dirname(file);
+  // 从子页面直接打开时，优先使用附近带入口页的资源包目录。
+  for (let directory = root, depth = 0; depth < 4 && directory !== os.homedir() && directory !== path.dirname(directory); depth++, directory = path.dirname(directory)) {
+    if (await existingFile(path.join(directory, 'index.html')) || await existingFile(path.join(directory, 'index.htm'))) { root = directory; break; }
+  }
+  return projectRecord({ origin, root, name: path.basename(root), html: true });
+}
+
+function htmlRevision(stats) {
+  return [stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(':');
+}
+
+const htmlChanged = () => Object.assign(new Error('HTML 文件已修改，请刷新页面后重新选择元素'), { code: 'COMPONENT_HTML_CHANGED' });
+
+async function resolveSourceFile(project, source) {
+  if (!source?.htmlUrl) return resolveProjectFile(project.root, source?.file);
+  const file = await resolveHtmlFile(project.root, project.origin, source.htmlUrl);
+  if (source.revision && htmlRevision(await fs.stat(file, { bigint: true })) !== source.revision) throw htmlChanged();
+  return file;
+}
+
 function commandTokens(command) {
   return (command.match(/"(?:[^"\\]|\\.)*"|'[^']*'|[^\s]+/g) || []).map((token) => token.replace(/^(['"])(.*)\1$/, '$2'));
 }
 
 function rootFromCommand(command, cwd) {
   const tokens = commandTokens(command);
+  const pythonStaticServer = tokens.includes('http.server');
   for (let i = 0; i < tokens.length; i++) {
     if (/^--(?:root|context)=/.test(tokens[i])) return path.resolve(cwd, tokens[i].slice(tokens[i].indexOf('=') + 1));
     if (['--root', '--context'].includes(tokens[i]) && tokens[i + 1]) return path.resolve(cwd, tokens[i + 1]);
+    if (pythonStaticServer && tokens[i].startsWith('--directory=')) return path.resolve(cwd, tokens[i].slice('--directory='.length));
+    if (pythonStaticServer && ['-d', '--directory'].includes(tokens[i]) && tokens[i + 1]) return path.resolve(cwd, tokens[i + 1]);
     if (/(?:^|\/)(?:vite|vite\.js)$/.test(tokens[i]) && tokens[i + 1] && !tokens[i + 1].startsWith('-') && !['dev', 'serve', 'build', 'preview'].includes(tokens[i + 1])) return path.resolve(cwd, tokens[i + 1]);
     if (/(?:^|\/)next$/.test(tokens[i]) && ['dev', 'start'].includes(tokens[i + 1]) && tokens[i + 2] && !tokens[i + 2].startsWith('-')) return path.resolve(cwd, tokens[i + 2]);
   }
@@ -354,13 +409,23 @@ function createHost({ installation = installationPaths(), dataDir = installation
     return processes;
   }
 
-  async function identifyProject({ origin, hints = [] }) {
+  async function identifyProject({ origin, hints = [], htmlUrl, htmlOnly = false }) {
+    if (origin.startsWith('file:')) return { project: await fileProject(origin) };
     const url = await localOrigin(origin);
     const processes = await serverProcesses(url.origin);
     const candidates = [];
+    const htmlCandidates = [];
     for (const service of processes) {
       const explicit = rootFromCommand(service.command, service.cwd);
       const roots = [explicit, service.cwd].filter(Boolean);
+      if (htmlUrl) {
+        try {
+          const root = await fs.realpath(explicit || service.cwd);
+          await resolveHtmlFile(root, url.origin, htmlUrl);
+          htmlCandidates.push({ root, service, name: path.basename(root), score: explicit ? 100 : 0, html: true });
+        } catch (_) { /* 服务器目录下没有与页面地址对应的 HTML。 */ }
+      }
+      if (htmlOnly) continue;
       // __file 或调试信息可以直接定位子项目。
       for (const hint of hints.slice(0, 32)) {
         let file;
@@ -399,15 +464,16 @@ function createHost({ installation = installationPaths(), dataDir = installation
       }
       candidates.push(...direct);
     }
-    candidates.sort((a, b) => b.score - a.score);
-    const best = candidates[0];
-    if (!best) throw new Error('已找到服务进程，但尚未识别到 React／Vue 项目目录');
-    if (candidates.some((item) => item.score === best.score && item.root !== best.root)) throw new Error('找到多个可能的项目目录，当前页面已暂停，请检查开发服务的启动目录');
-    const project = { origin: url.origin, root: best.root, name: best.name, pid: best.service.pid, started: best.service.started };
-    project.id = crypto.createHash('sha256').update(JSON.stringify(project)).digest('hex').slice(0, 24);
+    const matches = candidates.length ? candidates : htmlCandidates;
+    matches.sort((a, b) => b.score - a.score);
+    const best = matches[0];
+    if (!best && htmlOnly) throw htmlNotFound();
+    if (!best) throw new Error('已找到服务进程，但尚未识别到 React／Vue 或静态 HTML 项目目录');
+    if (matches.some((item) => item.score === best.score && item.root !== best.root)) throw new Error('找到多个可能的项目目录，当前页面已暂停，请检查开发服务的启动目录');
+    const project = projectRecord({ origin: url.origin, root: best.root, name: best.name, pid: best.service.pid, started: best.service.started, ...(best.html ? { html: true } : {}) });
     const config = await readConfig();
     config.projects ||= {};
-    config.projects[url.origin] = project;
+    config.projects[best.html ? 'html:' + url.origin : url.origin] = project;
     // 限制本机记录，只保存最近使用的开发地址。
     const entries = Object.entries(config.projects);
     config.projects = Object.fromEntries(entries.slice(-50));
@@ -417,8 +483,13 @@ function createHost({ installation = installationPaths(), dataDir = installation
 
   async function validateProject(origin, projectId) {
     const config = await readConfig();
-    const project = config.projects?.[origin];
-    if (!project || project.id !== projectId) throw Object.assign(new Error('项目目录已变化，正在重新识别'), { code: 'COMPONENT_PROJECT_STALE' });
+    if (origin.startsWith('file:')) {
+      const project = await fileProject(origin);
+      if (project.id !== projectId) throw Object.assign(new Error('项目目录已变化，正在重新识别'), { code: 'COMPONENT_PROJECT_STALE' });
+      return { config, project };
+    }
+    const project = [config.projects?.[origin], config.projects?.['html:' + origin]].find((item) => item && item.id === projectId);
+    if (!project) throw Object.assign(new Error('项目目录已变化，正在重新识别'), { code: 'COMPONENT_PROJECT_STALE' });
     const services = await serverProcesses(origin);
     if (!services.some((service) => service.pid === project.pid && service.started === project.started)) throw Object.assign(new Error('开发服务已重启，正在重新识别项目'), { code: 'COMPONENT_PROJECT_STALE' });
     return { config, project };
@@ -429,9 +500,29 @@ function createHost({ installation = installationPaths(), dataDir = installation
     return { project };
   }
 
+  async function readHtmlSource({ origin, projectId, htmlUrl, offset = 0, revision }) {
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('HTML 读取位置无效');
+    const { project } = await validateProject(origin, projectId);
+    if (!project.html) throw htmlNotFound();
+    const file = await resolveHtmlFile(project.root, project.origin, htmlUrl);
+    const handle = await fs.open(file, 'r');
+    try {
+      const stats = await handle.stat({ bigint: true });
+      const current = htmlRevision(stats);
+      const size = Number(stats.size);
+      if (offset > size || (offset > 0 && revision !== current)) throw htmlChanged();
+      if (size > 8 * 1024 * 1024 || (!offset && revision === current)) return { file, revision: current, size };
+      // Base64 编码后仍留在单条 Chrome 原生消息的大小限制内。
+      const chunk = Buffer.alloc(Math.min(512 * 1024, size - offset));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, offset);
+      if (bytesRead !== chunk.length || htmlRevision(await handle.stat({ bigint: true })) !== current) throw htmlChanged();
+      return { file, revision: current, size, chunk: chunk.toString('base64') };
+    } finally { await handle.close(); }
+  }
+
   async function sourceLocation({ origin, projectId, source }) {
     const { project } = await validateProject(origin, projectId);
-    const file = await resolveProjectFile(project.root, source?.file);
+    const file = await resolveSourceFile(project, source);
     const line = Number.isSafeInteger(source?.line) && source.line > 0 ? source.line : null;
     const endLine = line && Number.isSafeInteger(source?.endLine) && source.endLine > line ? source.endLine : null;
     const location = `${file}${line ? `#L${line}${endLine ? `-L${endLine}` : ''}` : ''}`;
@@ -510,7 +601,7 @@ function createHost({ installation = installationPaths(), dataDir = installation
   async function openSource({ origin, projectId, source }) {
     const { config, project } = await validateProject(origin, projectId);
     if (!(await editorAvailable(config.editor))) throw new Error('请先选择有效的编辑器');
-    const file = await resolveProjectFile(project.root, source?.file);
+    const file = await resolveSourceFile(project, source);
     const line = Number.isSafeInteger(source?.line) && source.line > 0 ? source.line : null;
     const column = line && Number.isSafeInteger(source?.column) && source.column > 0 ? source.column : null;
     const editor = config.editor;
@@ -564,6 +655,7 @@ function createHost({ installation = installationPaths(), dataDir = installation
       }
       case 'identifyProject': return identifyProject(message);
       case 'checkProject': return checkProject(message);
+      case 'readHtmlSource': return readHtmlSource(message);
       case 'openSource': return openSource(message);
       case 'sourceLocation': {
         const { project, ...result } = await sourceLocation(message);

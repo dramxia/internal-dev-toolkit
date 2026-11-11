@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { pathToFileURL } = require('node:url');
 const { spawn } = require('node:child_process');
 const esbuild = require('esbuild');
 const { chromium } = require('@playwright/test');
@@ -33,7 +34,7 @@ async function rightClick(page, target = page.locator('#target')) {
   const hostName = `com.internal_dev_toolkit.component_test_${process.pid}`;
   const registrations = [];
   const registrationContents = new Map();
-  let context, server;
+  let context, server, staticServer;
   try {
     await fs.mkdir(path.join(webRoot, 'src'), { recursive: true }); await fs.mkdir(path.join(webRoot, 'assets'));
     // 普通父目录统一启动多个前端，不声明 workspaces。
@@ -472,6 +473,93 @@ renderRoute();
     await panel.goto(`chrome-extension://${extensionId}/popup.html`); await page.bringToFront();
     await panel.evaluate(() => document.querySelector('[data-workspace-id="global:component"]').click());
     await until(() => panel.locator('#componentUninstallHost').isEnabled(), '重启后设置尚未就绪');
+
+    const staticRoot = path.join(root, '静态 包(1)(2)');
+    const entryFile = path.join(staticRoot, 'index.html');
+    const childFile = path.join(staticRoot, 'assets', '详情 页.html');
+    await fs.mkdir(path.dirname(childFile), { recursive: true });
+    await fs.writeFile(entryFile, `<!doctype html>
+<div id="app">
+  <button v-if="false" class="entry">已隐藏</button>
+  <template v-for="label in ['首页', '第二项']">
+    <button class="entry">{{ label }}</button>
+  </template>
+  <button v-if="false" class="branch">相同文案</button>
+  <button v-else class="branch">相同文案</button>
+</div>
+<iframe src="assets/详情%20页.html"></iframe>
+<script src="assets/vue.js"></script>
+<script>Vue.createApp({}).mount("#app")</script>`);
+    await fs.writeFile(childFile, `<!doctype html>
+<section>
+  <button>详情</button>
+  <!-- <button>详情</button> -->
+  <button>详情</button>
+</section>
+<div id="list"></div>
+<script>
+  const card = document.createElement('button');
+  card.className = 'created';
+  card.textContent = '脚本创建';
+  document.getElementById('list').append(card);
+</script>`);
+    await fs.copyFile(require.resolve('vue/dist/vue.global.js'), path.join(staticRoot, 'assets', 'vue.js'));
+    staticServer = spawn(process.execPath, ['-e', `
+      const fs = require('node:fs');
+      require('node:http').createServer((req, res) => {
+        const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+        const file = fs.createReadStream('.' + (pathname === '/' ? '/index.html' : pathname));
+        res.setHeader('Content-Type', pathname.endsWith('.js') ? 'text/javascript' : 'text/html; charset=utf-8');
+        file.on('error', () => { res.statusCode = 404; res.end(); });
+        file.pipe(res);
+      }).listen(0, '127.0.0.1', function () { console.log(this.address().port); });
+    `], { cwd: staticRoot, stdio: ['ignore', 'pipe', 'inherit'] });
+    const staticPort = await new Promise((resolve, reject) => {
+      staticServer.once('error', reject);
+      staticServer.once('exit', (code) => reject(new Error(`静态服务启动失败：${code}`)));
+      staticServer.stdout.once('data', (data) => resolve(Number(data.toString().trim())));
+    });
+    const staticPage = await context.newPage();
+    for (const url of [`http://127.0.0.1:${staticPort}/`, pathToFileURL(entryFile).href]) {
+      await staticPage.goto(url);
+      await staticPage.bringToFront();
+      await until(async () => (await panel.locator('#componentPageUrl').textContent()) === url, '静态页面地址未同步');
+      await togglePage();
+      const staticTab = await worker.evaluate(async () => (await chrome.tabs.query({ active: true }))[0].id);
+      const staticState = () => worker.evaluate((id) => InternalDevToolkit.componentInspectorBackground.readState(id), staticTab);
+      await until(async () => (await staticState()).status === 'on' && await installed(staticTab), '静态页面定位未启动');
+      assert.deepEqual((await staticState()).frameworks, ['HTML']);
+      assert.equal((await staticState()).project.root, staticRoot);
+      const frame = staticPage.frameLocator('iframe');
+      const selections = [
+        [staticPage.locator('.entry').filter({ hasText: '首页' }), entryFile, 5, 5],
+        [staticPage.locator('.entry').filter({ hasText: '第二项' }), entryFile, 5, 5],
+        [staticPage.locator('.branch'), entryFile, 8, 3],
+        [frame.locator('section > button').nth(1), childFile, 5, 3],
+        [frame.locator('.created'), childFile, 9, 16],
+      ];
+      for (const [target, expectedFile, line, column] of selections) {
+        await staticPage.keyboard.down('Alt');
+        await target.hover();
+        await until(() => target.getAttribute('data-idt-component-target'), '静态元素未高亮');
+        const before = (await opened()).length;
+        await target.click();
+        await staticPage.keyboard.up('Alt');
+        await until(async () => (await opened()).length > before, '静态 HTML 未打开');
+        assert.deepEqual((await opened()).at(-1), ['--reuse-window', '--goto', `${expectedFile}:${line}:${column}`]);
+      }
+      await staticPage.keyboard.down('Meta');
+      await frame.locator('section > button').first().click({ button: 'right' });
+      await staticPage.keyboard.up('Meta');
+      await until(async () => (await frame.locator('[data-idt-component-overlay] .path data').getAttribute('value', { timeout: 1000 })) === '3:3', '静态菜单应显示内嵌页行列');
+      await staticPage.keyboard.press('Escape');
+      await staticPage.reload();
+      await until(async () => (await staticState()).status === 'on' && await installed(staticTab), '静态页面刷新后未恢复定位');
+    }
+    await staticPage.close();
+    await page.bringToFront();
+    console.log('static HTML, Vue templates and inline scripts open exact lines and columns over HTTP and file URLs');
+
     await panel.evaluate(() => document.getElementById('componentUninstallHost').click());
     assert.equal(await panel.locator('#componentUninstallConfirm').isVisible(), true);
     await panel.evaluate(() => document.getElementById('componentCancelUninstall').click());
@@ -505,6 +593,7 @@ renderRoute();
   } finally {
     await context?.close();
     if (server?.exitCode === null) { const exit = new Promise((resolve) => server.once('exit', resolve)); server.kill(); await exit; }
+    if (staticServer?.exitCode === null) { const exit = new Promise((resolve) => staticServer.once('exit', resolve)); staticServer.kill(); await exit; }
     for (const file of registrations) await fs.rm(file, { force: true });
     await fs.rm(root, { recursive: true, force: true });
   }

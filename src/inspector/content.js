@@ -630,7 +630,7 @@
     delete globalThis.__IDT_COMPONENT_INSPECTOR__;
   }
   function start(value) {
-    if (location.origin !== value.origin) { destroy(); return; }
+    if (!policy.matchesPage(value.origin, location.href)) { destroy(); return; }
     controller?.abort(); cleanupInteraction(false);
     config = value; controller = new AbortController();
     const capture = { capture: true, signal: controller.signal };
